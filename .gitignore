@@ -7,5 +7,6 @@ contrastive/__pycache__/
 *.out
 tensorboard/
 joblog/
+logs/
 archived/
 
