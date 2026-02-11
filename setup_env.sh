@@ -33,23 +33,8 @@ echo "============================================="
 echo "Step 1: Loading required modules..."
 echo "============================================="
 
-# Auto-detect the correct anaconda module name on this HPC
-ANACONDA_MODULE=""
-for mod in anaconda3 anaconda anaconda/2023.07 anaconda/3 miniconda/3-4.11.0 miniconda-nobashrc/3-4.11.0; do
-    if module avail "$mod" 2>&1 | grep -q "$mod"; then
-        ANACONDA_MODULE="$mod"
-        break
-    fi
-done
-
-if [ -z "$ANACONDA_MODULE" ]; then
-    echo "ERROR: Could not find an anaconda module. Available modules:"
-    module avail 2>&1 | grep -i conda || true
-    echo "Please set ANACONDA_MODULE and re-run, e.g.:"
-    echo "  ANACONDA_MODULE=anaconda/2023.07 bash setup_env.sh"
-    exit 1
-fi
-
+# NYUAD HPC uses miniconda (override with ANACONDA_MODULE env var if needed)
+ANACONDA_MODULE="${ANACONDA_MODULE:-miniconda/3-4.11.0}"
 echo "Loading module: $ANACONDA_MODULE"
 module load "$ANACONDA_MODULE"
 
