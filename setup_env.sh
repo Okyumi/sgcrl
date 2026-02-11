@@ -20,7 +20,6 @@ set -e  # Exit on any error
 # Adjust these if your paths differ from the defaults
 
 # Path to your conda installation (auto-detected after module load)
-# This will be set after 'module load anaconda3'
 CONDA_BASE="${CONDA_BASE:-}"
 
 # Path to MuJoCo installation
@@ -34,7 +33,26 @@ echo "============================================="
 echo "Step 1: Loading required modules..."
 echo "============================================="
 
-module load anaconda3
+# Auto-detect the correct anaconda module name on this HPC
+ANACONDA_MODULE=""
+for mod in anaconda3 anaconda anaconda/2023.07 anaconda/3; do
+    if module avail "$mod" 2>&1 | grep -q "$mod"; then
+        ANACONDA_MODULE="$mod"
+        break
+    fi
+done
+
+if [ -z "$ANACONDA_MODULE" ]; then
+    echo "ERROR: Could not find an anaconda module. Available modules:"
+    module avail 2>&1 | grep -i conda || true
+    echo "Please set ANACONDA_MODULE and re-run, e.g.:"
+    echo "  ANACONDA_MODULE=anaconda/2023.07 bash setup_env.sh"
+    exit 1
+fi
+
+echo "Loading module: $ANACONDA_MODULE"
+module load "$ANACONDA_MODULE"
+
 # Capture conda base path after loading
 if [ -z "$CONDA_BASE" ]; then
     CONDA_BASE="$(conda info --base)"
@@ -161,7 +179,7 @@ echo "To set up GPU support, run:"
 echo "  bash setup_gpu.sh"
 echo ""
 echo "To activate this environment in future sessions:"
-echo "  module load anaconda3"
+echo "  module load $ANACONDA_MODULE"
 echo "  conda activate ${ENV_NAME}"
 echo "  export LD_LIBRARY_PATH=\$CONDA_PREFIX/lib/:${MUJOCO_DIR}/bin"
 echo ""

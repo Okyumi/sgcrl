@@ -12,8 +12,19 @@
 MUJOCO_DIR="${MUJOCO_DIR:-$HOME/.mujoco/mujoco210}"
 ENV_NAME="contrastive_rl"
 
-# Load modules
-module load anaconda3
+# Auto-detect the correct anaconda module name
+ANACONDA_MODULE=""
+for mod in anaconda3 anaconda anaconda/2023.07 anaconda/3; do
+    if module avail "$mod" 2>&1 | grep -q "$mod"; then
+        ANACONDA_MODULE="$mod"
+        break
+    fi
+done
+if [ -z "$ANACONDA_MODULE" ]; then
+    echo "ERROR: Could not find an anaconda module. Run: module avail 2>&1 | grep -i conda"
+    return 1 2>/dev/null || exit 1
+fi
+module load "$ANACONDA_MODULE"
 module load cudatoolkit/11.3 cudnn/cuda-11.x/8.2.0
 
 # Activate conda
