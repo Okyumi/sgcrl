@@ -109,14 +109,15 @@ except OSError as e:
 echo ""
 echo "Step 5: Installing GPU-compatible JAX, optax, and pinning dependencies..."
 
-pip install optax==0.1.7
-
-# Pin chex and flax to versions compatible with jax 0.4.7
-pip install chex==0.1.7 flax==0.6.11
-
-# Use CUDA 11 + cuDNN 8.6 build (matches cuda/11.8.0 + nvidia-cudnn-cu11==8.6)
-pip install --upgrade "jax==0.4.7" "jaxlib==0.4.7+cuda11.cudnn86" \
+# IMPORTANT: Install jax+jaxlib FIRST with --no-deps to prevent pip from
+# pulling in jax 0.4.30 via transitive dependencies of optax/chex.
+pip install --no-deps "jax==0.4.7" "jaxlib==0.4.7+cuda11.cudnn86" \
     -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+# Now pin chex, flax, distrax, optax to versions compatible with jax 0.4.7
+pip install --no-deps chex==0.1.7 flax==0.6.11 distrax==0.1.3 optax==0.1.7
+pip install --no-deps dm-haiku==0.0.9
+pip install ml_dtypes==0.2.0
 
 echo ""
 echo "============================================="
