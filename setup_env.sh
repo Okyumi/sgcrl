@@ -59,6 +59,12 @@ if [ -z "$CONDA_BASE" ]; then
 fi
 echo "Conda base: $CONDA_BASE"
 
+# ======================== STEP 1b: Clean corrupted conda cache ==============
+echo ""
+echo "Cleaning corrupted conda package cache..."
+conda clean --packages --tarballs -y 2>/dev/null || true
+rm -rf "$HOME/.conda/pkgs/wheel-0.45.1-py39h06a4308_0" 2>/dev/null || true
+
 # ======================== STEP 2: Create Conda Environment ==================
 echo ""
 echo "============================================="
