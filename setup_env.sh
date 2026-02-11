@@ -128,7 +128,12 @@ echo "============================================="
 echo "Step 7: Installing pip requirements (--no-deps)..."
 echo "============================================="
 
-pip install -r requirements.txt --no-deps
+# Filter out 'mujoco' (the newer DeepMind binding) from requirements.
+# The codebase uses mujoco-py (old binding) via metaworld, not the mujoco package.
+# mujoco==2.2.0 requires MuJoCo 2.2.0 binaries; we only have MuJoCo 210 for mujoco-py.
+grep -v '^mujoco ' requirements.txt | grep -v '^mujoco==' > /tmp/requirements_filtered.txt
+pip install -r /tmp/requirements_filtered.txt --no-deps
+rm -f /tmp/requirements_filtered.txt
 
 # ======================== STEP 8: Install strict version overrides ==========
 echo ""
