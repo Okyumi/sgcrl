@@ -71,17 +71,15 @@ echo "============================================="
 echo "Step 2: Creating conda environment '${ENV_NAME}' with Python 3.9..."
 echo "============================================="
 
-# Check if environment already exists
-if conda env list | grep -q "^${ENV_NAME} "; then
+# Check if environment already exists (check both conda list and directory)
+if conda env list | grep -q "${ENV_NAME}" || [ -d "$HOME/.conda/envs/${ENV_NAME}" ]; then
     echo "Environment '${ENV_NAME}' already exists."
-    read -p "Do you want to remove and recreate it? (y/N): " REPLY
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        conda deactivate 2>/dev/null || true
-        conda env remove -n ${ENV_NAME} -y
-        conda create -n ${ENV_NAME} python=3.9 -y
-    else
-        echo "Keeping existing environment."
-    fi
+    echo "Removing and recreating it..."
+    conda deactivate 2>/dev/null || true
+    conda env remove -n ${ENV_NAME} -y 2>/dev/null || true
+    # Also remove the directory if conda env remove didn't clean it
+    rm -rf "$HOME/.conda/envs/${ENV_NAME}" 2>/dev/null || true
+    conda create -n ${ENV_NAME} python=3.9 -y
 else
     conda create -n ${ENV_NAME} python=3.9 -y
 fi
