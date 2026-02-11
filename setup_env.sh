@@ -149,18 +149,19 @@ echo "============================================="
 echo "Step 8: Installing strict package version overrides..."
 echo "============================================="
 
-# dm-acme with jax and tf extras
+# dm-acme with jax and tf extras (but constrain transitive deps)
 pip install "dm-acme[jax,tf]"
 
-# JAX and JAXlib: skip here, setup_gpu.sh installs the correct GPU build
-# (jax==0.4.7 + jaxlib==0.4.7+cuda11.cudnn82). Pre-built CPU wheels for
-# 0.4.7/0.4.10 are not available on PyPI for this platform.
-
-# ml_dtypes compatible with jax 0.4.x
+# Pin jax-ecosystem packages to mutually compatible versions.
+# setup_gpu.sh will later replace jax/jaxlib with GPU builds,
+# but we need valid versions now to avoid broken transitive deps.
+pip install --no-deps chex==0.1.7
+pip install --no-deps optax==0.1.7
+pip install --no-deps dm-haiku==0.0.9
+pip install --no-deps distrax==0.1.3
+pip install --no-deps flax==0.6.11
+pip install --no-deps orbax-checkpoint==0.2.3
 pip install ml_dtypes==0.2.0
-
-# dm-haiku
-pip install dm-haiku==0.0.9
 
 # gymnasium-robotics (for additional env support)
 pip install gymnasium-robotics

@@ -114,9 +114,13 @@ echo "Step 5: Installing GPU-compatible JAX, optax, and pinning dependencies..."
 pip install --no-deps "jax==0.4.7" "jaxlib==0.4.7+cuda11.cudnn86" \
     -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
-# Now pin chex, flax, distrax, optax to versions compatible with jax 0.4.7
-pip install --no-deps chex==0.1.7 flax==0.6.11 distrax==0.1.3 optax==0.1.7
+# Pin ALL jax-ecosystem packages to versions compatible with jax 0.4.7
+pip install --no-deps chex==0.1.7
+pip install --no-deps optax==0.1.7
 pip install --no-deps dm-haiku==0.0.9
+pip install --no-deps distrax==0.1.3
+pip install --no-deps flax==0.6.11
+pip install --no-deps orbax-checkpoint==0.2.3
 pip install ml_dtypes==0.2.0
 
 echo ""
