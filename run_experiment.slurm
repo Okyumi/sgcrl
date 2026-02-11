@@ -65,21 +65,10 @@ echo "  Sample goals: $SAMPLE_GOALS"
 echo "  Log dir:     $LOG_DIR"
 echo "============================================="
 
-# NYUAD HPC uses miniconda
-ANACONDA_MODULE="${ANACONDA_MODULE:-miniconda/3-4.11.0}"
-module load "$ANACONDA_MODULE"
-
-# Try to load CUDA/cuDNN modules (names vary across HPC systems)
-for cuda_mod in "cudatoolkit/11.3" "cuda/11.3" "cuda/11.3.1" "cuda11.3/toolkit" "cuda/11"; do
-    if module avail "$cuda_mod" 2>&1 | grep -q "$cuda_mod"; then
-        module load "$cuda_mod"; break
-    fi
-done
-for cudnn_mod in "cudnn/cuda-11.x/8.2.0" "cudnn/8.2" "cudnn/8.2.0" "cudnn" "cudnn/cuda11"; do
-    if module avail "$cudnn_mod" 2>&1 | grep -q "$cudnn_mod"; then
-        module load "$cudnn_mod"; break
-    fi
-done
+# NYUAD HPC modules
+module load miniconda/3-4.11.0
+module load cuda/11.8.0
+# cuDNN is installed via conda inside the environment (no HPC module available)
 
 # ======================== ACTIVATE ENVIRONMENT ==============================
 eval "$(conda shell.bash hook)"
@@ -92,21 +81,9 @@ echo "Conda env: $CONDA_PREFIX"
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib/"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${MUJOCO_DIR}/bin"
 
-# Add CUDA library paths
-for cuda_lib_dir in /usr/local/cuda-11.3/lib64 /usr/local/cuda-11/lib64 /usr/local/cuda/lib64; do
-    if [ -d "$cuda_lib_dir" ]; then
-        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${cuda_lib_dir}"; break
-    fi
-done
-for nvidia_dir in /usr/lib/nvidia /usr/lib64/nvidia /usr/lib/x86_64-linux-gnu/nvidia; do
-    if [ -d "$nvidia_dir" ]; then
-        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${nvidia_dir}"; break
-    fi
-done
+# Add CUDA library path from module
 if [ -n "$CUDA_HOME" ] && [ -d "$CUDA_HOME/lib64" ]; then
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDA_HOME}/lib64"
-elif [ -n "$CUDA_PATH" ] && [ -d "$CUDA_PATH/lib64" ]; then
-    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDA_PATH}/lib64"
 fi
 
 echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
