@@ -26,19 +26,8 @@ echo "============================================="
 echo "GPU Setup for SGCRL"
 echo "============================================="
 
-# ======================== STEP 0: Verify GPU node ===========================
-echo ""
-echo "Step 0: Checking GPU availability on this node..."
-if ! command -v nvidia-smi &>/dev/null; then
-    echo "ERROR: nvidia-smi not found. Are you on a GPU node?"
-    echo "Get one with: srun --gres=gpu:1 --pty bash"
-    exit 1
-fi
-echo "GPU(s) detected:"
-nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-echo ""
-
 # ======================== STEP 1: Load Modules ==============================
+echo ""
 echo "Step 1: Loading modules..."
 
 ANACONDA_MODULE="${ANACONDA_MODULE:-miniconda/3-4.11.0}"
@@ -50,6 +39,17 @@ module load cuda/11.8.0
 
 echo "CUDA_HOME=$CUDA_HOME"
 echo "nvcc: $(nvcc --version 2>/dev/null | grep release || echo 'not found')"
+
+# Verify GPU is accessible (nvidia-smi needs CUDA module loaded first on some HPC systems)
+echo ""
+echo "Checking GPU availability..."
+if command -v nvidia-smi &>/dev/null; then
+    echo "GPU(s) detected:"
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+else
+    echo "WARNING: nvidia-smi not found even after loading CUDA module."
+    echo "Continuing anyway -- GPU may still be usable by JAX."
+fi
 
 # ======================== STEP 2: Activate Conda Env ========================
 echo ""
