@@ -26,19 +26,30 @@ echo "============================================="
 echo "GPU Setup for SGCRL"
 echo "============================================="
 
-# ======================== STEP 1: Load Modules ==============================
+# ======================== STEP 0: Verify GPU node ===========================
 echo ""
+echo "Step 0: Checking GPU availability on this node..."
+if ! command -v nvidia-smi &>/dev/null; then
+    echo "ERROR: nvidia-smi not found. Are you on a GPU node?"
+    echo "Get one with: srun --gres=gpu:1 --pty bash"
+    exit 1
+fi
+echo "GPU(s) detected:"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+echo ""
+
+# ======================== STEP 1: Load Modules ==============================
 echo "Step 1: Loading modules..."
 
 ANACONDA_MODULE="${ANACONDA_MODULE:-miniconda/3-4.11.0}"
 echo "Loading: $ANACONDA_MODULE"
 module load "$ANACONDA_MODULE"
 
-# NYUAD HPC has cuda/11.8.0 (no separate cuDNN module)
 echo "Loading: cuda/11.8.0"
 module load cuda/11.8.0
 
-echo "Modules loaded."
+echo "CUDA_HOME=$CUDA_HOME"
+echo "nvcc: $(nvcc --version 2>/dev/null | grep release || echo 'not found')"
 
 # ======================== STEP 2: Activate Conda Env ========================
 echo ""
@@ -49,18 +60,30 @@ conda activate ${ENV_NAME}
 
 echo "Active environment: $CONDA_PREFIX"
 
-# ======================== STEP 3: Install cuDNN via conda ===================
+# ======================== STEP 3: Install cuDNN via pip =====================
 echo ""
-echo "Step 3: Installing cuDNN via conda (not available as HPC module)..."
+echo "Step 3: Installing cuDNN via pip (no cuDNN HPC module available)..."
 
-conda install -c conda-forge cudnn=8.2 -y
+# nvidia-cudnn-cu11 provides cuDNN 8.x libraries for CUDA 11
+pip install nvidia-cudnn-cu11==8.6.0.163
 
 # ======================== STEP 4: Set Library Paths =========================
 echo ""
 echo "Step 4: Setting library paths..."
 
+# Find where pip installed the cuDNN libraries
+CUDNN_LIB=$(python -c "import nvidia.cudnn; import os; print(os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'lib'))" 2>/dev/null || echo "")
+
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib/"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${MUJOCO_DIR}/bin"
+
+# Add cuDNN lib path
+if [ -n "$CUDNN_LIB" ] && [ -d "$CUDNN_LIB" ]; then
+    export LD_LIBRARY_PATH="${CUDNN_LIB}:${LD_LIBRARY_PATH}"
+    echo "Added cuDNN lib: $CUDNN_LIB"
+else
+    echo "WARNING: Could not locate nvidia.cudnn pip package lib dir"
+fi
 
 # Add CUDA lib from the loaded module
 if [ -n "$CUDA_HOME" ] && [ -d "$CUDA_HOME/lib64" ]; then
@@ -68,33 +91,31 @@ if [ -n "$CUDA_HOME" ] && [ -d "$CUDA_HOME/lib64" ]; then
     echo "Added CUDA_HOME lib: $CUDA_HOME/lib64"
 fi
 
-# Fallback: check common locations
-for cuda_lib_dir in /usr/local/cuda-11.8/lib64 /usr/local/cuda-11/lib64 /usr/local/cuda/lib64; do
-    if [ -d "$cuda_lib_dir" ]; then
-        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${cuda_lib_dir}"
-        echo "Added CUDA lib: $cuda_lib_dir"
-        break
-    fi
-done
-
-for nvidia_dir in /usr/lib/nvidia /usr/lib64/nvidia /usr/lib/x86_64-linux-gnu/nvidia; do
-    if [ -d "$nvidia_dir" ]; then
-        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${nvidia_dir}"
-        echo "Added NVIDIA lib: $nvidia_dir"
-        break
-    fi
-done
-
 echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+
+# Verify cuDNN is findable
+echo ""
+echo "Checking cuDNN library..."
+python -c "
+import ctypes
+try:
+    cudnn = ctypes.cdll.LoadLibrary('libcudnn.so.8')
+    print('libcudnn.so.8 loaded successfully')
+except OSError as e:
+    print(f'WARNING: Cannot load libcudnn.so.8: {e}')
+"
 
 # ======================== STEP 5: Install GPU JAX ===========================
 echo ""
-echo "Step 5: Installing GPU-compatible JAX and optax..."
+echo "Step 5: Installing GPU-compatible JAX, optax, and pinning dependencies..."
 
 pip install optax==0.1.7
 
-# Use CUDA 11 + cuDNN 8.2 build (matches cuda/11.8.0 + conda cudnn=8.2)
-pip install --upgrade "jax==0.4.7" "jaxlib==0.4.7+cuda11.cudnn82" \
+# Pin chex and flax to versions compatible with jax 0.4.7
+pip install chex==0.1.7 flax==0.6.11
+
+# Use CUDA 11 + cuDNN 8.6 build (matches cuda/11.8.0 + nvidia-cudnn-cu11==8.6)
+pip install --upgrade "jax==0.4.7" "jaxlib==0.4.7+cuda11.cudnn86" \
     -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 echo ""
@@ -114,7 +135,17 @@ if gpu_devices:
         print('  -', d)
     print('GPU setup successful!')
 else:
-    print('WARNING: No GPU devices found. Check CUDA/cuDNN installation.')
+    print('ERROR: No GPU devices found!')
+    print('')
+    print('Debug info:')
+    import subprocess
+    result = subprocess.run(['nvidia-smi'], capture_output=True, text=True)
+    print(result.stdout[:500] if result.stdout else 'nvidia-smi failed')
+    import os
+    print('LD_LIBRARY_PATH:', os.environ.get('LD_LIBRARY_PATH', 'not set'))
+    print('')
+    print('Try running with more verbose output:')
+    print('  TF_CPP_MIN_LOG_LEVEL=0 python -c \"import jax; print(jax.devices())\"')
 "
 
 echo ""
