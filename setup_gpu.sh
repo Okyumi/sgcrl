@@ -27,7 +27,7 @@ echo "Step 1: Loading modules (anaconda, CUDA, cuDNN)..."
 
 # Auto-detect the correct anaconda module name
 ANACONDA_MODULE=""
-for mod in anaconda3 anaconda anaconda/2023.07 anaconda/3; do
+for mod in anaconda3 anaconda anaconda/2023.07 anaconda/3 miniconda/3-4.11.0 miniconda-nobashrc/3-4.11.0; do
     if module avail "$mod" 2>&1 | grep -q "$mod"; then
         ANACONDA_MODULE="$mod"
         break
