@@ -28,6 +28,14 @@ MUJOCO_DIR="${MUJOCO_DIR:-$HOME/.mujoco/mujoco210}"
 # Environment name
 ENV_NAME="contrastive_rl"
 
+# ======================== REDIRECT CACHES TO SCRATCH ========================
+# Avoid filling home directory quota with large pip/conda caches
+export PIP_CACHE_DIR="/scratch/$(whoami)/.cache/pip"
+export CONDA_PKGS_DIRS="/scratch/$(whoami)/.cache/conda/pkgs"
+mkdir -p "$PIP_CACHE_DIR" "$CONDA_PKGS_DIRS" 2>/dev/null || true
+echo "Pip cache: $PIP_CACHE_DIR"
+echo "Conda cache: $CONDA_PKGS_DIRS"
+
 # ======================== STEP 1: Load Modules ==============================
 echo "============================================="
 echo "Step 1: Loading required modules..."
@@ -161,8 +169,10 @@ pip install gymnasium-robotics
 pip uninstall scipy -y
 pip install scipy==1.12
 
-# torch, scikit-learn, pandas
-pip install torch==2.1.2 scikit-learn pandas
+# torch CPU-only (only used for tensorboard SummaryWriter, no GPU needed)
+# This avoids downloading ~2GB of bundled nvidia-cu12 libraries
+pip install torch==2.1.2+cpu -f https://download.pytorch.org/whl/torch_stable.html
+pip install scikit-learn pandas
 
 echo ""
 echo "============================================="
