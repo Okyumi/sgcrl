@@ -144,10 +144,11 @@ echo "============================================="
 # dm-acme with jax and tf extras
 pip install "dm-acme[jax,tf]"
 
-# JAX and JAXlib (CPU versions first, GPU versions installed in GPU setup step)
-pip install jax==0.4.10 jaxlib==0.4.10
+# JAX and JAXlib: skip here, setup_gpu.sh installs the correct GPU build
+# (jax==0.4.7 + jaxlib==0.4.7+cuda11.cudnn82). Pre-built CPU wheels for
+# 0.4.7/0.4.10 are not available on PyPI for this platform.
 
-# ml_dtypes compatible with jax 0.4.10
+# ml_dtypes compatible with jax 0.4.x
 pip install ml_dtypes==0.2.0
 
 # dm-haiku
