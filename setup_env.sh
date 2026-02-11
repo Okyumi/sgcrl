@@ -91,13 +91,17 @@ echo "============================================="
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib/"
 echo "LD_LIBRARY_PATH set to: $LD_LIBRARY_PATH"
 
-# Add MuJoCo to library path
+# Add MuJoCo to library path and set MUJOCO_PATH for pip builds
 if [ -d "${MUJOCO_DIR}/bin" ]; then
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${MUJOCO_DIR}/bin"
+    export MUJOCO_PATH="${MUJOCO_DIR}"
     echo "Added MuJoCo bin to LD_LIBRARY_PATH: ${MUJOCO_DIR}/bin"
+    echo "MUJOCO_PATH set to: ${MUJOCO_DIR}"
 else
-    echo "WARNING: MuJoCo directory not found at ${MUJOCO_DIR}/bin"
-    echo "Please set MUJOCO_DIR to your MuJoCo installation path."
+    echo "ERROR: MuJoCo directory not found at ${MUJOCO_DIR}"
+    echo "Please set MUJOCO_DIR to your MuJoCo installation path, e.g.:"
+    echo "  MUJOCO_DIR=\$HOME/.mujoco/mujoco210 bash setup_env.sh"
+    exit 1
 fi
 
 # ======================== STEP 5: Pre-install Cython fix ====================
