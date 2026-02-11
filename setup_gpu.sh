@@ -30,9 +30,46 @@ ANACONDA_MODULE="${ANACONDA_MODULE:-miniconda/3-4.11.0}"
 echo "Loading: $ANACONDA_MODULE"
 module load "$ANACONDA_MODULE"
 
-module load cudatoolkit/11.3 cudnn/cuda-11.x/8.2.0
+# Try to load CUDA/cuDNN modules - names vary across HPC systems
+CUDA_LOADED=false
+for cuda_mod in "cudatoolkit/11.3" "cuda/11.3" "cuda/11.3.1" "cuda11.3/toolkit" "cuda/11"; do
+    if module avail "$cuda_mod" 2>&1 | grep -q "$cuda_mod"; then
+        echo "Loading CUDA module: $cuda_mod"
+        module load "$cuda_mod"
+        CUDA_LOADED=true
+        break
+    fi
+done
 
-echo "Modules loaded."
+if [ "$CUDA_LOADED" = false ]; then
+    echo "No CUDA module found via 'module load'. Checking if CUDA is already available..."
+    if command -v nvcc &>/dev/null; then
+        echo "nvcc found: $(nvcc --version | grep release)"
+    elif [ -d "/usr/local/cuda" ]; then
+        echo "Found CUDA at /usr/local/cuda"
+    else
+        echo ""
+        echo "WARNING: No CUDA module or installation detected."
+        echo "Available CUDA-related modules on this system:"
+        module avail 2>&1 | grep -iE "cuda|cudnn|gpu|nvidia" || echo "  (none found)"
+        echo ""
+        echo "If you know the correct module name, re-run with:"
+        echo "  CUDA_MODULE=<name> CUDNN_MODULE=<name> bash setup_gpu.sh"
+        echo ""
+        echo "Continuing anyway -- JAX install may still work if CUDA libs are in the default path."
+    fi
+fi
+
+# Try cuDNN module
+for cudnn_mod in "cudnn/cuda-11.x/8.2.0" "cudnn/8.2" "cudnn/8.2.0" "cudnn" "cudnn/cuda11"; do
+    if module avail "$cudnn_mod" 2>&1 | grep -q "$cudnn_mod"; then
+        echo "Loading cuDNN module: $cudnn_mod"
+        module load "$cudnn_mod"
+        break
+    fi
+done
+
+echo "Module loading done."
 
 # ======================== STEP 2: Activate Conda Env ========================
 echo ""
@@ -50,16 +87,30 @@ echo "Step 3: Setting library paths..."
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib/"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${MUJOCO_DIR}/bin"
 
-# Add CUDA library paths
-# These paths may vary on NYUAD HPC; adjust if needed
-if [ -d "/usr/local/cuda-11.3/lib64" ]; then
-    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/cuda-11.3/lib64"
-elif [ -d "/usr/local/cuda/lib64" ]; then
-    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/cuda/lib64"
-fi
+# Add CUDA library paths - check common locations
+for cuda_lib_dir in /usr/local/cuda-11.3/lib64 /usr/local/cuda-11/lib64 /usr/local/cuda/lib64; do
+    if [ -d "$cuda_lib_dir" ]; then
+        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${cuda_lib_dir}"
+        echo "Added CUDA lib: $cuda_lib_dir"
+        break
+    fi
+done
 
-if [ -d "/usr/lib/nvidia" ]; then
-    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/lib/nvidia"
+for nvidia_dir in /usr/lib/nvidia /usr/lib64/nvidia /usr/lib/x86_64-linux-gnu/nvidia; do
+    if [ -d "$nvidia_dir" ]; then
+        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${nvidia_dir}"
+        echo "Added NVIDIA lib: $nvidia_dir"
+        break
+    fi
+done
+
+# Also check if CUDA_HOME or CUDA_PATH is set by the module
+if [ -n "$CUDA_HOME" ] && [ -d "$CUDA_HOME/lib64" ]; then
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDA_HOME}/lib64"
+    echo "Added CUDA_HOME lib: $CUDA_HOME/lib64"
+elif [ -n "$CUDA_PATH" ] && [ -d "$CUDA_PATH/lib64" ]; then
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDA_PATH}/lib64"
+    echo "Added CUDA_PATH lib: $CUDA_PATH/lib64"
 fi
 
 echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
