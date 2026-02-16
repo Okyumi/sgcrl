@@ -23,6 +23,7 @@ flags.DEFINE_string('log_dir_path', 'logs/', 'Where to log metrics')
 flags.DEFINE_integer('time_delta_minutes', 5, 'how often to save checkpoints')
 flags.DEFINE_integer('seed', 42, 'Specify seed, only used if use_slurm_array is false')
 flags.DEFINE_bool('add_uid', False, 'Whether to add a unique id to the log directory name')
+flags.DEFINE_bool('use_wandb', False, 'Whether to log metrics to Weights & Biases')
 flags.DEFINE_string('alg', 'contrastive_cpc', 'Algorithm type, e.g. default is contrastive_cpc with no entropy or KL losses')
 flags.DEFINE_string('env', 'sawyer_bin', 'Environment type, e.g. default is sawyer bin')
 flags.DEFINE_integer('num_steps', 8_000_000, 'Number of steps to run', lower_bound=0)
@@ -52,7 +53,11 @@ def get_program(params):
   seed = params['seed']
 
   config = contrastive.ContrastiveConfig(**params)
-  
+
+  if config.use_wandb:
+    import wandb
+    wandb.init(project='sgcrl', config=params, name=f"{params['env_name']}_{params['alg_name']}_s{params['seed']}")
+
   fix_goals = params['fix_goals']
 
   if fix_goals:
@@ -130,6 +135,7 @@ def main(_):
   
   params['log_dir'] = FLAGS.log_dir_path
   params['time_delta_minutes'] = FLAGS.time_delta_minutes
+  params['use_wandb'] = FLAGS.use_wandb
   
   if alg == 'contrastive_cpc':
     params['use_cpc'] = True

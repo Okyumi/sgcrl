@@ -11,11 +11,32 @@ from acme.utils.loggers import filters
 from acme.utils.loggers import terminal
 
 
+class WandbLogger(base.Logger):
+  """Logger that sends metrics to Weights & Biases. Use when wandb.init() has already been called."""
+
+  def __init__(self, steps_key: str = 'learner_steps'):
+    self._steps_key = steps_key
+
+  def write(self, data: Mapping[str, Any]) -> None:
+    try:
+      import wandb
+      step = data.get(self._steps_key) or data.get('steps')
+      metrics = {k: float(v) for k, v in data.items() if isinstance(v, (int, float))}
+      if metrics:
+        wandb.log(metrics, step=step)
+    except Exception:  # pylint: disable=broad-except
+      pass  # Don't break training if wandb is unavailable or misconfigured
+
+  def close(self) -> None:
+    pass  # Required by acme.utils.loggers.base.Logger; wandb run is finished by the main process
+
+
 def make_default_logger(
     label: str,
     save_data: bool = True,
     save_dir: str = 'logs',
     add_uid: bool = True,
+    use_wandb: bool = False,
     time_delta: float = 1.0,
     asynchronous: bool = False,
     print_fn: Optional[Callable[[str], None]] = None,
@@ -27,17 +48,17 @@ def make_default_logger(
   Args:
     label: Name to give to the logger.
     save_data: Whether to persist data.
+    use_wandb: Whether to also log metrics to Weights & Biases (wandb.init must be called elsewhere).
     time_delta: Time (in seconds) between logging events.
     asynchronous: Whether the write function should block or not.
     print_fn: How to print to terminal (defaults to print).
     serialize_fn: An optional function to apply to the write inputs before
       passing them to the various loggers.
-    steps_key: Ignored.
+    steps_key: Key used for step count (e.g. 'learner_steps'); used by WandbLogger when use_wandb=True.
 
   Returns:
     A logger object that responds to logger.write(some_dict).
   """
-  del steps_key
   if not print_fn:
     print_fn = logging.info
   terminal_logger = terminal.TerminalLogger(label=label, print_fn=print_fn)
@@ -46,6 +67,9 @@ def make_default_logger(
 
   if save_data:
     loggers.append(csv.CSVLogger(label=label, directory_or_file = save_dir, add_uid = add_uid))
+
+  if use_wandb:
+    loggers.append(WandbLogger(steps_key=steps_key))
 
   # Dispatch to all writers and filter Nones and by time.
   logger = aggregators.Dispatcher(loggers, serialize_fn)

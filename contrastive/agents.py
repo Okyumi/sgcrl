@@ -45,9 +45,10 @@ class DistributedContrastive(distributed_layout.DistributedLayout):
                                   'learner', log_to_bigtable,
                                   time_delta=log_every, asynchronous=True,
                                   serialize_fn=utils.fetch_devicearray,
-                                  save_dir = config.log_dir + config.alg_name + '_' 
+                                  save_dir = config.log_dir + config.alg_name + '_'
                                   + config.env_name + '_' + str(seed),
                                   add_uid = config.add_uid,
+                                  use_wandb=config.use_wandb,
                                   steps_key='learner_steps')
     contrastive_builder = builder.ContrastiveBuilder(config, logger_fn=logger_fn)
     if evaluator_factories is None:

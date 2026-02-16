@@ -11,6 +11,7 @@ import numpy as onp
 class ContrastiveConfig:
   """Configuration options for contrastive RL."""
   add_uid: bool = True
+  use_wandb: bool = False
   time_delta_minutes: int = 5
   log_dir: str = 'logs/'
   env_name: str = ''

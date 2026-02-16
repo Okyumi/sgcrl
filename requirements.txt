@@ -198,4 +198,6 @@ Werkzeug  #2.1.2
 
 wrapt  #1.14.1
 
+wandb
+
 zipp  #3.8.0
