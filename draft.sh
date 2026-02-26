@@ -67,10 +67,10 @@ CUDNN_LIB=$(python -c "import nvidia.cudnn, os; print(os.path.join(os.path.dirna
 # Run from repo root
 cd /scratch/yd2247/sgcrl
 
-# # Short debug run (default env sawyer_bin, alg contrastive_cpc)
+# Short debug run (default env sawyer_bin, alg contrastive_cpc)
 # python lp_contrastive.py \
 #   --lp_launch_type=local_mt \
-#   --env=sawyer_bin \
+#   --env=sawyer_push_back \
 #   --alg=contrastive_cpc \
 #   --num_steps=50_000 \
 #   --seed=42 \
@@ -80,7 +80,7 @@ cd /scratch/yd2247/sgcrl
 # For 8M steps consider increasing SBATCH --time (e.g. 24:00:00 or 48:00:00) and --mem (e.g. 32GB).
 python lp_contrastive.py \
   --lp_launch_type=local_mt \
-  --env=sawyer_bin \
+  --env=sawyer_push_back \
   --alg=contrastive_cpc \
   --num_steps=8_000_000 \
   --seed=2 \

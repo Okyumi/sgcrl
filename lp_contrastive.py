@@ -34,7 +34,11 @@ fixed_goal_dict={'point_Spiral11x11': [np.array([5,5], dtype=float), np.array([1
                      #note: sawyer fixed goal positions vary slightly with each episode
                       'sawyer_bin': np.array([0.12, 0.7, 0.02]),
                       'sawyer_box': np.array([0.0, 0.75, 0.133]),
-                      'sawyer_peg': np.array([-0.3, 0.6, 0.0])}
+                      'sawyer_peg': np.array([-0.3, 0.6, 0.0]),
+                      'sawyer_push_back': np.array([0.06, 0.62, 0.02]),
+                      'sawyer_hammer': np.array([0.24, 0.74, 0.11]),
+                      'sawyer_push_wall': np.array([0.05, 0.85, 0.015]),
+                      'sawyer_faucet_close': np.array([-0.14, 0.82, 0.13])}
 
 @functools.lru_cache
 def get_env(env_name, start_index, end_index, seed, fix_goals = False, fix_goals_actor = False, use_naive_sampling=False, clock_period=None):
@@ -104,7 +108,7 @@ def main(_):
 
   # 1. Select an environment.
   # Supported environments:
-  #   Metaworld: sawyer_{bin,box,peg}
+  #   Metaworld: sawyer_{bin,box,peg,push_back,hammer,push_wall,faucet_close}
   #   2D nav: point_{Spiral11x11}
   env_name = FLAGS.env
   print('Using env {}...'.format(env_name))

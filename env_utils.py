@@ -48,6 +48,22 @@ def load(env_name, fixed_start_end=None):
     CLASS = SawyerPeg
     max_episode_steps = 150
     kwargs['fixed_start_end'] = fixed_start_end
+  elif env_name == 'sawyer_push_back':
+    CLASS = SawyerPushBack
+    max_episode_steps = 150
+    kwargs['fixed_start_end'] = fixed_start_end
+  elif env_name == 'sawyer_hammer':
+    CLASS = SawyerHammer
+    max_episode_steps = 150
+    kwargs['fixed_start_end'] = fixed_start_end
+  elif env_name == 'sawyer_push_wall':
+    CLASS = SawyerPushWall
+    max_episode_steps = 150
+    kwargs['fixed_start_end'] = fixed_start_end
+  elif env_name == 'sawyer_faucet_close':
+    CLASS = SawyerFaucetClose
+    max_episode_steps = 150
+    kwargs['fixed_start_end'] = fixed_start_end
   elif env_name.startswith('point_'):
     CLASS = point_env.PointEnv
     kwargs['walls'] = env_name.split('_')[-1]
@@ -265,6 +281,261 @@ class SawyerPeg(
     # higher than the middle of the peg
     goal = np.concatenate([self._goal_pos + np.array([0.13, 0.0, 0.03]),
                            [0.4], self._goal_pos])
+    return np.concatenate([obs, goal]).astype(np.float32)
+
+  @property
+  def observation_space(self):
+    return gym.spaces.Box(
+        low=np.full(2 * 7, -np.inf),
+        high=np.full(2 * 7, np.inf),
+        dtype=np.float32)
+
+
+class SawyerPushBack(
+    metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['push-back-v2']):
+  """Wrapper for PushBack: push object to a target position.
+
+  Goal semantics: the desired state is the object at the target position.
+  State = hand (3), gripper (1), object position (3) = 7 dims.
+  Goal = same structure as state: hand slightly above target (3), gripper (1),
+  target position (3). Success when object within 0.07 of target (Meta-World).
+  """
+
+  def __init__(self, fixed_start_end=None):
+    self._goal = np.zeros(3)
+    super(SawyerPushBack, self).__init__()
+    self._partially_observable = False
+    self._freeze_rand_vec = False
+    self._set_task_called = True
+    self._fixed_start_end = fixed_start_end
+    self.reset()
+
+  def reset(self):
+    super(SawyerPushBack, self).reset()
+    # Parent sets _target_pos to the goal position for the object
+    if self._fixed_start_end is not None:
+      self._goal = np.array(self._fixed_start_end, dtype=np.float32)
+      self._target_pos = self._goal.copy()
+    else:
+      self._goal = self._target_pos.copy()
+    return self._get_obs()
+
+  def step(self, action):
+    super(SawyerPushBack, self).step(action)
+    obj_pos = self._get_pos_objects()
+    dist = np.linalg.norm(self._goal - obj_pos)
+    obs = self._get_obs()
+    r = float(dist < 0.07)  # Meta-World push-back success threshold
+    done = False
+    info = {}
+    return obs, r, done, info
+
+  def _get_obs(self):
+    pos_hand = self.get_endeff_pos()
+    finger_right, finger_left = (
+        self._get_site_pos('rightEndEffector'),
+        self._get_site_pos('leftEndEffector'),
+    )
+    gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
+    gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
+    obj_pos = self._get_pos_objects()
+    obs = np.concatenate((
+        pos_hand,
+        [gripper_distance_apart],
+        obj_pos,
+    ))
+    # Goal state: object at target; hand slightly above target, gripper open
+    goal = np.concatenate([
+        self._goal + np.array([0.0, 0.0, 0.03]),
+        [0.4],
+        self._goal,
+    ])
+    return np.concatenate([obs, goal]).astype(np.float32)
+
+  @property
+  def observation_space(self):
+    return gym.spaces.Box(
+        low=np.full(2 * 7, -np.inf),
+        high=np.full(2 * 7, np.inf),
+        dtype=np.float32)
+
+
+class SawyerHammer(
+    metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['hammer-v2']):
+  """Wrapper for Hammer: drive nail to target position.
+
+  State = hand (3), gripper (1), nail position (3) = 7 dims.
+  Goal = hand above target (3), gripper (1), nail target (3). Success when
+  nail within 0.05 of goal (or joint-based in raw env).
+  """
+
+  def __init__(self, fixed_start_end=None):
+    self._goal = np.zeros(3)
+    super(SawyerHammer, self).__init__()
+    self._partially_observable = False
+    self._freeze_rand_vec = False
+    self._set_task_called = True
+    self._fixed_start_end = fixed_start_end
+    self.reset()
+
+  def reset(self):
+    super(SawyerHammer, self).reset()
+    if self._fixed_start_end is not None:
+      self._goal = np.array(self._fixed_start_end, dtype=np.float32)
+      self._target_pos = self._goal.copy()
+    else:
+      self._goal = self._target_pos.copy()
+    return self._get_obs()
+
+  def step(self, action):
+    super(SawyerHammer, self).step(action)
+    pos_objects = self._get_pos_objects()
+    nail_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
+    dist = np.linalg.norm(self._goal - nail_pos)
+    obs = self._get_obs()
+    r = float(dist < 0.05)
+    done = False
+    info = {}
+    return obs, r, done, info
+
+  def _get_obs(self):
+    pos_hand = self.get_endeff_pos()
+    finger_right, finger_left = (
+        self._get_site_pos('rightEndEffector'),
+        self._get_site_pos('leftEndEffector'),
+    )
+    gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
+    gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
+    pos_objects = self._get_pos_objects()
+    nail_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
+    obs = np.concatenate((pos_hand, [gripper_distance_apart], nail_pos))
+    goal = np.concatenate([
+        self._goal + np.array([0.0, 0.0, 0.03]),
+        [0.4],
+        self._goal,
+    ])
+    return np.concatenate([obs, goal]).astype(np.float32)
+
+  @property
+  def observation_space(self):
+    return gym.spaces.Box(
+        low=np.full(2 * 7, -np.inf),
+        high=np.full(2 * 7, np.inf),
+        dtype=np.float32)
+
+
+class SawyerPushWall(
+    metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['push-wall-v2']):
+  """Wrapper for PushWall: push object to target against the wall.
+
+  State = hand (3), gripper (1), object position (3) = 7 dims.
+  Goal = same structure. Success when object within 0.07 of goal.
+  """
+
+  def __init__(self, fixed_start_end=None):
+    self._goal = np.zeros(3)
+    super(SawyerPushWall, self).__init__()
+    self._partially_observable = False
+    self._freeze_rand_vec = False
+    self._set_task_called = True
+    self._fixed_start_end = fixed_start_end
+    self.reset()
+
+  def reset(self):
+    super(SawyerPushWall, self).reset()
+    if self._fixed_start_end is not None:
+      self._goal = np.array(self._fixed_start_end, dtype=np.float32)
+      self._target_pos = self._goal.copy()
+    else:
+      self._goal = self._target_pos.copy()
+    return self._get_obs()
+
+  def step(self, action):
+    super(SawyerPushWall, self).step(action)
+    obj_pos = self._get_pos_objects()
+    dist = np.linalg.norm(self._goal - obj_pos)
+    obs = self._get_obs()
+    r = float(dist < 0.07)
+    done = False
+    info = {}
+    return obs, r, done, info
+
+  def _get_obs(self):
+    pos_hand = self.get_endeff_pos()
+    finger_right, finger_left = (
+        self._get_site_pos('rightEndEffector'),
+        self._get_site_pos('leftEndEffector'),
+    )
+    gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
+    gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
+    obj_pos = self._get_pos_objects()
+    obs = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos))
+    goal = np.concatenate([
+        self._goal + np.array([0.0, 0.0, 0.03]),
+        [0.4],
+        self._goal,
+    ])
+    return np.concatenate([obs, goal]).astype(np.float32)
+
+  @property
+  def observation_space(self):
+    return gym.spaces.Box(
+        low=np.full(2 * 7, -np.inf),
+        high=np.full(2 * 7, np.inf),
+        dtype=np.float32)
+
+
+class SawyerFaucetClose(
+    metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['faucet-close-v2']):
+  """Wrapper for FaucetClose: close faucet handle to target position.
+
+  State = hand (3), gripper (1), handle position (3) = 7 dims.
+  Goal = same structure. Success when handle within 0.07 of goal.
+  """
+
+  def __init__(self, fixed_start_end=None):
+    self._goal = np.zeros(3)
+    super(SawyerFaucetClose, self).__init__()
+    self._partially_observable = False
+    self._freeze_rand_vec = False
+    self._set_task_called = True
+    self._fixed_start_end = fixed_start_end
+    self.reset()
+
+  def reset(self):
+    super(SawyerFaucetClose, self).reset()
+    if self._fixed_start_end is not None:
+      self._goal = np.array(self._fixed_start_end, dtype=np.float32)
+      self._target_pos = self._goal.copy()
+    else:
+      self._goal = self._target_pos.copy()
+    return self._get_obs()
+
+  def step(self, action):
+    super(SawyerFaucetClose, self).step(action)
+    handle_pos = self._get_pos_objects()
+    dist = np.linalg.norm(self._goal - handle_pos)
+    obs = self._get_obs()
+    r = float(dist < 0.07)
+    done = False
+    info = {}
+    return obs, r, done, info
+
+  def _get_obs(self):
+    pos_hand = self.get_endeff_pos()
+    finger_right, finger_left = (
+        self._get_site_pos('rightEndEffector'),
+        self._get_site_pos('leftEndEffector'),
+    )
+    gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
+    gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
+    handle_pos = self._get_pos_objects()
+    obs = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
+    goal = np.concatenate([
+        self._goal + np.array([0.0, 0.0, 0.03]),
+        [0.4],
+        self._goal,
+    ])
     return np.concatenate([obs, goal]).astype(np.float32)
 
   @property
