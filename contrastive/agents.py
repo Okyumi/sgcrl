@@ -70,7 +70,8 @@ class DistributedContrastive(distributed_layout.DistributedLayout):
               observers=eval_observers,
               save_dir = config.log_dir + config.alg_name + '_'
               + config.env_name + '_' + str(seed),
-              add_uid = config.add_uid)
+              add_uid = config.add_uid,
+              use_wandb=config.use_wandb)
       ]
       if config.local:
         evaluator_factories = []
@@ -93,7 +94,8 @@ class DistributedContrastive(distributed_layout.DistributedLayout):
         log_to_bigtable=log_to_bigtable,
         actor_logger_fn=distributed_layout.get_default_logger_fn(
             log_to_bigtable, log_every, save_dir = config.log_dir + config.alg_name + '_'
-            + config.env_name + '_' + str(seed), add_uid = config.add_uid),
+            + config.env_name + '_' + str(seed), add_uid = config.add_uid,
+            use_wandb=config.use_wandb),
         observers=actor_observers,
         checkpointing_config=distributed_layout.CheckpointingConfig(
             save_dir = config.log_dir + config.alg_name + '_'

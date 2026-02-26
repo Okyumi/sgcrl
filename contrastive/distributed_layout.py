@@ -49,8 +49,9 @@ def get_default_logger_fn(
     log_to_bigtable = False,
     log_every = 10,
     save_dir = "logs",
-    add_uid = True):
-  """Creates an actor logger."""
+    add_uid = True,
+    use_wandb = False):
+  """Creates an actor logger. When use_wandb=True, only actor 0 logs to wandb (matches CSV)."""
 
   def create_logger(actor_id):
     return make_default_logger(
@@ -58,6 +59,7 @@ def get_default_logger_fn(
         save_data=(log_to_bigtable and actor_id == 0),
         save_dir=save_dir,
         add_uid=add_uid,
+        use_wandb=(use_wandb and actor_id == 0),
         time_delta=log_every,
         steps_key='actor_steps')
   return create_logger
@@ -70,7 +72,8 @@ def default_evaluator_factory(
     observers = (),
     log_to_bigtable = False,
     save_dir = "logs",
-    add_uid = True):
+    add_uid = True,
+    use_wandb = False):
   """Returns a default evaluator process."""
   def evaluator(
       random_key,
@@ -93,6 +96,7 @@ def default_evaluator_factory(
     logger = make_default_logger('evaluator', log_to_bigtable,
                                          save_dir=save_dir,
                                          add_uid=add_uid,
+                                         use_wandb=use_wandb,
                                          steps_key='actor_steps')
 
     # Create the run loop and return it.

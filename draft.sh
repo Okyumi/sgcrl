@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=sgcrl_test
-#SBATCH --time=2:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -83,7 +83,7 @@ python lp_contrastive.py \
   --env=sawyer_bin \
   --alg=contrastive_cpc \
   --num_steps=8_000_000 \
-  --seed=0 \
+  --seed=2 \
   --add_uid \
   --use_wandb \
   --log_dir_path=logs/

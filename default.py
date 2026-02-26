@@ -14,14 +14,29 @@ from acme.utils.loggers import terminal
 class WandbLogger(base.Logger):
   """Logger that sends metrics to Weights & Biases. Use when wandb.init() has already been called."""
 
-  def __init__(self, steps_key: str = 'learner_steps'):
+  def __init__(self, steps_key: str = 'learner_steps', prefix: Optional[str] = None):
     self._steps_key = steps_key
+    self._prefix = prefix  # e.g. 'learner', 'actor', 'evaluator' for namespaced keys
+
+  def _to_float(self, v: Any) -> Optional[float]:
+    """Convert numeric values (int, float, numpy/jax scalars) to float for wandb."""
+    if isinstance(v, (int, float)):
+      return float(v)
+    try:
+      return float(v)
+    except (TypeError, ValueError):
+      return None
 
   def write(self, data: Mapping[str, Any]) -> None:
     try:
       import wandb
       step = data.get(self._steps_key) or data.get('steps')
-      metrics = {k: float(v) for k, v in data.items() if isinstance(v, (int, float))}
+      metrics = {}
+      for k, v in data.items():
+        fv = self._to_float(v)
+        if fv is not None:
+          key = f'{self._prefix}/{k}' if self._prefix else k
+          metrics[key] = fv
       if metrics:
         wandb.log(metrics, step=step)
     except Exception:  # pylint: disable=broad-except
@@ -69,7 +84,7 @@ def make_default_logger(
     loggers.append(csv.CSVLogger(label=label, directory_or_file = save_dir, add_uid = add_uid))
 
   if use_wandb:
-    loggers.append(WandbLogger(steps_key=steps_key))
+    loggers.append(WandbLogger(steps_key=steps_key, prefix=label))
 
   # Dispatch to all writers and filter Nones and by time.
   logger = aggregators.Dispatcher(loggers, serialize_fn)
