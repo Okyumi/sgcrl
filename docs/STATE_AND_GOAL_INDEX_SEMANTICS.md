@@ -4,11 +4,15 @@ This document lists the **semantic meaning of each index** for **state** and **g
 
 **Convention:** Every environment exposes `observation = [state, goal]`. The first `state_dim` values are the current state; the next `goal_dim` values are the desired goal (same semantic structure as state where applicable).
 
+**Alignment:** For every task in `env_utils.py`, state and goal use the **same index semantics**: goal index `(state_dim + i)` corresponds to the same semantic role as state index `i`. Each `_get_obs()` in `env_utils.py` documents this with an inline comment; see those for the exact index ranges.
+
 ---
 
 ## Part 1: Tasks in `env_utils.py` (current wrappers)
 
 ### 1.1 point_Spiral11x11 (and other point_*)
+
+State and goal use the **same index semantics**: state 0–1 (agent x, y) ↔ goal 2–3 (target x, y).
 
 | Role   | Indices | Dim | Semantic meaning |
 |--------|---------|-----|------------------|
@@ -17,11 +21,13 @@ This document lists the **semantic meaning of each index** for **state** and **g
 
 - **Full observation length:** 4  
 - **Success:** Agent reaches goal (e.g. within threshold).  
-- **Note:** `fixed_goal_dict` gives `[start_pos, end_pos]` (each 2D).
+- **Note:** `fixed_goal_dict` gives `[start_pos, end_pos]` (each 2D). Implemented in `point_env.py` (loaded via `env_utils.load()`).
 
 ---
 
 ### 1.2 sawyer_bin (bin-picking-v2)
+
+State and goal use the **same index semantics**: hand(0–2)↔7–9, gripper(3)↔10, block(4–6)↔11–13.
 
 | Role   | Indices | Dim | Semantic meaning |
 |--------|---------|-----|------------------|
@@ -40,6 +46,8 @@ This document lists the **semantic meaning of each index** for **state** and **g
 
 ### 1.3 sawyer_box (box-close-v2)
 
+State and goal use the **same index semantics**: hand(0–2)↔11–13, gripper(3)↔14, lid_pos(4–6)↔15–17, lid_quat(7–10)↔18–21.
+
 | Role   | Indices | Dim | Semantic meaning |
 |--------|---------|-----|------------------|
 | State  | 0–2     | 3   | End-effector position. |
@@ -53,11 +61,14 @@ This document lists the **semantic meaning of each index** for **state** and **g
 
 - **State dim:** 11, **goal dim:** 11, **full obs:** 22  
 - **Success:** Lid position within 0.08 of goal and quat within 0.08.  
-- **Goal refers to:** Lid position and orientation on the box.
+- **Goal refers to:** Lid position and orientation on the box.  
+- **Implementation:** `env_utils.SawyerBox._get_obs()`; see inline index comment there.
 
 ---
 
 ### 1.4 sawyer_peg (peg-insert-side-v2)
+
+State and goal use the **same index semantics**: hand(0–2)↔7–9, gripper(3)↔10, peg_head(4–6)↔11–13.
 
 | Role   | Indices | Dim | Semantic meaning |
 |--------|---------|-----|------------------|
@@ -76,6 +87,8 @@ This document lists the **semantic meaning of each index** for **state** and **g
 
 ### 1.5 sawyer_push_back (push-back-v2)
 
+State and goal use the **same index semantics**: each goal index 7–13 corresponds to the same semantic role as state index (i−7) for i = 7…13.
+
 | Role   | Indices | Dim | Semantic meaning |
 |--------|---------|-----|------------------|
 | State  | 0–2     | 3   | End-effector position. |
@@ -87,7 +100,10 @@ This document lists the **semantic meaning of each index** for **state** and **g
 
 - **State dim:** 7, **goal dim:** 7, **full obs:** 14  
 - **Success:** Object within 0.07 of goal.  
-- **Goal refers to:** Object’s target position.
+- **Goal refers to:** Object’s target position.  
+- **Implementation:** `env_utils.SawyerPushBack._get_obs()` builds `[obs, goal]` with this layout; see inline comments there.
+
+**Summary (Part 1):** All environments loaded via `env_utils.load()` use aligned state/goal index semantics. Each Sawyer wrapper’s `_get_obs()` in `env_utils.py` documents the exact state and goal index ranges in an inline comment; the goal vector mirrors the state layout (hand, gripper, object/handle/nail/peg/lid position—and quaternion for box only).
 
 ---
 

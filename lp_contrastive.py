@@ -38,7 +38,13 @@ fixed_goal_dict={'point_Spiral11x11': [np.array([5,5], dtype=float), np.array([1
                       'sawyer_push_back': np.array([0.06, 0.62, 0.02]),
                       'sawyer_hammer': np.array([0.24, 0.74, 0.11]),
                       'sawyer_push_wall': np.array([0.05, 0.85, 0.015]),
-                      'sawyer_faucet_close': np.array([-0.14, 0.82, 0.13])}
+                      'sawyer_faucet_close': np.array([-0.14, 0.82, 0.13]),
+                      'sawyer_stick_pull': np.array([0.41, 0.54, 0.02]),
+                      'sawyer_handle_press_side': np.array([-0.07, 0.68, 0.07]),
+                      'sawyer_push': np.array([0.02, 0.89, 0.02]),
+                      'sawyer_shelf_place': np.array([0.02, 0.89, 0.30]),
+                      'sawyer_window_close': np.array([0., 0.80, 0.2]),
+                      'sawyer_peg_unplug_side': np.array([0.01, 0.66, 0.13])}
 
 @functools.lru_cache
 def get_env(env_name, start_index, end_index, seed, fix_goals = False, fix_goals_actor = False, use_naive_sampling=False, clock_period=None):
@@ -108,7 +114,7 @@ def main(_):
 
   # 1. Select an environment.
   # Supported environments:
-  #   Metaworld: sawyer_{bin,box,peg,push_back,hammer,push_wall,faucet_close}
+  #   Metaworld: sawyer_{bin,box,peg,push_back,hammer,push_wall,faucet_close,stick_pull,handle_press_side,push,shelf_place,window_close,peg_unplug_side}
   #   2D nav: point_{Spiral11x11}
   env_name = FLAGS.env
   print('Using env {}...'.format(env_name))
