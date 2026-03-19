@@ -349,8 +349,13 @@ def train_single_task(
   print(f'  Training for {train_steps} env steps...', flush=True)
 
   while env_steps_done < train_steps:
-    # Actor step: run one full episode and count actual env steps
-    episode_steps = env_loop.run(num_episodes=1)
+    # Actor step: run one full episode and count actual env steps.
+    # NOTE: Acme's `EnvironmentLoop.run()` returns None (it only writes logs),
+    # so we call `run_episode()` to get the per-episode metrics dict.
+    result = env_loop.run_episode()
+    # Mirror `EnvironmentLoop.run()` behavior: write the episode log.
+    env_loop._logger.write(result)  # pylint: disable=protected-access
+    episode_steps = int(result['episode_length'])
     env_steps_done += episode_steps
     episodes_done += 1
 
