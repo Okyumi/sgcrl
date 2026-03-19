@@ -1,10 +1,13 @@
 # State and Goal Index Semantics
 
-This document lists the **semantic meaning of each index** for **state** and **goal** in every task. Use it to implement a **unified state/goal space** across tasks (Option A: pad to max dimension; Option B: common subset of indices).
+This document lists the **semantic meaning of each index** for **state** and **goal** in every task. **Option A (pad to max dimension) is implemented** in `env_utils.py`: all Sawyer task wrappers return a unified observation of length **22** (state 11 + goal 11), with smaller state/goal vectors zero-padded.
 
-**Convention:** Every environment exposes `observation = [state, goal]`. The first `state_dim` values are the current state; the next `goal_dim` values are the desired goal (same semantic structure as state where applicable).
+**Convention:** Every Sawyer environment exposes `observation = [state_padded, goal_padded]` where:
+- `state_padded` has length **STATE_DIM_UNIFIED = 11**, `goal_padded` has length **GOAL_DIM_UNIFIED = 11**.
+- Full observation length is **FULL_OBS_DIM = 22**. Indices **0:11** = state, **11:22** = goal.
+- Tasks with raw state dim &lt; 11 (or goal dim &lt; 11) are padded with zeros at the end. Semantic indices are unchanged; padding occupies the highest indices.
 
-**Alignment:** For every task in `env_utils.py`, state and goal use the **same index semantics**: goal index `(state_dim + i)` corresponds to the same semantic role as state index `i`. Each `_get_obs()` in `env_utils.py` documents this with an inline comment; see those for the exact index ranges.
+**Alignment:** For every task in `env_utils.py`, the **goal has the exact same semantic meaning as the state**: goal index `(11 + i)` in the full observation is the *desired value* for the quantity at state index `i`. So `goal[i]` (in goal-local indices) = desired value for `state[i]`. Each component of the state (hand, gripper, object positions, etc.) has a corresponding desired value in the goal at the same index. Each `_get_obs()` in `env_utils.py` documents the raw state/goal layout and padding; see those for the exact index ranges.
 
 ---
 
@@ -115,20 +118,23 @@ The following ten tasks are the CKA-RL sequence (task names only; see *Metaworld
 
 ### 2.1 hammer-v2
 
-*Source: `sawyer_hammer_v3.py` — `_get_pos_objects()` returns hammer (3) + nail (3); `_target_pos` from site `"goal"` (nail target). Success: nail joint > 0.09.*
+*Source: `Metaworld-2.0.0/.../sawyer_hammer_v2.py` — `_get_pos_objects()` returns `np.hstack((hammer (3), nail_link (3)))`. `_target_pos` from site `"goal"` (nail target). Success: `NailSlideJoint` > 0.09. **State must include both hammer and nail so it is not truncated.** Goal mirrors state index-by-index.*
 
-| Role   | Indices | Dim | Semantic meaning |
-|--------|---------|-----|------------------|
-| State  | 0–2     | 3   | End-effector position. |
-| State  | 3       | 1   | Gripper distance apart. |
-| State  | 4–6     | 3   | Nail position (x, y, z) — success is nail at goal. |
-| Goal   | 7–9     | 3   | Desired hand position (above target). |
-| Goal   | 10      | 1   | Desired gripper state. |
-| Goal   | 11–13   | 3   | Nail target position (goal site). |
+| Role   | Indices (full obs) | Dim | Semantic meaning |
+|--------|--------------------|-----|------------------|
+| State  | 0–2                | 3   | End-effector position. |
+| State  | 3                  | 1   | Gripper distance apart. |
+| State  | 4–6                | 3   | Hammer position (x, y, z). |
+| State  | 7–9                | 3   | Nail position (x, y, z) — success is nail at goal. |
+| Goal   | 11–13              | 3   | Desired hand position (above target). |
+| Goal   | 14                 | 1   | Desired gripper state. |
+| Goal   | 15–17              | 3   | Desired hammer position (at target when task done). |
+| Goal   | 18–20              | 3   | Desired nail position (nail target / goal site). |
 
-- **State dim:** 7, **goal dim:** 7, **full obs:** 14  
-- **Success:** Nail driven in (e.g. joint position > 0.09 in V3).  
-- **Goal refers to:** Nail’s target position.
+- **State dim:** 10 (hand, gripper, hammer, nail), **goal dim:** 10 (same semantics as state), **full obs (after padding):** 22  
+- **Success:** Nail driven in (e.g. joint > 0.09 in base env); wrapper uses nail within 0.05 of goal.  
+- **Goal refers to:** Desired state at success: hand above target, gripper open, hammer and nail at target.  
+- **Implementation:** `env_utils.SawyerHammer._get_obs()` builds goal as `[hand_above, gripper, _goal, _goal]` so goal mirrors state; no truncation.
 
 ---
 
@@ -191,21 +197,22 @@ The following ten tasks are the CKA-RL sequence (task names only; see *Metaworld
 
 ### 2.5 stick-pull-v2
 
-*Source: `sawyer_stick_pull_v3.py` — `_get_pos_objects()` returns stick (3) + insertion/handle (3). obs[4:7] = stick, obs[11:14] = handle. Success: handle to target and stick inserted (norm ≤ 0.12).*
+*Source: `sawyer_stick_pull_v3.py` — `_get_pos_objects()` returns stick (3) + insertion/handle (3). Success: handle to target and stick inserted (norm ≤ 0.12). Goal mirrors state index-by-index.*
 
-| Role   | Indices | Dim | Semantic meaning |
-|--------|---------|-----|------------------|
-| State  | 0–2     | 3   | End-effector position. |
-| State  | 3       | 1   | Gripper distance apart. |
-| State  | 4–6     | 3   | Stick position (x, y, z). |
-| State  | 7–9     | 3   | Handle/insertion position (x, y, z) — object being pulled. |
-| Goal   | 10–12   | 3   | Desired hand position (above target). |
-| Goal   | 13      | 1   | Desired gripper state. |
-| Goal   | 14–16   | 3   | Handle target position. |
+| Role   | Indices (full obs) | Dim | Semantic meaning |
+|--------|--------------------|-----|------------------|
+| State  | 0–2                | 3   | End-effector position. |
+| State  | 3                  | 1   | Gripper distance apart. |
+| State  | 4–6                | 3   | Stick position (x, y, z). |
+| State  | 7–9                | 3   | Handle/insertion position (x, y, z) — object being pulled. |
+| Goal   | 11–13              | 3   | Desired hand position (above target). |
+| Goal   | 14                 | 1   | Desired gripper state. |
+| Goal   | 15–17              | 3   | Desired stick position (at target when task done). |
+| Goal   | 18–20              | 3   | Desired handle position (handle target). |
 
-- **State dim:** 10, **goal dim:** 7, **full obs:** 17  
+- **State dim:** 10, **goal dim:** 10 (same semantics), **full obs (after padding):** 22  
 - **Success:** Handle within 0.12 of target and stick inserted.  
-- **Goal refers to:** Handle/insertion target position (object pulled to goal).
+- **Goal refers to:** Desired state at success: hand above target, gripper open, stick and handle at target.
 
 ---
 
@@ -304,34 +311,34 @@ The following ten tasks are the CKA-RL sequence (task names only; see *Metaworld
 
 ---
 
-## Part 3: Summary for unified space (Option A / Option B)
+## Part 3: Unified space (Option A implemented)
 
-### Dimension summary
+### Raw dimension summary (before padding)
 
-| Task / env           | State dim | Goal dim | Full obs |
-|----------------------|-----------|----------|----------|
-| point_Spiral11x11    | 2         | 2        | 4        |
-| sawyer_bin           | 7         | 7        | 14       |
-| sawyer_box           | 11        | 11       | 22       |
-| sawyer_peg           | 7         | 7        | 14       |
-| sawyer_push_back     | 7         | 7        | 14       |
-| hammer-v2            | 7         | 7        | 14       |
-| push-wall-v2         | 7         | 7        | 14       |
-| faucet-close-v2      | 7         | 7        | 14       |
-| push-back-v2         | 7         | 7        | 14       |
-| stick-pull-v2        | 10        | 7        | 17       |
-| handle-press-side-v2 | 7         | 7        | 14       |
-| push-v2              | 7         | 7        | 14       |
-| shelf-place-v2       | 7         | 7        | 14       |
-| window-close-v2      | 7         | 7        | 14       |
-| peg-unplug-side-v2   | 7         | 7        | 14       |
+| Task / env           | Raw state dim | Raw goal dim | After padding (full obs) |
+|----------------------|---------------|--------------|---------------------------|
+| point_Spiral11x11    | 2             | 2            | 4 (not padded)            |
+| sawyer_bin           | 7             | 7            | 22                        |
+| sawyer_box           | 11            | 11           | 22                        |
+| sawyer_peg           | 7             | 7            | 22                        |
+| sawyer_push_back     | 7             | 7            | 22                        |
+| sawyer_hammer        | 10            | 7            | 22                        |
+| sawyer_push_wall     | 7             | 7            | 22                        |
+| sawyer_faucet_close  | 7             | 7            | 22                        |
+| sawyer_stick_pull    | 10            | 7            | 22                        |
+| sawyer_handle_press_side | 7         | 7            | 22                        |
+| sawyer_push          | 7             | 7            | 22                        |
+| sawyer_shelf_place   | 7             | 7            | 22                        |
+| sawyer_window_close | 7             | 7            | 22                        |
+| sawyer_peg_unplug_side | 7           | 7            | 22                        |
 
-### Option A: Pad to max dimension
+### Option A: Implemented in `env_utils.py`
 
-- **state_dim = 11**, **goal_dim = 11** for all Sawyer tasks (sawyer_box is already 11).
-- For 7-dim tasks: pad state and goal with zeros at indices 7–10 so indices 0–6 keep the same meaning.
-- For stick-pull-v2 (state 10): pad state with one zero at index 10 to reach 11.
-- point_* stays 2+2 or is padded if a single global size is desired.
+- **STATE_DIM_UNIFIED = 11**, **GOAL_DIM_UNIFIED = 11**, **FULL_OBS_DIM = 22** (defined in `env_utils.py`).
+- **Padding:** `_pad_to_len(arr, length)` appends zeros so that state and goal reach 11 each. Semantic indices 0–6 (and for stick_pull 0–9) are unchanged; padding occupies indices 7–10 (state) and 7–10 (goal) for 7-dim tasks, and state index 10 only for stick_pull.
+- **Observation layout:** `observation[0:11]` = state (padded), `observation[11:22]` = goal (padded). So for 7-dim tasks: state semantics in 0–6, zeros in 7–10; goal semantics in 11–17, zeros in 18–21.
+- **`load(env_name)`** returns `obs_dim = STATE_DIM_UNIFIED` (11) for all `sawyer_*` envs so that a single policy/critic can be used across the 10 continual tasks.
+- **point_*** envs are unchanged (no padding); they are not part of the continual Sawyer 10-task set.
 
 ### Option B: Common subset
 
@@ -339,14 +346,38 @@ The following ten tasks are the CKA-RL sequence (task names only; see *Metaworld
 - Tasks with extra state (e.g. stick-pull stick+handle, sawyer_box quat) either drop extras or place them in fixed positions with a mask.
 - **Goal:** 0–2 hand above target, 3 gripper, 4–6 target position (same for all 7-dim goal tasks).
 
-### Index alignment across 7-dim Sawyer tasks
+### Unified observation index reference (after padding)
 
-For tasks with **state dim 7, goal dim 7**:
+For **all Sawyer tasks** the observation has length 22: `obs[0:11]` = state, `obs[11:22]` = goal.
 
-| Index | State meaning      | Goal meaning         |
-|-------|--------------------|----------------------|
-| 0–2   | Hand (x, y, z)     | Hand above target    |
-| 3     | Gripper            | Gripper (e.g. open)  |
-| 4–6   | Main object (x,y,z)| Target (x, y, z)     |
+| Unified index | State (obs[0:11])   | Goal (obs[11:22])    | Notes |
+|---------------|---------------------|----------------------|-------|
+| 0–2           | Hand (x, y, z)      | Desired hand (above target) | Goal mirrors state: same index = same quantity. |
+| 3             | Gripper             | Desired gripper (e.g. open)  | Valid for all. |
+| 4–6           | Main/first object   | Desired main/first object   | Hammer: hammer. Stick_pull: stick. 7-dim: single object. |
+| 7–10          | Second object or padding | Desired second object or padding | Hammer: nail (7–9), pad (10). Stick_pull: handle (7–9), pad (10). Box: lid_quat (7–10). 7-dim tasks: padding (zeros). |
 
-This table is the reference for keeping state and goal semantics consistent when implementing wrappers or applying Option A/B.
+**Two-object tasks (raw state and goal 10 dims):** **Hammer:** state 4–6 = hammer pos, 7–9 = nail pos; goal 15–17 = desired hammer pos, 18–20 = desired nail pos (goal mirrors state). **Stick_pull:** state 4–6 = stick pos, 7–9 = handle pos; goal 15–17 = desired stick pos, 18–20 = desired handle pos (goal mirrors state). In both, state index 10 and goal index 21 are padding.
+
+This table is the reference for keeping state and goal semantics consistent when using the unified observation in continual RL.
+
+---
+
+## Part 4: Verification vs Metaworld-2.0.0 (no position truncation)
+
+For each continual task (excluding bin, peg, box), the following table confirms that **all position dimensions** from `_get_pos_objects()` in Metaworld-2.0.0 are used in our wrapper. No position information is truncated.
+
+| Task (env_utils name) | Metaworld-2.0.0 source file | `_get_pos_objects()` returns | Our wrapper state uses | Truncation? |
+|-----------------------|-----------------------------|-------------------------------|-------------------------|-------------|
+| sawyer_push_back      | sawyer_push_back_v2.py      | 3 (objGeom xpos)              | obj_pos (3)             | No          |
+| sawyer_hammer         | sawyer_hammer_v2.py         | 6 (hammer 3 + nail_link 3)    | hammer_pos (3) + nail_pos (3) | No   |
+| sawyer_push_wall      | sawyer_push_wall_v2.py      | 3 (objGeom xpos)              | obj_pos (3)             | No          |
+| sawyer_faucet_close   | sawyer_faucet_close_v2.py   | 3 (handleStartClose + offset) | handle_pos (3)          | No          |
+| sawyer_stick_pull     | sawyer_stick_pull_v2.py     | 6 (stick body + insertion site) | stick_pos (3) + handle_pos (3) | No  |
+| sawyer_handle_press_side | sawyer_handle_press_side_v2.py | 3 (handleStart site)       | handle_pos (3)          | No          |
+| sawyer_push           | sawyer_push_v2.py           | 3 (obj body COM)              | obj_pos (3)             | No          |
+| sawyer_shelf_place    | sawyer_shelf_place_v2.py    | 3 (obj body COM)              | obj_pos (3)             | No          |
+| sawyer_window_close   | sawyer_window_close_v2.py   | 3 (handleCloseStart site)     | handle_pos (3)          | No          |
+| sawyer_peg_unplug_side| sawyer_peg_unplug_side_v2.py| 3 (pegEnd site)               | peg_pos (3)             | No          |
+
+**Note:** Our wrappers use only **position** from the base env (from `_get_pos_objects()`). The base env also provides `_get_quat_objects()` (orientation) for some tasks; we do not include quaternions in state/goal, so orientation is not represented. Success criteria in the base env are position-based (e.g. object-to-target distance); our goal is the target position, so goal representation is complete for the task.

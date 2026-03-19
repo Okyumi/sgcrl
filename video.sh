@@ -67,14 +67,7 @@ CUDNN_LIB=$(python -c "import nvidia.cudnn, os; print(os.path.join(os.path.dirna
 # Run from repo root
 cd /scratch/yd2247/sgcrl
 
-# Short debug run (default env sawyer_bin, alg contrastive_cpc)
-# python lp_contrastive.py \
-#   --lp_launch_type=local_mt \
-#   --env=sawyer_push_back \
-#   --alg=contrastive_cpc \
-#   --num_steps=50_000 \
-#   --seed=42 \
-#   --use_wandb
+
 
 # Replication run (paper settings: 8M steps, fixed goals, unique log dir per run).
 # For 8M steps consider increasing SBATCH --time (e.g. 24:00:00 or 48:00:00) and --mem (e.g. 32GB).
@@ -88,52 +81,18 @@ cd /scratch/yd2247/sgcrl
 #   --use_wandb \
 #   --log_dir_path=logs/
 
-# python rollout_training_videos.py \
-#   --run_dir logs/contrastive_cpc_sawyer_push_back_2/54818ffa-1317-11f1-998f-1423f2e9bd40 \
-#   --env sawyer_push_back \
-#   --alg contrastive_cpc \
-#   --seed 2 \
-#   --num_episodes 1 \
-#   --output_dir training_videos \
-#   --all_checkpoints
 
 
-# python rollout_training_videos.py \
-#   --run_dir logs/contrastive_cpc_sawyer_push_back_1/4c2830fc-1565-11f1-8349-b07b25d4aac2 \
-#   --env sawyer_push_back \
-#   --alg contrastive_cpc \
-#   --seed 1 \
-#   --num_episodes 1 \
-#   --output_dir training_videos \
-#   --all_checkpoints
-
-# python rollout_training_videos.py \
-#   --run_dir logs/contrastive_cpc_sawyer_stick_pull_2/7ea2f9d2-134d-11f1-8cb1-b07b25d4a2f8 \
-#   --env sawyer_stick_pull \
-#   --alg contrastive_cpc \
-#   --seed 2 \
-#   --num_episodes 3 \
-#   --output_dir training_videos \
-#   --all_checkpoints
-
-
-# python rollout_training_videos.py \
-#   --run_dir logs/contrastive_cpc_sawyer_handle_press_side_2/7eaa92aa-134d-11f1-8d47-b07b25d4a2f8 \
-#   --env sawyer_handle_press_side \
-#   --alg contrastive_cpc \
-#   --seed 2 \
-#   --num_episodes 3 \
-#   --output_dir training_videos \
-#   --all_checkpoints
 
 python rollout_training_videos.py \
-  --run_dir logs/contrastive_cpc_sawyer_push_2/908ee48a-134d-11f1-a62c-ec2a7232f864 \
-  --env sawyer_push \
+  --run_dir logs/contrastive_cpc_sawyer_handle_press_side_2/7eaa92aa-134d-11f1-8d47-b07b25d4a2f8 \
+  --env sawyer_handle_press_side \
   --alg contrastive_cpc \
   --seed 2 \
   --num_episodes 3 \
   --output_dir training_videos \
   --all_checkpoints
+
 
 
 

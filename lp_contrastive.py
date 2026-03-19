@@ -7,15 +7,32 @@ Run using multi-threading
 
 """
 import functools
+import os
 from typing import Any, Dict
 
 from absl import app
 from absl import flags
 import contrastive
+
+# Ensure Reverb (and other Launchpad) ports are unique per SLURM job to avoid
+# "Address already in use" when multiple jobs run on the same node.
+_slurm_job_id = os.environ.get('SLURM_JOB_ID')
+if _slurm_job_id:
+  import portpicker
+  _port_base = 40000 + (int(_slurm_job_id) % 20000)
+  _port_counter = [0]
+
+  def _job_unique_port():
+    port = _port_base + _port_counter[0]
+    _port_counter[0] += 1
+    return port
+
+  _orig_pick = portpicker.pick_unused_port
+  portpicker.pick_unused_port = lambda: _job_unique_port()
+
 from contrastive import utils as contrastive_utils
 import launchpad as lp
 import numpy as np
-import os
 
 FLAGS = flags.FLAGS
 

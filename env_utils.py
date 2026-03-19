@@ -1,4 +1,12 @@
-"""Utility for loading the goal-conditioned environments."""
+"""Utility for loading the goal-conditioned environments.
+
+Continual RL (10-task Meta-World): All Sawyer task wrappers expose a unified
+observation space so that state_dim and goal_dim are the same across tasks.
+Smaller envs are padded with zeros to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED.
+Goal has the exact same semantic meaning as state: goal[i] is the desired
+value for the quantity at state[i] (same index = same quantity). See
+docs/STATE_AND_GOAL_INDEX_SEMANTICS.md for index semantics and padding.
+"""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -11,6 +19,28 @@ import numpy as np
 import point_env
 
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
+
+# -----------------------------------------------------------------------------
+# Unified observation dimensions for continual RL (Option A: pad to max).
+# All 10 continual Sawyer tasks (sawyer_box excluded per user) return
+# observation = [state_padded, goal_padded] with these sizes.
+# STATE_DIM_UNIFIED = 11, GOAL_DIM_UNIFIED = 11 (max over tasks; sawyer_box
+# would be 11/11; we use 11 for all so a single policy/critic works).
+# -----------------------------------------------------------------------------
+STATE_DIM_UNIFIED = 11
+GOAL_DIM_UNIFIED = 11
+FULL_OBS_DIM = STATE_DIM_UNIFIED + GOAL_DIM_UNIFIED  # 22
+
+
+def _pad_to_len(arr, length, pad_value=0.0):
+  """Pad a 1D array to `length` with `pad_value`. No-op if len(arr) >= length."""
+  n = arr.size
+  if n >= length:
+    return arr.astype(np.float32) if arr.dtype != np.float32 else arr
+  return np.concatenate([
+      arr.astype(np.float32) if arr.dtype != np.float32 else arr,
+      np.full(length - n, pad_value, dtype=np.float32),
+  ])
 
 
 def euler2quat(euler):
@@ -102,7 +132,12 @@ def load(env_name, fixed_start_end=None):
   # Disable type checking in line below because different environments have
   # different kwargs, which pytype doesn't reason about.
   gym_env = CLASS(**kwargs)  # pytype: disable=wrong-keyword-args
-  obs_dim = gym_env.observation_space.shape[0] // 2
+  # For continual RL, all Sawyer wrappers use unified obs space (state + goal
+  # padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED). obs_dim = state size.
+  if env_name.startswith('sawyer_'):
+    obs_dim = STATE_DIM_UNIFIED
+  else:
+    obs_dim = gym_env.observation_space.shape[0] // 2
   return gym_env, obs_dim, max_episode_steps
 
 
@@ -152,6 +187,7 @@ class SawyerBin(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), block_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), block_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -159,18 +195,19 @@ class SawyerBin(
     )
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0., 1.)
-    obs = np.concatenate((pos_hand, [gripper_distance_apart],
-                          self._get_pos_objects()))
+    state = np.concatenate((pos_hand, [gripper_distance_apart],
+                            self._get_pos_objects()))
     goal = np.concatenate([self._goal + np.array([0.0, 0.0, 0.03]),
                            [0.4], self._goal])
-
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -224,6 +261,7 @@ class SawyerBox(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:11]: hand(0-2), gripper(3), lid_pos(4-6), lid_quat(7-10). Goal [11:22]: same layout.
+    # Box already has state_dim=11, goal_dim=11; padding is no-op (unified dims match).
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -233,17 +271,19 @@ class SawyerBox(
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0., 1.)
     obj_pos = self._get_pos_objects()
     obj_quat = self._get_quat_objects()
-    obs = np.concatenate((pos_hand, [gripper_distance_apart],
-                          obj_pos, obj_quat))
+    state = np.concatenate((pos_hand, [gripper_distance_apart],
+                            obj_pos, obj_quat))
     goal = np.concatenate([self._goal_pos + np.array([0.0, 0.0, 0.03]),
                            [0.4], self._goal_pos, self._goal_quat])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 11, -np.inf),
-        high=np.full(2 * 11, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 class SawyerPeg(
@@ -290,6 +330,7 @@ class SawyerPeg(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), peg_head_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), peg_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -298,16 +339,18 @@ class SawyerPeg(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0., 1.)
     obj_pos_head = self._get_site_pos("pegHead")
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos_head))
+    state = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos_head))
     goal = np.concatenate([self._goal_pos + np.array([0.13, 0.0, 0.03]),
                            [0.4], self._goal_pos])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -354,6 +397,7 @@ class SawyerPushBack(
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), object_pos(4-6).
     # Goal  [7:14]: hand_above_target(7-9), gripper(10), object_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -362,24 +406,25 @@ class SawyerPushBack(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     obj_pos = self._get_pos_objects()
-    obs = np.concatenate((
+    state = np.concatenate((
         pos_hand,
         [gripper_distance_apart],
         obj_pos,
     ))
-    # Goal: same layout as state — hand above target, gripper open, object at target.
     goal = np.concatenate([
         self._goal + np.array([0.0, 0.0, 0.03]),
         [0.4],
         self._goal,
     ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -387,9 +432,10 @@ class SawyerHammer(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['hammer-v2']):
   """Wrapper for Hammer: drive nail to target position.
 
-  State = hand (3), gripper (1), nail position (3) = 7 dims.
-  Goal = hand above target (3), gripper (1), nail target (3). Success when
-  nail within 0.05 of goal (or joint-based in raw env).
+  Meta-World _get_pos_objects() returns hammer (3) + nail (3) = 6 dims. We include
+  both so state is not truncated. State = hand (3), gripper (1), hammer (3),
+  nail (3) = 10 dims. Goal = hand above target (3), gripper (1), nail target (3) = 7.
+  Success when nail within 0.05 of goal (or joint-based in raw env).
   """
 
   def __init__(self, fixed_start_end=None):
@@ -423,7 +469,9 @@ class SawyerHammer(
 
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
-    # State [0:7]: hand(0-2), gripper(3), nail_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), nail_target(11-13).
+    # State [0:10]: hand(0-2), gripper(3), hammer_pos(4-6), nail_pos(7-9).
+    # Goal [0:10]: desired_hand(0-2), desired_gripper(3), desired_hammer_pos(4-6), desired_nail_pos(7-9); then padded to GOAL_DIM_UNIFIED.
+    # _get_pos_objects() returns hammer (3) + nail (3); both included so state is not truncated.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -431,21 +479,22 @@ class SawyerHammer(
     )
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
-    pos_objects = self._get_pos_objects()
+    pos_objects = self._get_pos_objects()  # hammer (3) + nail (3)
+    hammer_pos = pos_objects[:3]
     nail_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], nail_pos))
-    goal = np.concatenate([
-        self._goal + np.array([0.0, 0.0, 0.03]),
-        [0.4],
-        self._goal,
-    ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state = np.concatenate((pos_hand, [gripper_distance_apart], hammer_pos, nail_pos))
+    # Goal mirrors state semantics: desired_hand, desired_gripper, desired_hammer_pos, desired_nail_pos.
+    hand_above = self._goal + np.array([0.0, 0.0, 0.03])
+    goal = np.concatenate([hand_above, [0.4], self._goal, self._goal])  # 10 dims
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -488,6 +537,7 @@ class SawyerPushWall(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), object_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), object_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -496,19 +546,21 @@ class SawyerPushWall(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     obj_pos = self._get_pos_objects()
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos))
+    state = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos))
     goal = np.concatenate([
         self._goal + np.array([0.0, 0.0, 0.03]),
         [0.4],
         self._goal,
     ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -551,6 +603,7 @@ class SawyerFaucetClose(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), handle_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), handle_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -559,19 +612,21 @@ class SawyerFaucetClose(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     handle_pos = self._get_pos_objects()
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
+    state = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
     goal = np.concatenate([
         self._goal + np.array([0.0, 0.0, 0.03]),
         [0.4],
         self._goal,
     ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -579,9 +634,10 @@ class SawyerStickPull(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['stick-pull-v2']):
   """Wrapper for StickPull: pull object (handle/insertion) to target using stick.
 
-  State = hand (3), gripper (1), handle/insertion position (3) = 7 dims.
-  _get_pos_objects() returns stick (3) + handle (3); we use handle for state.
-  Goal = same structure. Success when handle within 0.05 of goal.
+  State = hand (3), gripper (1), stick position (3), handle/insertion (3) = 10 dims.
+  _get_pos_objects() returns stick (3) + handle (3); both included so state is not truncated.
+  Goal = hand_above (3), gripper (1), handle target (3) = 7 dims. Success when handle within 0.05 of goal.
+  Padding: state 10->STATE_DIM_UNIFIED, goal 7->GOAL_DIM_UNIFIED for continual RL.
   """
 
   def __init__(self, fixed_start_end=None):
@@ -615,7 +671,8 @@ class SawyerStickPull(
 
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
-    # State [0:7]: hand(0-2), gripper(3), handle_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), handle_target(11-13).
+    # State [0:10]: hand(0-2), gripper(3), stick_pos(4-6), handle_pos(7-9).
+    # Goal [0:10]: desired_hand(0-2), desired_gripper(3), desired_stick_pos(4-6), desired_handle_pos(7-9); then padded to GOAL_DIM_UNIFIED.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -623,21 +680,22 @@ class SawyerStickPull(
     )
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
-    pos_objects = self._get_pos_objects()
+    pos_objects = self._get_pos_objects()  # stick (3) + handle/insertion (3)
+    stick_pos = pos_objects[:3]
     handle_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
-    goal = np.concatenate([
-        self._goal + np.array([0.0, 0.0, 0.03]),
-        [0.4],
-        self._goal,
-    ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state = np.concatenate((pos_hand, [gripper_distance_apart], stick_pos, handle_pos))
+    # Goal mirrors state semantics: desired_hand, desired_gripper, desired_stick_pos, desired_handle_pos.
+    hand_above = self._goal + np.array([0.0, 0.0, 0.03])
+    goal = np.concatenate([hand_above, [0.4], self._goal, self._goal])  # 10 dims
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -680,6 +738,7 @@ class SawyerHandlePressSide(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), handle_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), handle_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -688,19 +747,21 @@ class SawyerHandlePressSide(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     handle_pos = self._get_pos_objects()
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
+    state = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
     goal = np.concatenate([
         self._goal + np.array([0.0, 0.0, 0.03]),
         [0.4],
         self._goal,
     ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -743,6 +804,7 @@ class SawyerPush(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), object_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), object_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -751,19 +813,21 @@ class SawyerPush(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     obj_pos = self._get_pos_objects()
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos))
+    state = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos))
     goal = np.concatenate([
         self._goal + np.array([0.0, 0.0, 0.03]),
         [0.4],
         self._goal,
     ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -806,6 +870,7 @@ class SawyerShelfPlace(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), object_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), object_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -814,19 +879,21 @@ class SawyerShelfPlace(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     obj_pos = self._get_pos_objects()
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos))
+    state = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos))
     goal = np.concatenate([
         self._goal + np.array([0.0, 0.0, 0.03]),
         [0.4],
         self._goal,
     ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -870,6 +937,7 @@ class SawyerWindowClose(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), handle_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), handle_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -878,19 +946,21 @@ class SawyerWindowClose(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     handle_pos = self._get_pos_objects()
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
+    state = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
     goal = np.concatenate([
         self._goal + np.array([0.0, 0.0, 0.03]),
         [0.4],
         self._goal,
     ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)
 
 
@@ -934,6 +1004,7 @@ class SawyerPegUnplugSide(
   def _get_obs(self):
     # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), peg_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), peg_target(11-13).
+    # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -942,17 +1013,19 @@ class SawyerPegUnplugSide(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     peg_pos = self._get_pos_objects()
-    obs = np.concatenate((pos_hand, [gripper_distance_apart], peg_pos))
+    state = np.concatenate((pos_hand, [gripper_distance_apart], peg_pos))
     goal = np.concatenate([
         self._goal + np.array([0.0, 0.0, 0.03]),
         [0.4],
         self._goal,
     ])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
+    goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
+    return np.concatenate([state_padded, goal_padded]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 7, -np.inf),
-        high=np.full(2 * 7, np.inf),
+        low=np.full(FULL_OBS_DIM, -np.inf),
+        high=np.full(FULL_OBS_DIM, np.inf),
         dtype=np.float32)

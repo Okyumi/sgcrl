@@ -80,10 +80,10 @@ cd /scratch/yd2247/sgcrl
 # For 8M steps consider increasing SBATCH --time (e.g. 24:00:00 or 48:00:00) and --mem (e.g. 32GB).
 python lp_contrastive.py \
   --lp_launch_type=local_mt \
-  --env=sawyer_stick_pull \
+  --env=sawyer_window_close \
   --alg=contrastive_cpc \
   --num_steps=8_000_000 \
-  --seed=1 \
+  --seed=13 \
   --add_uid \
   --use_wandb \
   --log_dir_path=logs/
