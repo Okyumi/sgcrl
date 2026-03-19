@@ -62,6 +62,12 @@ from default import make_default_logger
 
 import env_utils
 
+# Conditional wandb import (only needed when --use_wandb is set)
+try:
+  import wandb
+except ImportError:
+  wandb = None
+
 # ---- flags ----------------------------------------------------------------
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('seed', 42, 'Random seed.')
@@ -337,10 +343,6 @@ def train_single_task(
   print(f'  Prefill complete.', flush=True)
 
   # Training
-  # NOTE: env_loop.run(num_episodes=1) runs exactly one full episode and
-  # returns the actual number of environment steps taken.  Using
-  # num_steps=1 would also run a full episode (Acme always completes the
-  # current episode), but the intent is clearer with num_episodes.
   env_steps_done = 0
   train_steps = max_steps - config.min_replay_size
   log_every_steps = 10000  # print progress every N env steps
@@ -476,6 +478,18 @@ def main(_):
 
     config = contrastive.ContrastiveConfig(**params)
 
+    # Initialise W&B run per task (matching lp_continual_contrastive.py).
+    # WandbLogger in default.py assumes wandb.init() has already been called;
+    # without this call all wandb.log() silently fail.
+    if FLAGS.use_wandb and wandb is not None:
+      wandb.init(
+          project='continual_gcrl',
+          config={**params, 'task_id': task_id, 'env_name': env_name,
+                  'num_tasks': num_tasks, 'k_max': continual_cfg.k_max},
+          name=f'task{task_id}_{env_name}_s{seed}',
+          reinit=True,
+      )
+
     (theta_base, prev_q, prev_tgt_q, prev_q_opt, pool) = train_single_task(
         task_id=task_id,
         env_name=env_name,
@@ -499,6 +513,10 @@ def main(_):
         'task_id': task_id,
         'env_name': env_name,
     })
+
+    # Close the W&B run for this task before starting the next one
+    if FLAGS.use_wandb and wandb is not None:
+      wandb.finish()
 
   print(f'\nAll {num_tasks} tasks complete.', flush=True)
 
