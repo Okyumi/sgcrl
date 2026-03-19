@@ -240,23 +240,48 @@ After the base phase, the pool is initialised with a single zero vector (per pse
 
 ### Training loop
 
-The training loop within each task uses `env_loop.run(num_episodes=1)` to run one full episode per iteration. Acme's `EnvironmentLoop.run()` returns the actual number of environment steps taken, which we track in `env_steps_done` to correctly terminate after the target number of steps.
+The training loop within each task uses `env_loop.run_episode()` to run one full episode per iteration. We use `run_episode()` instead of `run(num_episodes=1)` because the installed Acme version's `EnvironmentLoop.run()` returns `None` (no return statement), while `run_episode()` returns a metrics dict containing `episode_length`. After each episode, the result is written to the actor logger with `env_loop._logger.write(result)` to replicate the logging that `run()` would normally do.
 
-Each loop iteration: one episode (~150 env steps) followed by one `learner.step()` (64 SGD updates internally).
+Each loop iteration: one episode (~150 env steps) followed by one `learner.step()` (64 SGD updates via `jax.lax.scan` internally).
 
-The first `learner.step()` triggers JAX JIT compilation of the full update function (critic loss + actor loss + gradient steps). This can take 10-30 minutes depending on the hardware. The script prints explicit markers so you know when compilation starts and finishes.
+The first `learner.step()` triggers JAX JIT compilation of the full update function (critic loss + actor loss + gradient steps). This typically takes ~1-2 minutes on GPU. The script prints explicit markers so you know when compilation starts and finishes.
 
 ### Logging
 
-Two logger streams run during training:
+Three logging mechanisms run during training:
 
-- **Actor logger** (label `[Actor]`): writes after each episode via Acme's `EnvironmentLoop`. Throttled by `TimeFilter(time_delta=10.0)` to one entry every 10 seconds. Logs episode length, return, success rate, distances.
+- **Actor logger** (label `[Actor]`): writes after each episode via the explicit `env_loop._logger.write(result)` call following `run_episode()`. Throttled by `TimeFilter(time_delta=10.0)` to one entry every 10 seconds. Logs episode length, return, success rate, distances.
 - **Learner logger** (label `[Learner]`): writes after each `learner.step()`. Also throttled to once per 10 seconds. Logs critic loss, actor loss, accuracy, entropy.
+- **W&B logging**: when `--use_wandb` is set, `wandb.init()` is called per task in `main()` (with `reinit=True`), and `wandb.finish()` is called after each task completes. The `WandbLogger` instances in `default.py` assume `wandb.init()` has already been called — without it, all `wandb.log()` calls silently fail because `WandbLogger.write()` wraps errors in a bare `try/except pass`.
 
-Both loggers write to terminal (via `logging.info`) and CSV files under `log_dir/`. The `PYTHONUNBUFFERED=1` environment variable in `draft_3.sh` ensures stdout is flushed immediately to the SLURM `.out` file.
+Both actor and learner loggers also write to CSV files under `log_dir/`. The `PYTHONUNBUFFERED=1` environment variable in `draft_3.sh` ensures stdout is flushed immediately to the SLURM `.out` file.
 
 Stdout progress lines (e.g. `Task 0 [sawyer_hammer]: 50000/990000 env steps (334 episodes)`) are printed every 10,000 env steps independently of the TimeFilter loggers.
 
 ### Replay
 
 Per-task replay: each task gets a fresh Reverb server and buffer. No data is shared across tasks.
+
+---
+
+## Bug Fixes History
+
+### 1. `env_loop.run()` returns `None` (commit `4059eb8`)
+
+The installed Acme version's `EnvironmentLoop.run()` has no `return` statement (the GitHub master source has `return step_count`, but the pip-installed version does not). The original code `episode_steps = env_loop.run(num_episodes=1)` crashed with `TypeError: unsupported operand type(s) for +=: 'int' and 'NoneType'`.
+
+Fix: use `env_loop.run_episode()` which returns a metrics dict, then read `result['episode_length']`. Also manually call `env_loop._logger.write(result)` to replicate the logging that `run()` does internally.
+
+### 2. Missing `wandb.init()` (commit `1354c24`)
+
+`run_continual_contrastive.py` created `WandbLogger` instances via `make_default_logger(use_wandb=True)` but never called `wandb.init()`. Since `WandbLogger.write()` catches all exceptions with a bare `try/except pass`, all W&B logging silently failed.
+
+Fix: call `wandb.init(project='continual_gcrl', ..., reinit=True)` per task in `main()` before calling `train_single_task()`, and `wandb.finish()` after each task. Mirrors the pattern in `lp_continual_contrastive.py`.
+
+### 3. `DuplicateFlagError` for `--log_dir` (commit `4059eb8`)
+
+`run_continual_contrastive.py` defined `flags.DEFINE_string('log_dir', ...)` but Abseil already registers `--log_dir` internally. Removed the duplicate definition; `FLAGS.log_dir` now comes from Abseil's built-in registration.
+
+### 4. `lax.scan` refactor (commit `7a39200`)
+
+Refactored `ContinualContrastiveLearner.step()` to use `jax.lax.scan` for the inner SGD loop instead of Python for-loops, matching the original SGCRL learner pattern. The `_scan_update` wrapper reshapes transitions `[B*N, ...] → [N, B, ...]` and scans `update_step` over mini-batches while broadcasting the pool contribution (which is param-shaped, not batch-indexed).
