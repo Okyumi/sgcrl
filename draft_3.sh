@@ -60,6 +60,9 @@ export PYTHONNOUSERSITE=1
 export TF_CPP_MIN_LOG_LEVEL=2
 export TF_CPP_MIN_VLOG_LEVEL=3
 
+# Force unbuffered Python output so logs appear immediately in SLURM .out
+export PYTHONUNBUFFERED=1
+
 # Scratch-based caches
 export XDG_CACHE_HOME=/scratch/yd2247/.cache
 export PIP_CACHE_DIR=/scratch/yd2247/.cache/pip

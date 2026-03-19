@@ -24,6 +24,7 @@ For a quick test (2 tasks, 10k steps each):
 import functools
 import os
 import pickle
+import sys
 import time
 from typing import Optional
 
@@ -108,7 +109,7 @@ def save_ckpt(ckpt_dir, task_id, seed, data):
       data)
   with open(path, 'wb') as f:
     pickle.dump(data_np, f)
-  print(f'  [ckpt] Saved → {path}')
+  print(f'  [ckpt] Saved → {path}', flush=True)
 
 
 def load_ckpt(ckpt_dir, task_id, seed):
@@ -119,7 +120,7 @@ def load_ckpt(ckpt_dir, task_id, seed):
   data_jax = jax.tree_map(
       lambda x: jnp.array(x) if isinstance(x, np.ndarray) else x,
       data)
-  print(f'  [ckpt] Loaded ← {path}')
+  print(f'  [ckpt] Loaded ← {path}', flush=True)
   return data_jax
 
 
@@ -331,28 +332,44 @@ def train_single_task(
       logger=actor_logger, observers=observers)
 
   # Prefill replay
-  print(f'  Prefilling replay ({config.min_replay_size} steps)...')
+  print(f'  Prefilling replay ({config.min_replay_size} steps)...', flush=True)
   env_loop.run(num_steps=config.min_replay_size)
+  print(f'  Prefill complete.', flush=True)
 
   # Training
-  steps_done = 0
+  # NOTE: env_loop.run(num_episodes=1) runs exactly one full episode and
+  # returns the actual number of environment steps taken.  Using
+  # num_steps=1 would also run a full episode (Acme always completes the
+  # current episode), but the intent is clearer with num_episodes.
+  env_steps_done = 0
   train_steps = max_steps - config.min_replay_size
-  print(f'  Training for {train_steps} steps...')
+  log_every_steps = 10000  # print progress every N env steps
+  next_log_at = log_every_steps
+  episodes_done = 0
+  print(f'  Training for {train_steps} env steps...', flush=True)
 
-  learner_steps_per_actor_step = 1  # simplified ratio
-  while steps_done < train_steps:
-    # Actor step
-    env_loop.run(num_steps=1)
-    steps_done += 1
+  while env_steps_done < train_steps:
+    # Actor step: run one full episode and count actual env steps
+    episode_steps = env_loop.run(num_episodes=1)
+    env_steps_done += episode_steps
+    episodes_done += 1
 
-    # Learner step
+    # Learner step (first call triggers JAX JIT compilation, may be slow)
+    if episodes_done == 1:
+      print(f'  First learner step (includes JIT compilation)...', flush=True)
     learner.step()
+    if episodes_done == 1:
+      print(f'  JIT compilation done.', flush=True)
 
-    # Periodic logging
-    if steps_done % 10000 == 0:
-      print(f'  Task {task_id} [{env_name}]: {steps_done}/{train_steps} steps')
+    # Periodic progress logging (to stdout, independent of TimeFilter)
+    if env_steps_done >= next_log_at:
+      print(f'  Task {task_id} [{env_name}]: '
+            f'{env_steps_done}/{train_steps} env steps '
+            f'({episodes_done} episodes)', flush=True)
+      next_log_at = env_steps_done + log_every_steps
 
-  print(f'  Task {task_id} training complete.')
+  print(f'  Task {task_id} training complete '
+        f'({env_steps_done} env steps, {episodes_done} episodes).', flush=True)
 
   # ---- extract state for next task ---------------------------------------
   if task_id == 0:
@@ -445,12 +462,12 @@ def main(_):
     env_name = CONTINUAL_TASK_SEQUENCE[task_id]
     params['env_name'] = env_name
 
-    print(f'\n{"="*60}')
-    print(f'Task {task_id}/{num_tasks - 1}: {env_name}')
+    print(f'\n{"="*60}', flush=True)
+    print(f'Task {task_id}/{num_tasks - 1}: {env_name}', flush=True)
     phase = 'BASE' if task_id == 0 else 'CONTINUAL'
     steps = continual_cfg.base_steps if task_id == 0 else continual_cfg.steps_per_task
-    print(f'Phase: {phase} | Steps: {steps} | Pool: {len(pool)}/{continual_cfg.k_max}')
-    print(f'{"="*60}\n')
+    print(f'Phase: {phase} | Steps: {steps} | Pool: {len(pool)}/{continual_cfg.k_max}', flush=True)
+    print(f'{"="*60}\n', flush=True)
 
     config = contrastive.ContrastiveConfig(**params)
 
@@ -478,7 +495,7 @@ def main(_):
         'env_name': env_name,
     })
 
-  print(f'\nAll {num_tasks} tasks complete.')
+  print(f'\nAll {num_tasks} tasks complete.', flush=True)
 
 
 if __name__ == '__main__':
