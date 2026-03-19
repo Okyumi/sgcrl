@@ -268,15 +268,17 @@ class ContinualContrastiveLearner(acme.Learner):
       alpha_grad = jax.value_and_grad(alpha_loss_fn)
       critic_grad = jax.value_and_grad(critic_loss_fn, has_aux=True)
 
-      def update_step(state, transitions, pool_contribution):
+      def update_step(state, data):
         """Single SGD update.
 
         Args:
           state: ContinualTrainingState
-          transitions: batch of transitions
-          pool_contribution: pytree – pre-computed Σ α_j v_j (using current
-            α derived from state.beta_k outside JIT).
+          data: tuple of (transitions, pool_contribution)
+            transitions: batch of transitions
+            pool_contribution: pytree – pre-computed Σ α_j v_j (using current
+              α derived from state.beta_k outside JIT).
         """
+        transitions, pool_contribution = data
         key, key_alpha, key_critic, key_actor = jax.random.split(state.key, 4)
 
         # -- compose effective policy params --------------------------------
@@ -372,14 +374,40 @@ class ContinualContrastiveLearner(acme.Learner):
     update_step, (log_alpha_init, alpha_opt) = _make_update_step(
         networks, config, adaptive_entropy, obs_to_goal)
 
-    # Apply process_multiple_batches for num_sgd_steps_per_step
-    # We need a wrapper because update_step has 3 args (state, transitions, pool_c)
-    # but process_multiple_batches expects (state, data).
-    # We'll handle the batching manually in self.step().
+    # Wrap with lax.scan for num_sgd_steps_per_step, matching the original
+    # SGCRL learner.  We can't use process_multiple_batches directly because
+    # pool_contribution is a param-shaped pytree (not batch-indexed), so the
+    # reshape it applies would break.  Instead we write a thin wrapper that
+    # scans over mini-batches of transitions while broadcasting pool_c.
+    num_sgd = config.num_sgd_steps_per_step
+
+    def _scan_update(state, data):
+      """Run num_sgd_steps_per_step updates via lax.scan.
+
+      data = (transitions, pool_contribution)
+        transitions: leaves have shape [batch_size * num_sgd, ...]
+        pool_contribution: param-shaped pytree (no batch dim)
+      """
+      transitions, pool_c = data
+      # Reshape transitions: [B*N, ...] -> [N, B, ...]
+      batched_transitions = jax.tree_map(
+          lambda a: jnp.reshape(a, (num_sgd, -1, *a.shape[1:])),
+          transitions)
+
+      def scan_body(carry, mini_batch):
+        # mini_batch is transitions for one SGD step; pool_c is closed over.
+        return update_step(carry, (mini_batch, pool_c))
+
+      state, metrics = jax.lax.scan(
+          scan_body, state, batched_transitions, length=num_sgd)
+      # Average metrics across SGD steps (same as process_multiple_batches)
+      metrics = jax.tree_map(jnp.mean, metrics)
+      return state, metrics
+
     if config.jit:
-      self._update_step_jit = jax.jit(update_step)
+      self._update_step = jax.jit(_scan_update)
     else:
-      self._update_step_jit = update_step
+      self._update_step = _scan_update
 
     # ---- initialise state -------------------------------------------------
     key_policy, key_q, rng = jax.random.split(rng, 3)
@@ -555,24 +583,19 @@ class ContinualContrastiveLearner(acme.Learner):
       # Compute pool contribution (outside JIT for variable-length pool)
       pool_c = self._compute_pool_contribution()
 
-      # Run num_sgd_steps_per_step updates
-      # transitions has shape [batch_size * num_sgd_steps, ...]
-      batch_size = self._config.batch_size
-      n_steps = self._config.num_sgd_steps_per_step
-      total = batch_size * n_steps
-
-      for i in range(n_steps):
-        start = i * batch_size
-        end = start + batch_size
-        mini_transitions = jax.tree_map(
-            lambda t: t[start:end], transitions)
-        self._state, metrics = self._update_step_jit(
-            self._state, mini_transitions, pool_c)
+      # Single call: lax.scan handles the num_sgd_steps_per_step inner loop
+      self._state, metrics = self._update_step(
+          self._state, (transitions, pool_c))
 
       # Update β_k and α_scale (outside JIT, once per learner step)
       if self._task_id > 0 and len(self._pool) > 0:
         # Use last mini-batch for β gradient
-        self._update_beta_and_alpha_scale(mini_transitions)
+        batch_size = self._config.batch_size
+        n_steps = self._config.num_sgd_steps_per_step
+        last_start = (n_steps - 1) * batch_size
+        last_transitions = jax.tree_map(
+            lambda t: t[last_start:last_start + batch_size], transitions)
+        self._update_beta_and_alpha_scale(last_transitions)
 
     # Timing
     timestamp = time.time()
