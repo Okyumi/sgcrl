@@ -69,7 +69,6 @@ flags.DEFINE_integer('num_tasks', 10, 'Number of tasks.')
 flags.DEFINE_integer('steps_per_task', 1_000_000, 'Env steps per continual task.')
 flags.DEFINE_integer('base_steps', 1_000_000, 'Env steps for base task.')
 flags.DEFINE_integer('k_max', 5, 'Max pool size before merging.')
-flags.DEFINE_string('log_dir', 'logs/', 'Base log directory.')
 flags.DEFINE_string('checkpoint_dir', 'logs/continual_checkpoints',
                     'Directory for cross-task checkpoints.')
 flags.DEFINE_bool('use_wandb', False, 'Log to W&B.')
