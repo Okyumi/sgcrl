@@ -238,6 +238,25 @@ After the base phase, the pool is initialised with a single zero vector (per pse
 - Pool contribution `Σ α_j v_j` is computed outside JIT because the pool has variable length.
 - `β_k` and `α_scale` gradients are computed outside JIT for the same reason.
 
+### Training loop
+
+The training loop within each task uses `env_loop.run(num_episodes=1)` to run one full episode per iteration. Acme's `EnvironmentLoop.run()` returns the actual number of environment steps taken, which we track in `env_steps_done` to correctly terminate after the target number of steps.
+
+Each loop iteration: one episode (~150 env steps) followed by one `learner.step()` (64 SGD updates internally).
+
+The first `learner.step()` triggers JAX JIT compilation of the full update function (critic loss + actor loss + gradient steps). This can take 10-30 minutes depending on the hardware. The script prints explicit markers so you know when compilation starts and finishes.
+
+### Logging
+
+Two logger streams run during training:
+
+- **Actor logger** (label `[Actor]`): writes after each episode via Acme's `EnvironmentLoop`. Throttled by `TimeFilter(time_delta=10.0)` to one entry every 10 seconds. Logs episode length, return, success rate, distances.
+- **Learner logger** (label `[Learner]`): writes after each `learner.step()`. Also throttled to once per 10 seconds. Logs critic loss, actor loss, accuracy, entropy.
+
+Both loggers write to terminal (via `logging.info`) and CSV files under `log_dir/`. The `PYTHONUNBUFFERED=1` environment variable in `draft_3.sh` ensures stdout is flushed immediately to the SLURM `.out` file.
+
+Stdout progress lines (e.g. `Task 0 [sawyer_hammer]: 50000/990000 env steps (334 episodes)`) are printed every 10,000 env steps independently of the TimeFilter loggers.
+
 ### Replay
 
 Per-task replay: each task gets a fresh Reverb server and buffer. No data is shared across tasks.
