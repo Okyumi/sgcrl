@@ -215,6 +215,7 @@ python run_continual_contrastive.py \
 | File | Change |
 |------|--------|
 | `contrastive/__init__.py` | Added exports for `ContinualConfig`, `ContinualContrastiveLearner`, `ContinualContrastiveBuilder`, `KnowledgePool` |
+| `contrastive/utils.py` | Added `TaskIDWrapper` environment wrapper for task conditioning |
 
 ---
 
@@ -258,9 +259,13 @@ Both actor and learner loggers also write to CSV files under `log_dir/`. The `PY
 
 Stdout progress lines (e.g. `Task 0 [sawyer_hammer]: 50000/990000 env steps (334 episodes)`) are printed every 10,000 env steps independently of the TimeFilter loggers.
 
+### Task conditioning
+
+A one-hot task identifier is appended to the state portion of each observation via `TaskIDWrapper` (defined in `contrastive/utils.py`). The observation layout becomes `[state (obs_dim), task_one_hot (num_tasks), goal (goal_dim)]`, and `obs_dim` is updated to include the task dimensions. This lets the critic's state-action encoder condition on which task is active. The goal extraction (`obs_to_goal`) uses `end_index = raw_obs_dim` to exclude the task identifier from goals.
+
 ### Replay
 
-Per-task replay: each task gets a fresh Reverb server and buffer. No data is shared across tasks.
+Per-task replay: each task gets a fresh Reverb server and buffer. No data is shared across tasks. The server is created at the start of `train_single_task` and stopped at the end.
 
 ---
 
@@ -285,3 +290,13 @@ Fix: call `wandb.init(project='continual_gcrl', ..., reinit=True)` per task in `
 ### 4. `lax.scan` refactor (commit `7a39200`)
 
 Refactored `ContinualContrastiveLearner.step()` to use `jax.lax.scan` for the inner SGD loop instead of Python for-loops, matching the original SGCRL learner pattern. The `_scan_update` wrapper reshapes transitions `[B*N, ...] → [N, B, ...]` and scans `update_step` over mini-batches while broadcasting the pool contribution (which is param-shaped, not batch-indexed).
+
+### 5. Rate limiter deadlock during prefill (commit `f798a50`)
+
+The `SampleToInsertRatio` rate limiter blocked inserts once the replay table reached ~`min_size_to_sample` episodes, causing prefill to hang at a deterministic point (~72 episodes). In the sequential driver, prefill only inserts (no sampling), so this limiter is the wrong fit.
+
+Fix: switched to `rate_limiters.MinSize(min_replay_traj)` which only gates sampling (not inserts). Also removed `jax_utils.prefetch` which caused backpressure deadlocks during prefill, and set `num_parallel_calls=1` for the dataset interleave to avoid `drop_remainder` batching issues with small replay buffers.
+
+### 6. Codebase cleanup and task conditioning (commit `df62961`)
+
+Removed all debug timing/print instrumentation from `ContinualContrastiveLearner.step()` and the dead `_compose_theta` function. Simplified the verbose prefill loop. Added `TaskIDWrapper` for task conditioning and documented replay isolation.
