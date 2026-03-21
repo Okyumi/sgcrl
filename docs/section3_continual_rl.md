@@ -155,6 +155,64 @@ python run_continual_contrastive.py \
 | `ADD_UID` | `true` | Add unique ID to log directories (`true` or `false`) |
 | `LOG_DIR` | `/scratch/yd2247/sgcrl/logs/continual` | Base log directory |
 | `CHECKPOINT_DIR` | `/scratch/yd2247/sgcrl/logs/continual_checkpoints` | Cross-task checkpoint directory |
+| `CRITIC_MODE` | `persistent` | Critic evolution: `persistent`, `reset`, or `cka` |
+| `USE_TASK_ID` | `true` | Append one-hot task ID to state and goal (`true` or `false`) |
+
+---
+
+## Ablation Studies
+
+### Critic evolution modes
+
+```bash
+# A. Persistent critic (default) — never reset, carry forward across tasks
+CRITIC_MODE=persistent sbatch draft_3.sh
+
+# B. Reset critic — reinitialize from scratch at every new task
+CRITIC_MODE=reset sbatch draft_3.sh
+
+# C. CKA-style critic (placeholder) — base+vectors adaptation
+CRITIC_MODE=cka sbatch draft_3.sh
+```
+
+### Task ID ablation
+
+```bash
+# A. With task ID (default) — one-hot appended to both state and goal
+USE_TASK_ID=true sbatch draft_3.sh
+
+# B. Without task ID — raw spatial observations only
+USE_TASK_ID=false sbatch draft_3.sh
+```
+
+### Combined ablations (2×3 grid)
+
+```bash
+# Persistent + task_id (default)
+CRITIC_MODE=persistent USE_TASK_ID=true SEED=42 sbatch draft_3.sh
+
+# Persistent + no task_id
+CRITIC_MODE=persistent USE_TASK_ID=false SEED=42 sbatch draft_3.sh
+
+# Reset + task_id
+CRITIC_MODE=reset USE_TASK_ID=true SEED=42 sbatch draft_3.sh
+
+# Reset + no task_id
+CRITIC_MODE=reset USE_TASK_ID=false SEED=42 sbatch draft_3.sh
+
+# CKA + task_id
+CRITIC_MODE=cka USE_TASK_ID=true SEED=42 sbatch draft_3.sh
+
+# CKA + no task_id
+CRITIC_MODE=cka USE_TASK_ID=false SEED=42 sbatch draft_3.sh
+```
+
+### Single-task baseline (matches original SGCRL)
+
+```bash
+# On a single task, behavior matches original SGCRL regardless of flags
+NUM_TASKS=1 USE_TASK_ID=false sbatch draft_3.sh
+```
 
 ---
 

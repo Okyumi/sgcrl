@@ -37,6 +37,8 @@ START_TASK="${START_TASK:-0}"
 EVAL_EVERY="${EVAL_EVERY:-50000}"
 USE_WANDB="${USE_WANDB:-true}"
 ADD_UID="${ADD_UID:-true}"
+CRITIC_MODE="${CRITIC_MODE:-persistent}"
+USE_TASK_ID="${USE_TASK_ID:-true}"
 
 # Directories (all on scratch to avoid home quota issues)
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
@@ -108,6 +110,8 @@ echo "K_max          : $K_MAX"
 echo "Start task     : $START_TASK"
 echo "Eval every     : $EVAL_EVERY"
 echo "W&B            : $USE_WANDB"
+echo "Critic mode    : $CRITIC_MODE"
+echo "Use task ID    : $USE_TASK_ID"
 echo "Log dir        : $LOG_DIR"
 echo "Checkpoint dir : $CHECKPOINT_DIR"
 echo "============================================================"
@@ -129,6 +133,13 @@ if [ "$USE_WANDB" = "true" ]; then
 fi
 if [ "$ADD_UID" = "true" ]; then
   FLAGS="$FLAGS --add_uid"
+fi
+
+FLAGS="$FLAGS --critic_mode=$CRITIC_MODE"
+if [ "$USE_TASK_ID" = "true" ]; then
+  FLAGS="$FLAGS --use_task_id"
+else
+  FLAGS="$FLAGS --nouse_task_id"
 fi
 
 # ---- run -------------------------------------------------------------------

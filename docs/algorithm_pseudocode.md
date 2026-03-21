@@ -165,24 +165,28 @@ Both the InfoNCE loss and the actor loss use φ(s,a)^T ψ(g). The SGCRL paper
 (Section 4.2) shows the inner-product architecture is crucial — it drives
 exploration through the learned contrastive representations.
 
-### 2. Persistent critic, composed actor (matching GCRL_plan.md)
-The critic (φ, ψ) is never reset across tasks. The actor is freshly composed
-per task via θ' = θ_base + Σ α_j v_j + v_k. This follows the CKA-RL design
-for the actor and extends SGCRL's contrastive critic to the continual setting.
+### 2. Critic evolution (--critic_mode)
+The critic (φ, ψ) can evolve across tasks in three ways:
+- **persistent** (default): carry forward, never reset. Fine-tune on each task.
+- **reset**: reinitialize critic from scratch at every new task.
+- **cka**: CKA-RL style base+vectors adaptation (placeholder for future work).
 
-### 3. Task ID in env_utils.py (both state and goal)
-A one-hot task vector is appended to both state and goal at the gym level.
-Since goal = future state, both have identical dims. CKA-RL does NOT use
-task_id in observations (its SAC critic is reinitialized per task), but our
-persistent contrastive critic needs it to distinguish tasks.
+The actor is always freshly composed per task via θ' = θ_base + Σ α_j v_j + v_k,
+following CKA-RL.
+
+### 3. Task ID (--use_task_id)
+Optional. A one-hot task vector is appended to both state and goal at the gym
+level (via TaskIDGymWrapper in env_utils.py). Since goal = future state, both
+have identical dims. CKA-RL does NOT use task_id in observations (its SAC
+critic is reinitialized per task). Controllable via --use_task_id / --nouse_task_id.
 
 ### 4. Per-task replay buffer
 Fresh Reverb server per task. No cross-task data leakage.
 
-### 5. DistanceObserver removed
-`DistanceObserver` is a monitoring utility from the original SGCRL code that
-measures L2 distance to goal during episodes. It is not part of the algorithm.
-We keep only `SuccessObserver` which tracks task success rate.
+### 5. Monitoring (DistanceObserver + SuccessObserver)
+`DistanceObserver` measures L2 distance to goal during episodes (init_dist,
+final_dist, delta_dist, min_dist). `SuccessObserver` tracks 0/1 task success.
+Both are logged per episode and useful for tracking exploration progress.
 
 ---
 

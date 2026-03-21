@@ -83,6 +83,11 @@ flags.DEFINE_integer('start_task', 0, 'Resume from this task (loads ckpt from ta
 flags.DEFINE_integer('eval_every', 50_000, 'Evaluate every N env steps.')
 flags.DEFINE_integer('time_delta_minutes', 5, 'Checkpoint frequency (minutes).')
 flags.DEFINE_integer('num_actors', 1, 'Number of parallel actors (1 for sequential).')
+flags.DEFINE_bool('use_task_id', True, 'Append one-hot task ID to state and goal.')
+flags.DEFINE_string('critic_mode', 'persistent',
+                    'Critic evolution across tasks: "persistent" (never reset, carry forward), '
+                    '"reset" (reinitialize critic each task), '
+                    '"cka" (CKA-RL style base+vectors for critic too).')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -142,6 +147,7 @@ def train_single_task(
     prev_q_params: Optional[networks_lib.Params],
     prev_target_q_params: Optional[networks_lib.Params],
     prev_q_optimizer_state,
+    critic_mode: str = 'persistent',
 ):
   """Train on a single task and return (theta_base, learner) for the next task."""
 
@@ -155,10 +161,12 @@ def train_single_task(
   # identical dimensionality.  The contrastive critic sees the task ID
   # in both φ(s,a) and ψ(g).
   fixed_goal = FIXED_GOALS[env_name]
+  _tid = task_id if FLAGS.use_task_id else None
+  _ntasks = continual_cfg.num_tasks if FLAGS.use_task_id else None
   env, obs_dim = contrastive_utils.make_environment(
       env_name, config.start_index, config.end_index,
       seed + task_id, fixed_start_end=fixed_goal,
-      task_id=task_id, num_tasks=continual_cfg.num_tasks)
+      task_id=_tid, num_tasks=_ntasks)
 
   config.obs_dim = obs_dim
   config.max_episode_steps = getattr(env, '_step_limit') + 1
@@ -304,6 +312,7 @@ def train_single_task(
       prev_q_params=prev_q_params,
       prev_target_q_params=prev_target_q_params,
       prev_q_optimizer_state=prev_q_optimizer_state,
+      critic_mode=critic_mode,
   )
 
   # ---- actor (for data collection) ---------------------------------------
@@ -326,7 +335,13 @@ def train_single_task(
         variable_client, adder, backend='cpu')
 
   # ---- observers ---------------------------------------------------------
-  observers = [contrastive_utils.SuccessObserver()]
+  observers = [
+      contrastive_utils.SuccessObserver(),
+      contrastive_utils.DistanceObserver(
+          obs_dim=config.obs_dim,
+          start_index=config.start_index,
+          end_index=config.end_index),
+  ]
 
   # ---- training loop (actor-learner loop) --------------------------------
   actor_logger = make_default_logger(
@@ -488,6 +503,7 @@ def main(_):
     phase = 'BASE' if task_id == 0 else 'CONTINUAL'
     steps = continual_cfg.base_steps if task_id == 0 else continual_cfg.steps_per_task
     print(f'Phase: {phase} | Steps: {steps} | Pool: {len(pool)}/{continual_cfg.k_max}', flush=True)
+    print(f'Critic: {FLAGS.critic_mode} | Task ID: {FLAGS.use_task_id}', flush=True)
     print(f'{"="*60}\n', flush=True)
 
     config = contrastive.ContrastiveConfig(**params)
@@ -499,7 +515,9 @@ def main(_):
       wandb.init(
           project='continual_gcrl',
           config={**params, 'task_id': task_id, 'env_name': env_name,
-                  'num_tasks': num_tasks, 'k_max': continual_cfg.k_max},
+                  'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
+                  'critic_mode': FLAGS.critic_mode,
+                  'use_task_id': FLAGS.use_task_id},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,
       )
@@ -515,6 +533,7 @@ def main(_):
         prev_q_params=prev_q,
         prev_target_q_params=prev_tgt_q,
         prev_q_optimizer_state=prev_q_opt,
+        critic_mode=FLAGS.critic_mode,
     )
 
     # Save checkpoint

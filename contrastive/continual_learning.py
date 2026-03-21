@@ -103,8 +103,10 @@ class ContinualContrastiveLearner(acme.Learner):
       prev_q_params: Optional[networks_lib.Params] = None,
       prev_target_q_params: Optional[networks_lib.Params] = None,
       prev_q_optimizer_state: Optional[optax.OptState] = None,
+      critic_mode: str = 'persistent',
   ):
     self._task_id = task_id
+    self._critic_mode = critic_mode
     self._config = config
     self._continual_config = continual_config
     self._num_sgd_steps_per_step = config.num_sgd_steps_per_step
@@ -401,16 +403,31 @@ class ContinualContrastiveLearner(acme.Learner):
     key_policy, key_q, rng = jax.random.split(rng, 3)
 
     if task_id == 0:
-      # Base phase: initialise everything from scratch
+      # Base phase: always initialise from scratch
       policy_params = networks.policy_network.init(key_policy)
       q_params = networks.q_network.init(key_q)
       theta_base = policy_params
     else:
-      # Continual phase: load from previous task
+      # Continual phase
       assert theta_base is not None
-      assert prev_q_params is not None
       policy_params = theta_base  # not used directly; composed via v_k
-      q_params = prev_q_params
+
+      if critic_mode == 'persistent':
+        # Carry forward critic from previous task (never reset)
+        assert prev_q_params is not None
+        q_params = prev_q_params
+      elif critic_mode == 'reset':
+        # Reinitialize critic from scratch each task
+        q_params = networks.q_network.init(key_q)
+      elif critic_mode == 'cka':
+        # For now, same as persistent; CKA-style critic vectors
+        # will be implemented as a future extension
+        assert prev_q_params is not None
+        q_params = prev_q_params
+        print('  [critic_mode=cka] CKA critic is not yet fully implemented; '
+              'using persistent critic as fallback.', flush=True)
+      else:
+        raise ValueError(f'Unknown critic_mode: {critic_mode}')
 
     # v_k: initialised to zeros (same structure as policy params)
     v_k = _pytree_zeros_like(theta_base)
@@ -430,12 +447,17 @@ class ContinualContrastiveLearner(acme.Learner):
     beta_opt_state = beta_optimizer.init(beta_k)
     alpha_scale_opt_state = alpha_scale_optimizer.init(alpha_scale)
 
-    if prev_q_optimizer_state is not None and task_id > 0:
+    if critic_mode == 'reset' and task_id > 0:
+      q_opt_state = q_optimizer.init(q_params)
+    elif prev_q_optimizer_state is not None and task_id > 0:
       q_opt_state = prev_q_optimizer_state
     else:
       q_opt_state = q_optimizer.init(q_params)
 
-    target_q = prev_target_q_params if prev_target_q_params is not None else q_params
+    if critic_mode == 'reset' and task_id > 0:
+      target_q = q_params
+    else:
+      target_q = prev_target_q_params if prev_target_q_params is not None else q_params
 
     # Entropy
     if adaptive_entropy:
