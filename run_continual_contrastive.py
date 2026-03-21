@@ -52,7 +52,9 @@ import contrastive
 from contrastive import config as contrastive_config
 from contrastive import networks as contrastive_networks
 from contrastive import utils as contrastive_utils
-from contrastive.continual_config import ContinualConfig, CONTINUAL_TASK_SEQUENCE
+from contrastive.continual_config import (
+    ContinualConfig, CONTINUAL_TASK_SEQUENCE, CONTINUAL_TASK_SEQUENCE_20,
+)
 from contrastive.continual_learning import (
     ContinualContrastiveLearner, ContinualTrainingState,
 )
@@ -92,6 +94,12 @@ flags.DEFINE_integer('eval_episodes', 10,
                      'Episodes per task for cross-task evaluation (0 to disable).')
 flags.DEFINE_integer('k_sample_k', 0,
                      'K for K-sample-argmax evaluation (0 = deterministic mean).')
+flags.DEFINE_bool('adapt_heads_only', True,
+                  'Only adapt actor output head layers (CKA-RL default).')
+flags.DEFINE_bool('encoder_from_base', True,
+                  'Freeze shared encoder from base task.')
+flags.DEFINE_bool('use_20_tasks', False,
+                  'Use 20-task sequence (two passes of the 10-task sequence).')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -111,20 +119,21 @@ FIXED_GOALS = {
 # ---- checkpoint utilities ------------------------------------------------
 
 def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
-               use_task_id=True):
+               use_task_id=True, adapt_heads_only=True):
   """Checkpoint path keyed by all ablation-relevant config.
 
-  Structure: {ckpt_dir}/critic_{mode}_tid_{bool}/seed_{seed}/task_{id}.pkl
+  Structure: {ckpt_dir}/critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
   This ensures different ablation configurations never share checkpoints.
   """
-  config_key = f'critic_{critic_mode}_tid_{use_task_id}'
+  config_key = f'critic_{critic_mode}_tid_{use_task_id}_heads_{adapt_heads_only}'
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
 
 def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
-              use_task_id=True):
-  path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id)
+              use_task_id=True, adapt_heads_only=True):
+  path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
+                     adapt_heads_only)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_map(
@@ -136,13 +145,14 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
 
 
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
-              use_task_id=True):
-  path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id)
+              use_task_id=True, adapt_heads_only=True):
+  path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
+                     adapt_heads_only)
   if not os.path.exists(path):
     raise FileNotFoundError(
         f'No checkpoint found at {path}. Make sure the previous run used '
         f'the same configuration (seed={seed}, critic_mode={critic_mode}, '
-        f'use_task_id={use_task_id}).')
+        f'use_task_id={use_task_id}, adapt_heads_only={adapt_heads_only}).')
   with open(path, 'rb') as f:
     data = pickle.load(f)
   # Convert back to JAX arrays
@@ -225,6 +235,11 @@ def train_single_task(
     prev_target_q_params: Optional[networks_lib.Params],
     prev_q_optimizer_state,
     critic_mode: str = 'persistent',
+    adapt_heads_only: bool = True,
+    encoder_from_base: bool = True,
+    task_sequence: tuple = CONTINUAL_TASK_SEQUENCE,
+    q_base: Optional[networks_lib.Params] = None,
+    critic_pool: Optional[KnowledgePool] = None,
 ):
   """Train on a single task and return (theta_base, learner) for the next task."""
 
@@ -391,6 +406,10 @@ def train_single_task(
       prev_target_q_params=prev_target_q_params,
       prev_q_optimizer_state=prev_q_optimizer_state,
       critic_mode=critic_mode,
+      adapt_heads_only=adapt_heads_only,
+      encoder_from_base=encoder_from_base,
+      q_base=q_base,
+      critic_pool=critic_pool,
   )
 
   # ---- actor (for data collection) ---------------------------------------
@@ -454,6 +473,8 @@ def train_single_task(
   train_steps = max_steps - config.min_replay_size
   log_every_steps = 10000  # print progress every N env steps
   next_log_at = log_every_steps
+  eval_every = FLAGS.eval_every
+  next_eval_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   episodes_done = 0
   print(f'  Training for {train_steps} env steps...', flush=True)
 
@@ -481,6 +502,30 @@ def train_single_task(
             f'{env_steps_done}/{train_steps} env steps '
             f'({episodes_done} episodes)', flush=True)
       next_log_at = env_steps_done + log_every_steps
+
+    # Intra-task periodic evaluation on all tasks seen so far
+    if env_steps_done >= next_eval_at:
+      next_eval_at = env_steps_done + eval_every
+      current_policy = learner.get_variables(['policy'])[0]
+      current_q = learner.q_params
+      print(f'  [intra-eval @ {env_steps_done} steps] '
+            f'Evaluating tasks 0..{task_id}...', flush=True)
+      intra_results = {}
+      for eval_tid in range(task_id + 1):
+        eval_env_i = task_sequence[eval_tid]
+        sr = evaluate_on_task(
+            eval_env_i, eval_tid, current_policy, current_q, config,
+            continual_cfg, seed,
+            num_episodes=FLAGS.eval_episodes,
+            k_sample_k=FLAGS.k_sample_k)
+        intra_results[eval_env_i] = sr
+      intra_mean = np.mean(list(intra_results.values()))
+      print(f'  [intra-eval] Mean success: {intra_mean:.1%}', flush=True)
+      if FLAGS.use_wandb and wandb is not None:
+        wandb_intra = {f'intra_eval/{n}': s for n, s in intra_results.items()}
+        wandb_intra['intra_eval/mean_success'] = intra_mean
+        wandb_intra['intra_eval/env_steps'] = env_steps_done
+        wandb.log(wandb_intra)
 
   print(f'  Task {task_id} training complete '
         f'({env_steps_done} env steps, {episodes_done} episodes).', flush=True)
@@ -511,18 +556,40 @@ def train_single_task(
   out_target_q_params = learner.target_q_params
   out_q_optimizer_state = learner.q_optimizer_state
 
+  # Critic CKA: extract w_k and update critic pool
+  out_q_base = q_base
+  out_critic_pool = critic_pool if critic_pool is not None else KnowledgePool(
+      k_max=continual_cfg.k_max)
+  if critic_mode == 'cka':
+    if task_id == 0:
+      # After base phase: q_base is the trained critic
+      out_q_base = out_q_params
+      # Initialise critic pool with a zero vector (like actor pool)
+      out_critic_pool.append(_pytree_zeros_like(out_q_base))
+    else:
+      # Extract w_k_critic = q_params - q_base - pool_c
+      out_critic_pool.append(learner.w_k_critic)
+    out_critic_pool.merge_if_needed()
+
   # Cleanup
   replay_server.stop()
 
   return (out_theta_base, out_q_params, out_target_q_params,
-          out_q_optimizer_state, pool, composed_policy)
+          out_q_optimizer_state, pool, composed_policy,
+          out_q_base, out_critic_pool)
 
 
 # ---- main ----------------------------------------------------------------
 
 def main(_):
   seed = FLAGS.seed
-  num_tasks = min(FLAGS.num_tasks, len(CONTINUAL_TASK_SEQUENCE))
+
+  # Select task sequence
+  if FLAGS.use_20_tasks:
+    task_sequence = CONTINUAL_TASK_SEQUENCE_20
+  else:
+    task_sequence = CONTINUAL_TASK_SEQUENCE
+  num_tasks = min(FLAGS.num_tasks, len(task_sequence))
 
   continual_cfg = ContinualConfig(
       num_tasks=num_tasks,
@@ -566,20 +633,28 @@ def main(_):
   prev_q = None
   prev_tgt_q = None
   prev_q_opt = None
+  q_base = None  # frozen critic base (critic_mode='cka')
+  critic_pool = KnowledgePool(k_max=continual_cfg.k_max)
 
   start_task = FLAGS.start_task
   if start_task > 0:
     ckpt = load_ckpt(FLAGS.checkpoint_dir, start_task - 1, seed,
                       critic_mode=FLAGS.critic_mode,
-                      use_task_id=FLAGS.use_task_id)
+                      use_task_id=FLAGS.use_task_id,
+                      adapt_heads_only=FLAGS.adapt_heads_only)
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
     prev_tgt_q = ckpt['target_q_params']
     prev_q_opt = ckpt.get('q_optimizer_state')
+    if FLAGS.critic_mode == 'cka':
+      q_base = ckpt.get('q_base')
+      critic_pool_vecs = ckpt.get('critic_pool_vectors')
+      if critic_pool_vecs is not None:
+        critic_pool.load_state_dict(critic_pool_vecs)
 
   for task_id in range(start_task, num_tasks):
-    env_name = CONTINUAL_TASK_SEQUENCE[task_id]
+    env_name = task_sequence[task_id]
     params['env_name'] = env_name
 
     print(f'\n{"="*60}', flush=True)
@@ -588,7 +663,10 @@ def main(_):
     steps = continual_cfg.base_steps if task_id == 0 else continual_cfg.steps_per_task
     print(f'Phase: {phase} | Steps: {steps} | Pool: {len(pool)}/{continual_cfg.k_max}', flush=True)
     print(f'Critic: {FLAGS.critic_mode} | Task ID: {FLAGS.use_task_id} | '
-          f'Eval: {FLAGS.eval_episodes}ep, K={FLAGS.k_sample_k}', flush=True)
+          f'Heads only: {FLAGS.adapt_heads_only} | '
+          f'Encoder base: {FLAGS.encoder_from_base}', flush=True)
+    print(f'Eval: {FLAGS.eval_episodes}ep, K={FLAGS.k_sample_k} | '
+          f'20-task: {FLAGS.use_20_tasks}', flush=True)
     print(f'{"="*60}\n', flush=True)
 
     config = contrastive.ContrastiveConfig(**params)
@@ -603,6 +681,9 @@ def main(_):
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,
                   'use_task_id': FLAGS.use_task_id,
+                  'adapt_heads_only': FLAGS.adapt_heads_only,
+                  'encoder_from_base': FLAGS.encoder_from_base,
+                  'use_20_tasks': FLAGS.use_20_tasks,
                   'eval_episodes': FLAGS.eval_episodes,
                   'k_sample_k': FLAGS.k_sample_k},
           name=f'task{task_id}_{env_name}_s{seed}',
@@ -610,7 +691,7 @@ def main(_):
       )
 
     (theta_base, prev_q, prev_tgt_q, prev_q_opt, pool,
-     composed_policy) = train_single_task(
+     composed_policy, q_base, critic_pool) = train_single_task(
         task_id=task_id,
         env_name=env_name,
         config=config,
@@ -622,10 +703,15 @@ def main(_):
         prev_target_q_params=prev_tgt_q,
         prev_q_optimizer_state=prev_q_opt,
         critic_mode=FLAGS.critic_mode,
+        adapt_heads_only=FLAGS.adapt_heads_only,
+        encoder_from_base=FLAGS.encoder_from_base,
+        task_sequence=task_sequence,
+        q_base=q_base,
+        critic_pool=critic_pool,
     )
 
     # Save checkpoint
-    save_ckpt(FLAGS.checkpoint_dir, task_id, seed, {
+    ckpt_data = {
         'theta_base': theta_base,
         'pool_vectors': pool.state_dict(),
         'q_params': prev_q,
@@ -634,14 +720,20 @@ def main(_):
         'composed_policy': composed_policy,
         'task_id': task_id,
         'env_name': env_name,
-    }, critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id)
+    }
+    if FLAGS.critic_mode == 'cka':
+      ckpt_data['q_base'] = q_base
+      ckpt_data['critic_pool_vectors'] = critic_pool.state_dict()
+    save_ckpt(FLAGS.checkpoint_dir, task_id, seed, ckpt_data,
+              critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
+              adapt_heads_only=FLAGS.adapt_heads_only)
 
     # ---- cross-task evaluation (forgetting measurement) ------------------
     if FLAGS.eval_episodes > 0:
       print(f'\n  Evaluating on all tasks seen so far...', flush=True)
       eval_results = {}
       for eval_tid in range(task_id + 1):
-        eval_env_name_i = CONTINUAL_TASK_SEQUENCE[eval_tid]
+        eval_env_name_i = task_sequence[eval_tid]
         sr = evaluate_on_task(
             eval_env_name_i, eval_tid, composed_policy, prev_q, config,
             continual_cfg, seed,

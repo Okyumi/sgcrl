@@ -104,9 +104,16 @@ class ContinualContrastiveLearner(acme.Learner):
       prev_target_q_params: Optional[networks_lib.Params] = None,
       prev_q_optimizer_state: Optional[optax.OptState] = None,
       critic_mode: str = 'persistent',
+      adapt_heads_only: bool = True,
+      encoder_from_base: bool = True,
+      # --- critic CKA state (only used when critic_mode='cka') ---
+      q_base: Optional[networks_lib.Params] = None,
+      critic_pool: Optional[KnowledgePool] = None,
   ):
     self._task_id = task_id
     self._critic_mode = critic_mode
+    self._adapt_heads_only = adapt_heads_only
+    self._encoder_from_base = encoder_from_base
     self._config = config
     self._continual_config = continual_config
     self._num_sgd_steps_per_step = config.num_sgd_steps_per_step
@@ -118,9 +125,32 @@ class ContinualContrastiveLearner(acme.Learner):
     self._pool = pool if pool is not None else KnowledgePool(
         k_max=continual_config.k_max)
 
+    # Critic pool (for critic_mode='cka')
+    self._q_base = q_base
+    self._critic_pool = critic_pool if critic_pool is not None else KnowledgePool(
+        k_max=continual_config.k_max)
+
+    # ---- build head mask for gradient masking --------------------------------
+    # When adapt_heads_only=True (or encoder_from_base=True with full adapt),
+    # we zero out gradients for the body (encoder) parameters of v_k so that
+    # only the actor head (NormalTanhDistribution) receives updates.
+    # The mask is 1.0 for head leaves, 0.0 for body leaves.
+    #
+    # Haiku actor pytree keys:
+    #   'mlp/~/linear_0', 'mlp/~/linear_1' → body (shared encoder)
+    #   keys containing 'normal_tanh_distribution' → head (mean + log_std)
+    #
+    # Determine whether gradient masking is needed:
+    #   adapt_heads_only=True → always mask body
+    #   adapt_heads_only=False, encoder_from_base=True → mask body
+    #   adapt_heads_only=False, encoder_from_base=False → no mask
+    self._mask_body_grads = adapt_heads_only or encoder_from_base
+
     # ---- build loss functions ---------------------------------------------
     # We close over `self._pool` for the compose step inside JIT-ed functions
     # via the pool_vectors snapshot passed at each step.
+
+    mask_body_grads = self._mask_body_grads  # close over as Python bool
 
     def _make_update_step(networks, config, adaptive_entropy, obs_to_goal):
       """Factory that returns a (possibly jitted) update function."""
@@ -308,6 +338,18 @@ class ContinualContrastiveLearner(acme.Learner):
             combined_policy, state.q_params, alpha, transitions, key_actor)
         # a_grads_combined has the same pytree structure as combined_policy
         # and equals ∂L/∂v_k because v_k enters additively.
+        #
+        # Head-only adaptation: zero out body gradients so v_k only modifies
+        # the actor output head (NormalTanhDistribution layers).
+        if mask_body_grads:
+          def _mask_leaf(path, g):
+            # Haiku key path is a tuple of DictKey / GetAttrKey objects.
+            # Head leaves have 'normal_tanh_distribution' in their path.
+            path_str = '/'.join(str(p) for p in path)
+            is_head = 'normal_tanh_distribution' in path_str
+            return g if is_head else jnp.zeros_like(g)
+          a_grads_combined = jax.tree_util.tree_map_with_path(
+              _mask_leaf, a_grads_combined)
         vk_updates, vk_opt_state = vk_optimizer.update(
             a_grads_combined, state.v_k_optimizer_state)
         v_k_new = optax.apply_updates(state.v_k, vk_updates)
@@ -420,12 +462,21 @@ class ContinualContrastiveLearner(acme.Learner):
         # Reinitialize critic from scratch each task
         q_params = networks.q_network.init(key_q)
       elif critic_mode == 'cka':
-        # For now, same as persistent; CKA-style critic vectors
-        # will be implemented as a future extension
-        assert prev_q_params is not None
-        q_params = prev_q_params
-        print('  [critic_mode=cka] CKA critic is not yet fully implemented; '
-              'using persistent critic as fallback.', flush=True)
+        # CKA-style critic: q' = q_base + Σ α_j w_j + w_k
+        # q_base is frozen from task 0.  We compose the initial q_params
+        # by adding the pool contribution and a fresh w_k (zeros).
+        # The inner loop trains q_params normally; after training we
+        # extract w_k = q_params - q_base - pool_c.
+        assert self._q_base is not None, (
+            'critic_mode=cka requires q_base (frozen from task 0)')
+        # Compute pool contribution for critic
+        critic_pool_c = self._compute_critic_pool_contribution()
+        # w_k starts at zero → composed q_params = q_base + pool_c + 0
+        q_params = jax.tree_map(
+            lambda b, pc: b + pc,
+            self._q_base, critic_pool_c)
+        # Store pool_c for w_k extraction after training
+        self._critic_pool_c_at_init = critic_pool_c
       else:
         raise ValueError(f'Unknown critic_mode: {critic_mode}')
 
@@ -447,14 +498,16 @@ class ContinualContrastiveLearner(acme.Learner):
     beta_opt_state = beta_optimizer.init(beta_k)
     alpha_scale_opt_state = alpha_scale_optimizer.init(alpha_scale)
 
-    if critic_mode == 'reset' and task_id > 0:
+    if critic_mode in ('reset', 'cka') and task_id > 0:
+      # reset: fresh init; cka: q_params recomposed, old opt state invalid
       q_opt_state = q_optimizer.init(q_params)
     elif prev_q_optimizer_state is not None and task_id > 0:
       q_opt_state = prev_q_optimizer_state
     else:
       q_opt_state = q_optimizer.init(q_params)
 
-    if critic_mode == 'reset' and task_id > 0:
+    if critic_mode in ('reset', 'cka') and task_id > 0:
+      # For both reset and cka, target starts from the (re)composed q_params
       target_q = q_params
     else:
       target_q = prev_target_q_params if prev_target_q_params is not None else q_params
@@ -515,6 +568,27 @@ class ContinualContrastiveLearner(acme.Learner):
           lambda c, v: c + float(alpha[j]) * v,
           contribution, v_j)
     return contribution
+
+  # ---- critic pool contribution (outside JIT) ------------------------------
+
+  def _compute_critic_pool_contribution(self):
+    """Compute Σ α_j w_j for critic pool using uniform weights.
+
+    For the critic CKA, we use uniform blending (no learnable β for critic)
+    to keep the implementation simple: pool_c = mean(w_j) if pool non-empty.
+    """
+    critic_vecs = self._critic_pool.get_vectors()
+    if not critic_vecs:
+      # Need a zeros-like for critic params.  Use q_base if available,
+      # otherwise fall back to current q_params.
+      ref = self._q_base if self._q_base is not None else self._state.q_params
+      return _pytree_zeros_like(ref)
+    # Uniform average of critic knowledge vectors
+    n = len(critic_vecs)
+    result = _pytree_zeros_like(critic_vecs[0])
+    for w_j in critic_vecs:
+      result = jax.tree_map(lambda r, w: r + w / n, result, w_j)
+    return result
 
   # ---- β_k gradient step (outside JIT) ------------------------------------
 
@@ -678,3 +752,21 @@ class ContinualContrastiveLearner(acme.Learner):
   @property
   def pool(self):
     return self._pool
+
+  @property
+  def critic_pool(self):
+    return self._critic_pool
+
+  @property
+  def w_k_critic(self):
+    """Extract critic knowledge vector: w_k = q_params - q_base - pool_c.
+
+    Only valid after training when critic_mode='cka'.
+    """
+    assert self._critic_mode == 'cka' and self._q_base is not None, (
+        'w_k_critic only available for critic_mode=cka')
+    pool_c = getattr(self, '_critic_pool_c_at_init',
+                     self._compute_critic_pool_contribution())
+    return jax.tree_map(
+        lambda q, b, pc: q - b - pc,
+        self._state.q_params, self._q_base, pool_c)

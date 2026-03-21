@@ -41,6 +41,9 @@ CRITIC_MODE="${CRITIC_MODE:-persistent}"
 USE_TASK_ID="${USE_TASK_ID:-true}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
 K_SAMPLE_K="${K_SAMPLE_K:-0}"
+ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
+ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-true}"
+USE_20_TASKS="${USE_20_TASKS:-false}"
 
 # Directories (all on scratch to avoid home quota issues)
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
@@ -116,6 +119,9 @@ echo "Critic mode    : $CRITIC_MODE"
 echo "Use task ID    : $USE_TASK_ID"
 echo "Eval episodes  : $EVAL_EPISODES"
 echo "K-sample K     : $K_SAMPLE_K"
+echo "Heads only     : $ADAPT_HEADS_ONLY"
+echo "Encoder base   : $ENCODER_FROM_BASE"
+echo "20-task        : $USE_20_TASKS"
 echo "Log dir        : $LOG_DIR"
 echo "Checkpoint dir : $CHECKPOINT_DIR"
 echo "============================================================"
@@ -148,6 +154,22 @@ fi
 
 FLAGS="$FLAGS --eval_episodes=$EVAL_EPISODES"
 FLAGS="$FLAGS --k_sample_k=$K_SAMPLE_K"
+
+if [ "$ADAPT_HEADS_ONLY" = "true" ]; then
+  FLAGS="$FLAGS --adapt_heads_only"
+else
+  FLAGS="$FLAGS --noadapt_heads_only"
+fi
+if [ "$ENCODER_FROM_BASE" = "true" ]; then
+  FLAGS="$FLAGS --encoder_from_base"
+else
+  FLAGS="$FLAGS --noencoder_from_base"
+fi
+if [ "$USE_20_TASKS" = "true" ]; then
+  FLAGS="$FLAGS --use_20_tasks"
+else
+  FLAGS="$FLAGS --nouse_20_tasks"
+fi
 
 # ---- run -------------------------------------------------------------------
 cd "$REPO_DIR"
