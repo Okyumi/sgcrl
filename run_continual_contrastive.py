@@ -163,8 +163,10 @@ def train_single_task(
   obs_dim = obs_dim + continual_cfg.num_tasks
 
   config.obs_dim = obs_dim
-  # Goal extraction must use only the spatial state (exclude task_one_hot).
-  config.end_index = raw_obs_dim
+  # Goal = future state, so it must have the same dimensionality as state
+  # (including task_one_hot).  Keep config.end_index at its default (-1)
+  # so obs_to_goal returns the full state.  The DistanceObserver uses
+  # raw_obs_dim separately for spatial distance computation.
   config.max_episode_steps = getattr(env, '_step_limit') + 1
   env_spec = specs.make_environment_spec(env)
 
@@ -330,12 +332,16 @@ def train_single_task(
         variable_client, adder, backend='cpu')
 
   # ---- observers ---------------------------------------------------------
+  # DistanceObserver measures spatial distance only (exclude task_one_hot).
+  # It splits obs at config.obs_dim, then extracts obs[:raw_obs_dim] via
+  # obs_to_goal(start_index=0, end_index=raw_obs_dim) to compare with the
+  # spatial goal portion.
   observers = [
       contrastive_utils.SuccessObserver(),
       contrastive_utils.DistanceObserver(
           obs_dim=config.obs_dim,
           start_index=config.start_index,
-          end_index=config.end_index),
+          end_index=raw_obs_dim),
   ]
 
   # ---- training loop (actor-learner loop) --------------------------------
