@@ -171,21 +171,19 @@ def train_single_task(
       hidden_layer_sizes=config.hidden_layer_sizes)
 
   # ---- replay buffer (reverb) -------------------------------------------
-  samples_per_insert_tolerance = (
-      config.samples_per_insert_tolerance_rate * config.samples_per_insert)
   min_replay_traj = config.min_replay_size // config.max_episode_steps
   max_replay_traj = config.max_replay_size // config.max_episode_steps
-  error_buffer = min_replay_traj * samples_per_insert_tolerance
 
   replay_table = reverb.Table(
       name=config.replay_table_name,
       sampler=reverb.selectors.Uniform(),
       remover=reverb.selectors.Fifo(),
       max_size=max_replay_traj,
-      rate_limiter=rate_limiters.SampleToInsertRatio(
-          min_size_to_sample=min_replay_traj,
-          samples_per_insert=config.samples_per_insert,
-          error_buffer=error_buffer),
+      # IMPORTANT (sequential continual runner):
+      # During prefill we only insert and do not sample yet. Using
+      # SampleToInsertRatio can block inserts after ~min_size_to_sample
+      # episodes, causing prefill to hang. MinSize avoids this deadlock.
+      rate_limiter=rate_limiters.MinSize(min_replay_traj),
       signature=adders_reverb.EpisodeAdder.signature(env_spec, {}))
 
   replay_server = reverb.Server([replay_table], port=None)
@@ -218,7 +216,11 @@ def train_single_task(
     transition = tree.map_structure(lambda t: tf.roll(t, shift, axis=0), transition)
     return transition
 
-  num_parallel_calls = config.num_parallel_calls or tf.data.AUTOTUNE
+  # Deadlock avoidance: the dataset iterator uses `drop_remainder=True`.
+  # When combined with parallel `interleave` workers, the *first* iterator
+  # batch can become hard to satisfy. Force a single worker for the first
+  # batch to be deterministic.
+  num_parallel_calls = 1
 
   def _make_dataset(unused):
     ds = reverb.TrajectoryDataset.from_table_signature(
@@ -250,10 +252,10 @@ def train_single_task(
                         deterministic=False)
   dataset = dataset.prefetch(tf.data.AUTOTUNE)
   iterator = dataset.as_numpy_iterator()
-
-  # Prefetch to device
-  device = jax.devices()[0]
-  iterator = jax_utils.prefetch(iterator, buffer_size=2, device=device)
+  # Important: don't start background prefetching to device yet.
+  # Prefetching here can create backpressure/deadlocks during the replay
+  # prefill phase (the learner hasn't started consuming samples).
+  # We'll let `learner.step()` consume the iterator directly after prefill.
 
   # ---- learner -----------------------------------------------------------
   log_dir = os.path.join(
@@ -338,9 +340,56 @@ def train_single_task(
       logger=actor_logger, observers=observers)
 
   # Prefill replay
-  print(f'  Prefilling replay ({config.min_replay_size} steps)...', flush=True)
-  env_loop.run(num_steps=config.min_replay_size)
-  print(f'  Prefill complete.', flush=True)
+  # NOTE: our dataset iterator batches `config.batch_size * config.num_sgd_steps_per_step`
+  # transitions each time (because we batch *before* unbatching). If the replay
+  # table contains fewer transitions than this, `next(iterator)` can block
+  # on the first learner step waiting for a full batch.
+  required_first_batch_steps = config.batch_size * config.num_sgd_steps_per_step
+  # Prefill must be large enough that `next(iterator)` can immediately
+  # construct its first `drop_remainder` batch. In the training loop we run:
+  # (1) actor/environment episode, then (2) learner.step().
+  # If the learner blocks waiting for a full batch, the actor will not run
+  # again => deadlock. With the single-worker dataset pipeline below, the
+  # tight buffer is typically sufficient.
+  prefill_steps = max(
+      config.min_replay_size,
+      required_first_batch_steps + config.max_episode_steps)
+  print(
+      f'  Prefilling replay ({prefill_steps} steps, min={config.min_replay_size}, '
+      f'required_first_batch={required_first_batch_steps}, '
+      f'episode_buffer={config.max_episode_steps})...',
+      flush=True,
+      file=sys.stderr)
+  # Use explicit per-episode stepping so we can reliably count environment
+  # steps and emit progress. This avoids any ambiguity in `EnvironmentLoop`
+  # step accounting when episodes are always capped by StepLimitWrapper.
+  prefill_steps_done = 0
+  prefill_episodes = 0
+  # Hard safety cap: with max_episode_steps ~= 151 and target prefill_steps
+  # ~16k, we expect < 120 episodes.
+  max_prefill_episodes = 250
+  # Print very frequently so we can see exactly where it gets stuck.
+  progress_every_episodes = 1
+  while prefill_steps_done < prefill_steps:
+    result = env_loop.run_episode()
+    env_loop._logger.write(result)  # pylint: disable=protected-access
+    episode_steps = int(result['episode_length'])
+    prefill_steps_done += episode_steps
+    prefill_episodes += 1
+    if prefill_episodes % progress_every_episodes == 0:
+      print(
+          f'    Prefill progress: {prefill_steps_done}/{prefill_steps} '
+          f'steps ({prefill_episodes} episodes)...',
+          flush=True,
+          file=sys.stderr)
+    if prefill_episodes > max_prefill_episodes:
+      raise RuntimeError(
+          f'Prefill exceeded episode cap ({prefill_episodes} > {max_prefill_episodes}). '
+          f'Last steps_done={prefill_steps_done}, target={prefill_steps}')
+  print(
+      f'  Prefill complete (steps={prefill_steps_done}, episodes={prefill_episodes}).',
+      flush=True,
+      file=sys.stderr)
 
   # Training
   env_steps_done = 0

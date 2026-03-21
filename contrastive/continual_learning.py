@@ -486,6 +486,9 @@ class ContinualContrastiveLearner(acme.Learner):
         serialize_fn=utils.fetch_devicearray, time_delta=10.0)
     self._iterator = iterator
     self._timestamp = None
+    # Debug: time the first learner step to distinguish replay/data stalls from
+    # first-time JIT compilation stalls.
+    self._debug_first_step = True
 
   # ---- pool-contribution helper (outside JIT for variable-length pool) ----
 
@@ -577,15 +580,40 @@ class ContinualContrastiveLearner(acme.Learner):
 
   def step(self):
     with jax.profiler.StepTraceAnnotation('step', step_num=self._counter):
+      debug = self._debug_first_step
+      if debug:
+        t_start = time.time()
+        print('[ContinualLearner debug] first step: entering next(iterator)...',
+              flush=True)
+
+      t_iter = time.time()
       sample = next(self._iterator)
+      if debug:
+        print(
+            f'[ContinualLearner debug] first step: wait(next(iterator))={time.time() - t_iter:.3f}s',
+            flush=True)
       transitions = types.Transition(*sample.data)
 
       # Compute pool contribution (outside JIT for variable-length pool)
+      t_pool = time.time()
       pool_c = self._compute_pool_contribution()
+      if debug:
+        print(
+            f'[ContinualLearner debug] first step: compute(pool_c)={time.time() - t_pool:.3f}s',
+            flush=True)
 
       # Single call: lax.scan handles the num_sgd_steps_per_step inner loop
+      t_update = time.time()
       self._state, metrics = self._update_step(
           self._state, (transitions, pool_c))
+      if debug:
+        # Ensure we measure actual device execution too.
+        leaf = jax.tree_util.tree_leaves(self._state.q_params)[0]
+        jax.block_until_ready(leaf)
+        print(
+            f'[ContinualLearner debug] first step: _update_step (JIT compile+run)={time.time() - t_update:.3f}s (total={time.time() - t_start:.3f}s)',
+            flush=True)
+        self._debug_first_step = False
 
       # Update β_k and α_scale (outside JIT, once per learner step)
       if self._task_id > 0 and len(self._pool) > 0:
