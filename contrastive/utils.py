@@ -159,51 +159,9 @@ class ObservationFilterWrapper(base.EnvironmentWrapper):
     return self._observation_spec
 
 
-class TaskIDWrapper(base.EnvironmentWrapper):
-  """Appends a one-hot task identifier to the state portion of the observation.
-
-  Given observation layout [state (obs_dim), goal (goal_dim)], produces
-  [state (obs_dim), task_one_hot (num_tasks), goal (goal_dim)].
-  The caller must update obs_dim to obs_dim + num_tasks so that downstream
-  code (critic, actor, obs_to_goal) splits at the correct index.
-  """
-
-  def __init__(self, environment, task_id: int, num_tasks: int, obs_dim: int):
-    super().__init__(environment)
-    self._task_one_hot = np.zeros(num_tasks, dtype=np.float32)
-    self._task_one_hot[task_id] = 1.0
-    self._obs_dim = obs_dim
-    # Update observation spec to reflect the larger observation.
-    old_spec = environment.observation_spec()
-    new_shape = (old_spec.shape[0] + num_tasks,)
-    new_min = self._inject_task_id(old_spec.minimum)
-    new_max = self._inject_task_id(old_spec.maximum)
-    self._observation_spec = dm_env.specs.BoundedArray(
-        shape=new_shape, dtype=old_spec.dtype,
-        minimum=new_min, maximum=new_max, name='state_task_goal')
-
-  def _inject_task_id(self, obs):
-    """Insert task_one_hot between state and goal."""
-    state = obs[:self._obs_dim]
-    goal = obs[self._obs_dim:]
-    return np.concatenate([state, self._task_one_hot, goal])
-
-  def step(self, action):
-    timestep = self._environment.step(action)
-    return timestep._replace(
-        observation=self._inject_task_id(timestep.observation))
-
-  def reset(self):
-    timestep = self._environment.reset()
-    return timestep._replace(
-        observation=self._inject_task_id(timestep.observation))
-
-  def observation_spec(self):
-    return self._observation_spec
-
-
 def make_environment(env_name, start_index, end_index,
-                     seed, fixed_start_end = None):
+                     seed, fixed_start_end=None,
+                     task_id=None, num_tasks=None):
   """Creates the environment.
 
   Args:
@@ -212,13 +170,17 @@ def make_environment(env_name, start_index, end_index,
     end_index: final index of the observation to use in the goal. The goal
       is then obs[start_index:goal_index].
     seed: random seed.
+    task_id: if provided (with num_tasks), appends one-hot task identifier
+      to both state and goal via TaskIDGymWrapper in env_utils.
+    num_tasks: total number of tasks for the one-hot encoding.
   Returns:
     env: the environment
     obs_dim: integer specifying the size of the observations, before
       the start_index/end_index is applied.
   """
   np.random.seed(seed)
-  gym_env, obs_dim, max_episode_steps = env_utils.load(env_name, fixed_start_end)
+  gym_env, obs_dim, max_episode_steps = env_utils.load(
+      env_name, fixed_start_end, task_id=task_id, num_tasks=num_tasks)
   goal_indices = obs_dim + obs_to_goal_1d(np.arange(obs_dim), start_index,
                                           end_index)
   indices = np.concatenate([

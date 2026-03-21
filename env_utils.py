@@ -32,6 +32,41 @@ GOAL_DIM_UNIFIED = 11
 FULL_OBS_DIM = STATE_DIM_UNIFIED + GOAL_DIM_UNIFIED  # 22
 
 
+class TaskIDGymWrapper(gym.Wrapper):
+  """Appends a one-hot task identifier to both state and goal.
+
+  The raw observation is [state (STATE_DIM_UNIFIED), goal (GOAL_DIM_UNIFIED)].
+  After wrapping: [state, task_one_hot, goal, task_one_hot].
+  This gives state and goal the same dimensionality (STATE_DIM_UNIFIED + num_tasks)
+  so the persistent contrastive critic can condition on the current task.
+  """
+
+  def __init__(self, env, task_id, num_tasks):
+    super().__init__(env)
+    self._task_one_hot = np.zeros(num_tasks, dtype=np.float32)
+    self._task_one_hot[task_id] = 1.0
+    self._state_dim = STATE_DIM_UNIFIED
+    new_dim = FULL_OBS_DIM + 2 * num_tasks
+    self.observation_space = gym.spaces.Box(
+        low=np.full(new_dim, -np.inf),
+        high=np.full(new_dim, np.inf),
+        dtype=np.float32)
+
+  def _augment_obs(self, obs):
+    state = obs[:self._state_dim]
+    goal = obs[self._state_dim:]
+    return np.concatenate([state, self._task_one_hot,
+                           goal, self._task_one_hot]).astype(np.float32)
+
+  def reset(self, **kwargs):
+    obs = self.env.reset(**kwargs)
+    return self._augment_obs(obs)
+
+  def step(self, action):
+    obs, reward, done, info = self.env.step(action)
+    return self._augment_obs(obs), reward, done, info
+
+
 def _pad_to_len(arr, length, pad_value=0.0):
   """Pad a 1D array to `length` with `pad_value`. No-op if len(arr) >= length."""
   n = arr.size
@@ -62,8 +97,13 @@ def euler2quat(euler):
   return quat
 
 
-def load(env_name, fixed_start_end=None):
-  """Loads the train and eval environments, as well as the obs_dim."""
+def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None):
+  """Loads the train and eval environments, as well as the obs_dim.
+
+  If task_id and num_tasks are provided, wraps the environment with
+  TaskIDGymWrapper to append a one-hot task identifier to both state
+  and goal vectors.  obs_dim is then STATE_DIM_UNIFIED + num_tasks.
+  """
   # pylint: disable=invalid-name
   kwargs = {}
   if env_name == 'sawyer_bin':
@@ -138,6 +178,12 @@ def load(env_name, fixed_start_end=None):
     obs_dim = STATE_DIM_UNIFIED
   else:
     obs_dim = gym_env.observation_space.shape[0] // 2
+
+  # Optionally wrap with task_id one-hot for continual RL.
+  if task_id is not None and num_tasks is not None:
+    gym_env = TaskIDGymWrapper(gym_env, task_id, num_tasks)
+    obs_dim = obs_dim + num_tasks
+
   return gym_env, obs_dim, max_episode_steps
 
 

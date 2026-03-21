@@ -240,11 +240,11 @@ class ContinualContrastiveLearner(acme.Learner):
         action = networks.sample(dist_params, key)
         log_prob = networks.log_prob(dist_params, action)
 
-        # Critic score: use representation distance -‖φ(s,a) - ψ(g)‖₂
-        _, sa_repr, g_repr = networks.q_network.apply(q_params, new_obs, action)
-        q_value = -jnp.linalg.norm(sa_repr - g_repr, axis=-1)  # (batch,)
-
-        actor_loss = -q_value  # maximize Q
+        # Critic score: inner product φ(s,a)^T ψ(g), matching SGCRL.
+        q_action, _, _ = networks.q_network.apply(q_params, new_obs, action)
+        if len(q_action.shape) == 3:  # twin_q
+          q_action = jnp.min(q_action, axis=-1)
+        actor_loss = -jnp.diag(q_action)  # maximize Q
 
         if config.use_action_entropy:
           actor_loss -= alpha * (-log_prob)  # maximize entropy
@@ -525,7 +525,7 @@ class ContinualContrastiveLearner(acme.Learner):
           contribution,
           self._state.v_k,
       )
-      # Evaluate actor loss (simplified – just the Q part)
+      # Evaluate actor loss using inner product (matching SGCRL)
       obs = transitions.observation
       state = obs[:, :self._config.obs_dim]
       goal = obs[:, self._config.obs_dim:]
@@ -533,10 +533,11 @@ class ContinualContrastiveLearner(acme.Learner):
       key = jax.random.PRNGKey(0)  # deterministic for gradient
       dist_params = self._networks.policy_network.apply(combined, new_obs)
       action = self._networks.sample(dist_params, key)
-      _, sa_repr, g_repr = self._networks.q_network.apply(
+      q_action, _, _ = self._networks.q_network.apply(
           self._state.q_params, new_obs, action)
-      q_value = -jnp.linalg.norm(sa_repr - g_repr, axis=-1)
-      return -jnp.mean(q_value)  # minimize negative Q = maximize Q
+      if len(q_action.shape) == 3:
+        q_action = jnp.min(q_action, axis=-1)
+      return -jnp.mean(jnp.diag(q_action))  # minimize neg Q = maximize Q
 
     # Compute gradients
     grad_fn = jax.grad(beta_loss_fn, argnums=(0, 1))
