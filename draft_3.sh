@@ -39,6 +39,8 @@ USE_WANDB="${USE_WANDB:-true}"
 ADD_UID="${ADD_UID:-true}"
 CRITIC_MODE="${CRITIC_MODE:-persistent}"
 USE_TASK_ID="${USE_TASK_ID:-true}"
+EVAL_EPISODES="${EVAL_EPISODES:-10}"
+K_SAMPLE_K="${K_SAMPLE_K:-0}"
 
 # Directories (all on scratch to avoid home quota issues)
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
@@ -112,6 +114,8 @@ echo "Eval every     : $EVAL_EVERY"
 echo "W&B            : $USE_WANDB"
 echo "Critic mode    : $CRITIC_MODE"
 echo "Use task ID    : $USE_TASK_ID"
+echo "Eval episodes  : $EVAL_EPISODES"
+echo "K-sample K     : $K_SAMPLE_K"
 echo "Log dir        : $LOG_DIR"
 echo "Checkpoint dir : $CHECKPOINT_DIR"
 echo "============================================================"
@@ -141,6 +145,9 @@ if [ "$USE_TASK_ID" = "true" ]; then
 else
   FLAGS="$FLAGS --nouse_task_id"
 fi
+
+FLAGS="$FLAGS --eval_episodes=$EVAL_EPISODES"
+FLAGS="$FLAGS --k_sample_k=$K_SAMPLE_K"
 
 # ---- run -------------------------------------------------------------------
 cd "$REPO_DIR"

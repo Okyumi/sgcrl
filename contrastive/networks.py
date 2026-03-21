@@ -41,6 +41,41 @@ def apply_policy_and_sample(
   return apply_and_sample
 
 
+def apply_policy_k_sample_argmax(networks, k=20):
+  """K-sample-argmax: sample K actions, score with critic, pick the best.
+
+  The critic inner product phi(s,a)^T psi(g) scores how well action a moves
+  from state s toward goal g.  Sampling K candidates and picking the
+  highest-scoring one can improve evaluation performance over the
+  deterministic policy mean.
+
+  Args:
+    networks: ContrastiveNetworks.
+    k: number of candidate actions to sample.
+  Returns:
+    A function (params, key, obs) -> action, where
+    params = (policy_params, q_params).
+  """
+  def apply_and_select(params, key, obs):
+    policy_params, q_params = params
+    dist_params = networks.policy_network.apply(policy_params, obs)
+    keys = jax.random.split(key, k)
+    # Sample K actions: [K, batch, action_dim]
+    actions = jnp.stack([networks.sample(dist_params, ki) for ki in keys])
+
+    def score_one(a):
+      logits, _, _ = networks.q_network.apply(q_params, obs, a)
+      if len(logits.shape) == 3:  # twin_q
+        logits = jnp.min(logits, axis=-1)
+      return jnp.diag(logits)  # [batch]
+
+    scores = jax.vmap(score_one)(actions)  # [K, batch]
+    best_k = jnp.argmax(scores, axis=0)   # [batch]
+    best_actions = actions[best_k, jnp.arange(actions.shape[1])]
+    return best_actions
+  return apply_and_select
+
+
 def make_networks(
     spec,
     obs_dim,

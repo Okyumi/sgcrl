@@ -88,6 +88,10 @@ flags.DEFINE_string('critic_mode', 'persistent',
                     'Critic evolution across tasks: "persistent" (never reset, carry forward), '
                     '"reset" (reinitialize critic each task), '
                     '"cka" (CKA-RL style base+vectors for critic too).')
+flags.DEFINE_integer('eval_episodes', 10,
+                     'Episodes per task for cross-task evaluation (0 to disable).')
+flags.DEFINE_integer('k_sample_k', 0,
+                     'K for K-sample-argmax evaluation (0 = deterministic mean).')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -147,6 +151,64 @@ def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
       data)
   print(f'  [ckpt] Loaded ← {path}', flush=True)
   return data_jax
+
+
+# ---- cross-task evaluation -----------------------------------------------
+
+def evaluate_on_task(
+    eval_env_name, eval_task_id, policy_params, q_params, config,
+    continual_cfg, seed, num_episodes, k_sample_k=0):
+  """Run num_episodes on a task and return success rate."""
+  fixed_goal = FIXED_GOALS[eval_env_name]
+  _tid = eval_task_id if FLAGS.use_task_id else None
+  _ntasks = continual_cfg.num_tasks if FLAGS.use_task_id else None
+  eval_env, eval_obs_dim = contrastive_utils.make_environment(
+      eval_env_name, config.start_index, config.end_index,
+      seed + eval_task_id + 9999,
+      fixed_start_end=fixed_goal,
+      task_id=_tid, num_tasks=_ntasks)
+
+  env_spec = specs.make_environment_spec(eval_env)
+  networks = contrastive.make_networks(
+      env_spec, obs_dim=eval_obs_dim,
+      repr_dim=config.repr_dim, repr_norm=config.repr_norm,
+      twin_q=config.twin_q, use_image_obs=config.use_image_obs,
+      hidden_layer_sizes=config.hidden_layer_sizes)
+
+  if k_sample_k > 0:
+    eval_policy = contrastive_networks.apply_policy_k_sample_argmax(
+        networks, k=k_sample_k)
+    eval_params = (policy_params, q_params)
+  else:
+    eval_policy = contrastive_networks.apply_policy_and_sample(
+        networks, eval_mode=True)
+    eval_params = policy_params
+
+  eval_actor_core = actor_core_lib.batched_feed_forward_to_actor_core(
+      eval_policy)
+
+  class _FixedVarSource:
+    def __init__(self, p):
+      self._p = p
+    def get_variables(self, names):
+      return [self._p for _ in names]
+
+  var_client = variable_utils.VariableClient(
+      _FixedVarSource(eval_params), '', device='cpu')
+  eval_actor = actors.GenericActor(
+      eval_actor_core, jax.random.PRNGKey(seed + eval_task_id + 5000),
+      var_client, backend='cpu')
+
+  observer = contrastive_utils.SuccessObserver()
+  eval_loop = environment_loop.EnvironmentLoop(
+      eval_env, eval_actor, observers=[observer])
+
+  successes = 0
+  for _ in range(num_episodes):
+    result = eval_loop.run_episode()
+    if result.get('success', 0) > 0.5:
+      successes += 1
+  return successes / max(num_episodes, 1)
 
 
 # ---- single task training loop -------------------------------------------
@@ -423,6 +485,10 @@ def train_single_task(
   print(f'  Task {task_id} training complete '
         f'({env_steps_done} env steps, {episodes_done} episodes).', flush=True)
 
+  # ---- snapshot composed policy for cross-task evaluation ----------------
+  # Must happen before pool extraction which changes the composition.
+  composed_policy = learner.get_variables(['policy'])[0]
+
   # ---- extract state for next task ---------------------------------------
   if task_id == 0:
     # After base phase: θ_base = initial_params + v_0 (fully trained policy).
@@ -449,7 +515,7 @@ def train_single_task(
   replay_server.stop()
 
   return (out_theta_base, out_q_params, out_target_q_params,
-          out_q_optimizer_state, pool)
+          out_q_optimizer_state, pool, composed_policy)
 
 
 # ---- main ----------------------------------------------------------------
@@ -521,7 +587,8 @@ def main(_):
     phase = 'BASE' if task_id == 0 else 'CONTINUAL'
     steps = continual_cfg.base_steps if task_id == 0 else continual_cfg.steps_per_task
     print(f'Phase: {phase} | Steps: {steps} | Pool: {len(pool)}/{continual_cfg.k_max}', flush=True)
-    print(f'Critic: {FLAGS.critic_mode} | Task ID: {FLAGS.use_task_id}', flush=True)
+    print(f'Critic: {FLAGS.critic_mode} | Task ID: {FLAGS.use_task_id} | '
+          f'Eval: {FLAGS.eval_episodes}ep, K={FLAGS.k_sample_k}', flush=True)
     print(f'{"="*60}\n', flush=True)
 
     config = contrastive.ContrastiveConfig(**params)
@@ -535,12 +602,15 @@ def main(_):
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,
-                  'use_task_id': FLAGS.use_task_id},
+                  'use_task_id': FLAGS.use_task_id,
+                  'eval_episodes': FLAGS.eval_episodes,
+                  'k_sample_k': FLAGS.k_sample_k},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,
       )
 
-    (theta_base, prev_q, prev_tgt_q, prev_q_opt, pool) = train_single_task(
+    (theta_base, prev_q, prev_tgt_q, prev_q_opt, pool,
+     composed_policy) = train_single_task(
         task_id=task_id,
         env_name=env_name,
         config=config,
@@ -561,9 +631,31 @@ def main(_):
         'q_params': prev_q,
         'target_q_params': prev_tgt_q,
         'q_optimizer_state': prev_q_opt,
+        'composed_policy': composed_policy,
         'task_id': task_id,
         'env_name': env_name,
     }, critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id)
+
+    # ---- cross-task evaluation (forgetting measurement) ------------------
+    if FLAGS.eval_episodes > 0:
+      print(f'\n  Evaluating on all tasks seen so far...', flush=True)
+      eval_results = {}
+      for eval_tid in range(task_id + 1):
+        eval_env_name_i = CONTINUAL_TASK_SEQUENCE[eval_tid]
+        sr = evaluate_on_task(
+            eval_env_name_i, eval_tid, composed_policy, prev_q, config,
+            continual_cfg, seed,
+            num_episodes=FLAGS.eval_episodes,
+            k_sample_k=FLAGS.k_sample_k)
+        eval_results[eval_env_name_i] = sr
+        print(f'    Task {eval_tid} [{eval_env_name_i}]: {sr:.1%}', flush=True)
+      mean_sr = np.mean(list(eval_results.values()))
+      print(f'    Mean success: {mean_sr:.1%}', flush=True)
+      if FLAGS.use_wandb and wandb is not None:
+        wandb_eval = {f'eval/{name}': sr for name, sr in eval_results.items()}
+        wandb_eval['eval/mean_success'] = mean_sr
+        wandb_eval['eval/num_tasks_seen'] = task_id + 1
+        wandb.log(wandb_eval)
 
     # Close the W&B run for this task before starting the next one
     if FLAGS.use_wandb and wandb is not None:
