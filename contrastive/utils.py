@@ -159,6 +159,49 @@ class ObservationFilterWrapper(base.EnvironmentWrapper):
     return self._observation_spec
 
 
+class TaskIDWrapper(base.EnvironmentWrapper):
+  """Appends a one-hot task identifier to the state portion of the observation.
+
+  Given observation layout [state (obs_dim), goal (goal_dim)], produces
+  [state (obs_dim), task_one_hot (num_tasks), goal (goal_dim)].
+  The caller must update obs_dim to obs_dim + num_tasks so that downstream
+  code (critic, actor, obs_to_goal) splits at the correct index.
+  """
+
+  def __init__(self, environment, task_id: int, num_tasks: int, obs_dim: int):
+    super().__init__(environment)
+    self._task_one_hot = np.zeros(num_tasks, dtype=np.float32)
+    self._task_one_hot[task_id] = 1.0
+    self._obs_dim = obs_dim
+    # Update observation spec to reflect the larger observation.
+    old_spec = environment.observation_spec()
+    new_shape = (old_spec.shape[0] + num_tasks,)
+    new_min = self._inject_task_id(old_spec.minimum)
+    new_max = self._inject_task_id(old_spec.maximum)
+    self._observation_spec = dm_env.specs.BoundedArray(
+        shape=new_shape, dtype=old_spec.dtype,
+        minimum=new_min, maximum=new_max, name='state_task_goal')
+
+  def _inject_task_id(self, obs):
+    """Insert task_one_hot between state and goal."""
+    state = obs[:self._obs_dim]
+    goal = obs[self._obs_dim:]
+    return np.concatenate([state, self._task_one_hot, goal])
+
+  def step(self, action):
+    timestep = self._environment.step(action)
+    return timestep._replace(
+        observation=self._inject_task_id(timestep.observation))
+
+  def reset(self):
+    timestep = self._environment.reset()
+    return timestep._replace(
+        observation=self._inject_task_id(timestep.observation))
+
+  def observation_spec(self):
+    return self._observation_spec
+
+
 def make_environment(env_name, start_index, end_index,
                      seed, fixed_start_end = None):
   """Creates the environment.

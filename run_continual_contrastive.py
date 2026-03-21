@@ -24,7 +24,6 @@ For a quick test (2 tasks, 10k steps each):
 import functools
 import os
 import pickle
-import sys
 import time
 from typing import Optional
 
@@ -53,6 +52,7 @@ import contrastive
 from contrastive import config as contrastive_config
 from contrastive import networks as contrastive_networks
 from contrastive import utils as contrastive_utils
+from contrastive.utils import TaskIDWrapper
 from contrastive.continual_config import ContinualConfig, CONTINUAL_TASK_SEQUENCE
 from contrastive.continual_learning import (
     ContinualContrastiveLearner, ContinualTrainingState,
@@ -154,7 +154,17 @@ def train_single_task(
       env_name, config.start_index, config.end_index,
       seed + task_id, fixed_start_end=fixed_goal)
 
+  # Wrap environment to append one-hot task identifier to the state portion.
+  # Observation layout becomes: [state, task_one_hot, goal].
+  # The critic sees the task ID in the state, letting it condition on the task.
+  raw_obs_dim = obs_dim
+  env = TaskIDWrapper(env, task_id=task_id,
+                      num_tasks=continual_cfg.num_tasks, obs_dim=obs_dim)
+  obs_dim = obs_dim + continual_cfg.num_tasks
+
   config.obs_dim = obs_dim
+  # Goal extraction must use only the spatial state (exclude task_one_hot).
+  config.end_index = raw_obs_dim
   config.max_episode_steps = getattr(env, '_step_limit') + 1
   env_spec = specs.make_environment_spec(env)
 
@@ -171,6 +181,8 @@ def train_single_task(
       hidden_layer_sizes=config.hidden_layer_sizes)
 
   # ---- replay buffer (reverb) -------------------------------------------
+  # A fresh replay buffer is created per task so that experience from
+  # previous tasks does not leak into the current task's training data.
   min_replay_traj = config.min_replay_size // config.max_episode_steps
   max_replay_traj = config.max_replay_size // config.max_episode_steps
 
@@ -216,10 +228,8 @@ def train_single_task(
     transition = tree.map_structure(lambda t: tf.roll(t, shift, axis=0), transition)
     return transition
 
-  # Deadlock avoidance: the dataset iterator uses `drop_remainder=True`.
-  # When combined with parallel `interleave` workers, the *first* iterator
-  # batch can become hard to satisfy. Force a single worker for the first
-  # batch to be deterministic.
+  # Use a single interleave worker to avoid deadlocks with drop_remainder
+  # batching during early sampling when the replay buffer is small.
   num_parallel_calls = 1
 
   def _make_dataset(unused):
@@ -252,10 +262,9 @@ def train_single_task(
                         deterministic=False)
   dataset = dataset.prefetch(tf.data.AUTOTUNE)
   iterator = dataset.as_numpy_iterator()
-  # Important: don't start background prefetching to device yet.
-  # Prefetching here can create backpressure/deadlocks during the replay
-  # prefill phase (the learner hasn't started consuming samples).
-  # We'll let `learner.step()` consume the iterator directly after prefill.
+  # No jax_utils.prefetch here: background device prefetching during the
+  # replay prefill phase (before the learner starts consuming) causes
+  # backpressure deadlocks.
 
   # ---- learner -----------------------------------------------------------
   log_dir = os.path.join(
@@ -339,57 +348,23 @@ def train_single_task(
       env, actor, counter=counting.Counter(),
       logger=actor_logger, observers=observers)
 
-  # Prefill replay
-  # NOTE: our dataset iterator batches `config.batch_size * config.num_sgd_steps_per_step`
-  # transitions each time (because we batch *before* unbatching). If the replay
-  # table contains fewer transitions than this, `next(iterator)` can block
-  # on the first learner step waiting for a full batch.
-  required_first_batch_steps = config.batch_size * config.num_sgd_steps_per_step
-  # Prefill must be large enough that `next(iterator)` can immediately
-  # construct its first `drop_remainder` batch. In the training loop we run:
-  # (1) actor/environment episode, then (2) learner.step().
-  # If the learner blocks waiting for a full batch, the actor will not run
-  # again => deadlock. With the single-worker dataset pipeline below, the
-  # tight buffer is typically sufficient.
-  prefill_steps = max(
-      config.min_replay_size,
-      required_first_batch_steps + config.max_episode_steps)
-  print(
-      f'  Prefilling replay ({prefill_steps} steps, min={config.min_replay_size}, '
-      f'required_first_batch={required_first_batch_steps}, '
-      f'episode_buffer={config.max_episode_steps})...',
-      flush=True,
-      file=sys.stderr)
-  # Use explicit per-episode stepping so we can reliably count environment
-  # steps and emit progress. This avoids any ambiguity in `EnvironmentLoop`
-  # step accounting when episodes are always capped by StepLimitWrapper.
-  prefill_steps_done = 0
-  prefill_episodes = 0
-  # Hard safety cap: with max_episode_steps ~= 151 and target prefill_steps
-  # ~16k, we expect < 120 episodes.
-  max_prefill_episodes = 250
-  # Print very frequently so we can see exactly where it gets stuck.
-  progress_every_episodes = 1
-  while prefill_steps_done < prefill_steps:
+  # Prefill replay buffer.  We need enough data for the first learner
+  # batch (batch_size * num_sgd_steps_per_step transitions) plus one
+  # episode buffer, otherwise `next(iterator)` blocks and the
+  # single-process actor-learner loop deadlocks.
+  first_batch = config.batch_size * config.num_sgd_steps_per_step
+  prefill_steps = max(config.min_replay_size,
+                      first_batch + config.max_episode_steps)
+  print(f'  Prefilling replay ({prefill_steps} steps)...', flush=True)
+  prefill_done = 0
+  prefill_eps = 0
+  while prefill_done < prefill_steps:
     result = env_loop.run_episode()
     env_loop._logger.write(result)  # pylint: disable=protected-access
-    episode_steps = int(result['episode_length'])
-    prefill_steps_done += episode_steps
-    prefill_episodes += 1
-    if prefill_episodes % progress_every_episodes == 0:
-      print(
-          f'    Prefill progress: {prefill_steps_done}/{prefill_steps} '
-          f'steps ({prefill_episodes} episodes)...',
-          flush=True,
-          file=sys.stderr)
-    if prefill_episodes > max_prefill_episodes:
-      raise RuntimeError(
-          f'Prefill exceeded episode cap ({prefill_episodes} > {max_prefill_episodes}). '
-          f'Last steps_done={prefill_steps_done}, target={prefill_steps}')
-  print(
-      f'  Prefill complete (steps={prefill_steps_done}, episodes={prefill_episodes}).',
-      flush=True,
-      file=sys.stderr)
+    prefill_done += int(result['episode_length'])
+    prefill_eps += 1
+  print(f'  Prefill complete ({prefill_done} steps, '
+        f'{prefill_eps} episodes).', flush=True)
 
   # Training
   env_steps_done = 0
