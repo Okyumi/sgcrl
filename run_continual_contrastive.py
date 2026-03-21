@@ -106,12 +106,21 @@ FIXED_GOALS = {
 
 # ---- checkpoint utilities ------------------------------------------------
 
-def _ckpt_path(ckpt_dir, task_id, seed):
-  return os.path.join(ckpt_dir, f'seed_{seed}', f'task_{task_id}.pkl')
+def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
+               use_task_id=True):
+  """Checkpoint path keyed by all ablation-relevant config.
+
+  Structure: {ckpt_dir}/critic_{mode}_tid_{bool}/seed_{seed}/task_{id}.pkl
+  This ensures different ablation configurations never share checkpoints.
+  """
+  config_key = f'critic_{critic_mode}_tid_{use_task_id}'
+  return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
+                      f'task_{task_id}.pkl')
 
 
-def save_ckpt(ckpt_dir, task_id, seed, data):
-  path = _ckpt_path(ckpt_dir, task_id, seed)
+def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
+              use_task_id=True):
+  path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_map(
@@ -122,8 +131,14 @@ def save_ckpt(ckpt_dir, task_id, seed, data):
   print(f'  [ckpt] Saved → {path}', flush=True)
 
 
-def load_ckpt(ckpt_dir, task_id, seed):
-  path = _ckpt_path(ckpt_dir, task_id, seed)
+def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
+              use_task_id=True):
+  path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id)
+  if not os.path.exists(path):
+    raise FileNotFoundError(
+        f'No checkpoint found at {path}. Make sure the previous run used '
+        f'the same configuration (seed={seed}, critic_mode={critic_mode}, '
+        f'use_task_id={use_task_id}).')
   with open(path, 'rb') as f:
     data = pickle.load(f)
   # Convert back to JAX arrays
@@ -271,8 +286,9 @@ def train_single_task(
   # backpressure deadlocks.
 
   # ---- learner -----------------------------------------------------------
+  config_tag = f'critic_{critic_mode}_tid_{FLAGS.use_task_id}'
   log_dir = os.path.join(
-      FLAGS.log_dir, f'continual_{config.alg_name}',
+      FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
       f'task{task_id}_{env_name}_s{seed}')
   os.makedirs(log_dir, exist_ok=True)
 
@@ -487,7 +503,9 @@ def main(_):
 
   start_task = FLAGS.start_task
   if start_task > 0:
-    ckpt = load_ckpt(FLAGS.checkpoint_dir, start_task - 1, seed)
+    ckpt = load_ckpt(FLAGS.checkpoint_dir, start_task - 1, seed,
+                      critic_mode=FLAGS.critic_mode,
+                      use_task_id=FLAGS.use_task_id)
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
@@ -545,7 +563,7 @@ def main(_):
         'q_optimizer_state': prev_q_opt,
         'task_id': task_id,
         'env_name': env_name,
-    })
+    }, critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id)
 
     # Close the W&B run for this task before starting the next one
     if FLAGS.use_wandb and wandb is not None:
