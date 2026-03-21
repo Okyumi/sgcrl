@@ -261,7 +261,11 @@ Stdout progress lines (e.g. `Task 0 [sawyer_hammer]: 50000/990000 env steps (334
 
 ### Task conditioning
 
-A one-hot task identifier is appended to the state portion of each observation via `TaskIDWrapper` (defined in `contrastive/utils.py`). The observation layout becomes `[state (obs_dim), task_one_hot (num_tasks), goal (goal_dim)]`, and `obs_dim` is updated to include the task dimensions. This lets the critic's state-action encoder condition on which task is active. The goal extraction (`obs_to_goal`) uses `end_index = raw_obs_dim` to exclude the task identifier from goals.
+A one-hot task identifier is inserted between the state and goal portions of each observation via `TaskIDWrapper` (defined in `contrastive/utils.py`). The raw environment observation `[state_spatial (11), goal_spatial (11)]` becomes `[state_spatial (11), task_one_hot (num_tasks), goal_spatial (11)]`, and `obs_dim` is updated to `11 + num_tasks`.
+
+During training, goals are relabeled as future states from the same trajectory. Since a goal is a future state, it has the **same dimensionality as the state** — including the task identifier. The training observation for the critic is therefore `[state (obs_dim), goal (obs_dim)]` where both halves include the task one-hot.
+
+The `DistanceObserver` uses `end_index = raw_obs_dim` (11) to measure spatial distance only, excluding the task identifier from distance computation.
 
 ### Replay
 
