@@ -141,10 +141,14 @@ class ContinualContrastiveLearner(acme.Learner):
     #   keys containing 'normal_tanh_distribution' → head (mean + log_std)
     #
     # Determine whether gradient masking is needed:
-    #   adapt_heads_only=True → always mask body
-    #   adapt_heads_only=False, encoder_from_base=True → mask body
-    #   adapt_heads_only=False, encoder_from_base=False → no mask
-    self._mask_body_grads = adapt_heads_only or encoder_from_base
+    #   task_id == 0 → NEVER mask (base task trains full policy, like SGCRL)
+    #   task_id > 0, adapt_heads_only=True → mask body
+    #   task_id > 0, adapt_heads_only=False, encoder_from_base=True → mask body
+    #   task_id > 0, adapt_heads_only=False, encoder_from_base=False → no mask
+    if task_id == 0:
+      self._mask_body_grads = False  # base task: train full policy
+    else:
+      self._mask_body_grads = adapt_heads_only or encoder_from_base
 
     # ---- build loss functions ---------------------------------------------
     # We close over `self._pool` for the compose step inside JIT-ed functions
