@@ -214,7 +214,9 @@ The SGCRL actor is `hk.Sequential([MLP(256, 256), NormalTanhDistribution(act_dim
 - **Body (shared encoder):** `mlp/~/linear_0`, `mlp/~/linear_1` — two hidden layers
 - **Head (output):** `normal_tanh_distribution/~/linear` (mean), `normal_tanh_distribution/~/linear_1` (log_std)
 
-When `adapt_heads_only=True` (default, matching CKA-RL):
+**Task 0 (base phase):** Always trains the full policy (body + head) with no gradient masking, regardless of `adapt_heads_only` or `encoder_from_base`. This matches CKA-RL (which trains a full base model) and SGCRL (which has no decomposition). After task 0, θ_base is a fully-trained policy.
+
+**Tasks k > 0:** When `adapt_heads_only=True` (default, matching CKA-RL):
 - v_k only modifies head parameters. Body gradients are zeroed via `tree_map_with_path`.
 - The body always comes from θ_base (frozen from task 0).
 
@@ -339,3 +341,15 @@ The actor maximizes `diag(φ(s,a)^T ψ(g))` — the diagonal of the inner-produc
 ### Head-only vs. full-policy adaptation
 
 CKA-RL only decomposes the actor's output head (`fc_mean`, `fc_logstd`), keeping the shared encoder body frozen from the base task. Our default matches this. The `adapt_heads_only=False` option is available to test whether adapting the full policy helps in the contrastive RL setting.
+
+### Single-task = original SGCRL
+
+With `NUM_TASKS=1, USE_TASK_ID=false, ADAPT_HEADS_ONLY=false`, the behavior matches the original SGCRL implementation exactly:
+- Task 0 trains the full policy with no gradient masking or decomposition
+- θ' = θ_base + 0 + v_0 = θ_base + v_0 (pool is empty, no β_k)
+- Actor loss: `-diag(φ(s,a)^T ψ(g))` (inner product)
+- Critic loss: InfoNCE with CPC (softmax CE + logsumexp penalty)
+- Optimizer: Adam(lr=3e-4, eps=1e-7) for both actor and critic
+- entropy_coefficient=0.0, random_goals=0.5, use_random_actor=True
+
+Even with `ADAPT_HEADS_ONLY=true` (default), task 0 is unaffected because the base task never masks gradients. The defaults match CKA-RL's architecture for subsequent tasks while preserving exact SGCRL behavior for the base task.

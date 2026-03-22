@@ -26,6 +26,8 @@ Combines **SGCRL** (contrastive goal-conditioned RL) with **CKA-RL** (continual 
 
 ## Phase 1: Base Task (k = 0)
 
+The base task trains exactly like standard SGCRL — full policy, no decomposition.
+
 ```
 INIT: θ, (φ, ψ) random.  v_0 ← 0.  V ← {}.  Fresh D_0.
 
@@ -38,15 +40,17 @@ TRAIN on τ_0 for base_steps:
         Update (φ, ψ)
         Target update: (φ̄, ψ̄) ← soft_update(φ, ψ)
       ACTOR: loss = -diag(φ(s, â)^T ψ(g))     [inner product]
-        If adapt_heads_only: zero body gradients
-        Update v_0
+        Update v_0 with FULL gradients (no masking, all layers)
 
 AFTER TASK 0:
-  θ_base ← θ + v_0           [fold delta into base]
+  θ_base ← θ + v_0           [fold delta into base; θ_base is fully trained]
   V ← { zeros_like(θ_base) }
   If critic_mode='cka': q_base ← (φ, ψ)  [freeze critic base]
   Save checkpoint.
 ```
+
+Note: `adapt_heads_only` and `encoder_from_base` have NO effect during task 0.
+The base phase always trains the complete policy (body + head).
 
 ## Phase 2: Continual Tasks (k = 1, ..., N-1)
 
