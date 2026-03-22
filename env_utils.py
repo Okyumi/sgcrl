@@ -710,7 +710,7 @@ class SawyerStickPull(
     handle_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
     dist = np.linalg.norm(self._goal - handle_pos)
     obs = self._get_obs()
-    r = float(dist < 0.05)
+    r = float(dist < 0.12)  # MetaWorld uses 0.12 for stick-pull
     done = False
     info = {}
     return obs, r, done, info
