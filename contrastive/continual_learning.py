@@ -140,15 +140,23 @@ class ContinualContrastiveLearner(acme.Learner):
     #   'mlp/~/linear_0', 'mlp/~/linear_1' → body (shared encoder)
     #   keys containing 'normal_tanh_distribution' → head (mean + log_std)
     #
-    # Determine whether gradient masking is needed:
-    #   task_id == 0 → NEVER mask (base task trains full policy, like SGCRL)
-    #   task_id > 0, adapt_heads_only=True → mask body
-    #   task_id > 0, adapt_heads_only=False, encoder_from_base=True → mask body
-    #   task_id > 0, adapt_heads_only=False, encoder_from_base=False → no mask
-    if task_id == 0:
-      self._mask_body_grads = False  # base task: train full policy
+    # Gradient masking: controls which parts of v_k receive gradients.
+    #
+    # In CKA-RL, the shared encoder (body) is fine-tuned on every task
+    # via normal backprop.  Only the head uses the base+vectors+alpha
+    # decomposition.  To match this:
+    #   - v_k always receives FULL gradients (body + head).
+    #   - After the task, only the HEAD portion of v_k is stored in the
+    #     pool.  The BODY portion is folded into theta_base so the
+    #     encoder keeps evolving.
+    #
+    # encoder_from_base=True freezes the body by masking body gradients.
+    # adapt_heads_only controls what goes into the pool (see post-task
+    # extraction in run_continual_contrastive.py), NOT gradient masking.
+    if encoder_from_base and task_id > 0:
+      self._mask_body_grads = True  # freeze encoder at base task values
     else:
-      self._mask_body_grads = adapt_heads_only or encoder_from_base
+      self._mask_body_grads = False  # body receives gradients (CKA-RL default)
 
     # ---- build loss functions ---------------------------------------------
     # We close over `self._pool` for the compose step inside JIT-ed functions

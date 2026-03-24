@@ -42,7 +42,7 @@ USE_TASK_ID="${USE_TASK_ID:-true}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
 K_SAMPLE_K="${K_SAMPLE_K:-0}"
 ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
-ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-true}"
+ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
 USE_20_TASKS="${USE_20_TASKS:-false}"
 
 # Directories (all on scratch to avoid home quota issues)

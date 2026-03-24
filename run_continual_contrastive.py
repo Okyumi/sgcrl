@@ -96,7 +96,7 @@ flags.DEFINE_integer('k_sample_k', 0,
                      'K for K-sample-argmax evaluation (0 = deterministic mean).')
 flags.DEFINE_bool('adapt_heads_only', True,
                   'Only adapt actor output head layers (CKA-RL default).')
-flags.DEFINE_bool('encoder_from_base', True,
+flags.DEFINE_bool('encoder_from_base', False,
                   'Freeze shared encoder from base task.')
 flags.DEFINE_bool('use_20_tasks', False,
                   'Use 20-task sequence (two passes of the 10-task sequence).')
@@ -236,7 +236,7 @@ def train_single_task(
     prev_q_optimizer_state,
     critic_mode: str = 'persistent',
     adapt_heads_only: bool = True,
-    encoder_from_base: bool = True,
+    encoder_from_base: bool = False,
     task_sequence: tuple = CONTINUAL_TASK_SEQUENCE,
     q_base: Optional[networks_lib.Params] = None,
     critic_pool: Optional[KnowledgePool] = None,
@@ -535,20 +535,42 @@ def train_single_task(
   composed_policy = learner.get_variables(['policy'])[0]
 
   # ---- extract state for next task ---------------------------------------
+  v_k = learner.v_k
+
   if task_id == 0:
     # After base phase: θ_base = initial_params + v_0 (fully trained policy).
     # v_0 captures the training delta.  Fold it into θ_base so that the base
     # is the *trained* policy, matching the pseudocode.
     out_theta_base = jax.tree_map(
-        lambda b, v: b + v, learner.theta_base, learner.v_k)
+        lambda b, v: b + v, learner.theta_base, v_k)
     # Per pseudocode, initialise the pool with a zero vector (not v_0).
-    # The zero vector acts as a "no-op" entry that softmax can allocate
-    # weight to, providing a form of regularisation.
     pool.append(_pytree_zeros_like(out_theta_base))
+  elif adapt_heads_only:
+    # CKA-RL style: body is fine-tuned but NOT decomposed.
+    # - Fold body portion of v_k into theta_base (encoder evolves)
+    # - Store only head portion of v_k in the pool (CKA decomposition)
+    def _split_head_body(base_val, vk_val, path):
+      path_str = '/'.join(str(p) for p in path)
+      is_head = 'normal_tanh_distribution' in path_str
+      if is_head:
+        return base_val, vk_val  # head: base unchanged, v_k goes to pool
+      else:
+        return base_val + vk_val, jnp.zeros_like(vk_val)  # body: fold into base
+
+    out_base_leaves, out_vk_leaves = [], []
+    flat_base, treedef = jax.tree_util.tree_flatten_with_path(learner.theta_base)
+    flat_vk, _ = jax.tree_util.tree_flatten_with_path(v_k)
+    for (path, b), (_, v) in zip(flat_base, flat_vk):
+      new_b, new_v = _split_head_body(b, v, path)
+      out_base_leaves.append(new_b)
+      out_vk_leaves.append(new_v)
+    out_theta_base = treedef.unflatten(out_base_leaves)
+    v_k_head_only = treedef.unflatten(out_vk_leaves)
+    pool.append(v_k_head_only)
   else:
-    out_theta_base = theta_base  # stays frozen
-    # Append the learned knowledge vector v_k to the pool.
-    pool.append(learner.v_k)
+    # Full-policy adaptation: theta_base stays frozen, full v_k goes to pool
+    out_theta_base = theta_base
+    pool.append(v_k)
 
   pool.merge_if_needed()
 
