@@ -456,14 +456,13 @@ class ContinualContrastiveLearner(acme.Learner):
     # ---- initialise state -------------------------------------------------
     key_policy, key_q, rng = jax.random.split(rng, 3)
 
-    if task_id == 0:
-      # Base phase: always initialise from scratch
+    if theta_base is None:
+      # Fresh init (base task or reset_actor mode)
       policy_params = networks.policy_network.init(key_policy)
       q_params = networks.q_network.init(key_q)
       theta_base = policy_params
     else:
       # Continual phase
-      assert theta_base is not None
       policy_params = theta_base  # not used directly; composed via v_k
 
       if critic_mode == 'persistent':

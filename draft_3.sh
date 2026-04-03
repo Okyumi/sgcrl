@@ -44,6 +44,7 @@ K_SAMPLE_K="${K_SAMPLE_K:-0}"
 ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
 ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
 USE_20_TASKS="${USE_20_TASKS:-false}"
+RESET_ACTOR="${RESET_ACTOR:-false}"
 
 # Directories (all on scratch to avoid home quota issues)
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
@@ -122,6 +123,7 @@ echo "K-sample K     : $K_SAMPLE_K"
 echo "Heads only     : $ADAPT_HEADS_ONLY"
 echo "Encoder base   : $ENCODER_FROM_BASE"
 echo "20-task        : $USE_20_TASKS"
+echo "Reset actor    : $RESET_ACTOR"
 echo "Log dir        : $LOG_DIR"
 echo "Checkpoint dir : $CHECKPOINT_DIR"
 echo "============================================================"
@@ -169,6 +171,11 @@ if [ "$USE_20_TASKS" = "true" ]; then
   FLAGS="$FLAGS --use_20_tasks"
 else
   FLAGS="$FLAGS --nouse_20_tasks"
+fi
+if [ "$RESET_ACTOR" = "true" ]; then
+  FLAGS="$FLAGS --reset_actor"
+else
+  FLAGS="$FLAGS --noreset_actor"
 fi
 
 # ---- run -------------------------------------------------------------------
