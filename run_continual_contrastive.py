@@ -243,6 +243,10 @@ def evaluate_on_task(
     result = eval_loop.run_episode()
     if result.get('success', 0) > 0.5:
       successes += 1
+  try:
+    eval_env.close()
+  except Exception:
+    pass
   return successes / max(num_episodes, 1)
 
 
@@ -620,7 +624,10 @@ def train_single_task(
     # - Store only head portion of v_k in the pool (CKA decomposition)
     def _split_head_body(base_val, vk_val, path):
       path_str = '/'.join(str(p) for p in path)
-      is_head = 'normal_tanh_distribution' in path_str
+      # NormalTanhDistribution(hk.Module) is named 'Normal' in __init__.
+      # DictKey('Normal') stringifies as "['Normal']".
+      is_head = ("['Normal']" in path_str
+                 or 'normal_tanh_distribution' in path_str.lower())
       if is_head:
         return base_val, vk_val  # head: base unchanged, v_k goes to pool
       else:
@@ -635,6 +642,11 @@ def train_single_task(
       out_vk_leaves.append(new_v)
     out_theta_base = treedef.unflatten(out_base_leaves)
     v_k_head_only = treedef.unflatten(out_vk_leaves)
+    # Diagnostic: count how many params went to head vs body
+    n_head = sum(1 for v in out_vk_leaves if jnp.any(v != 0))
+    n_body = sum(1 for v in out_vk_leaves if not jnp.any(v != 0))
+    print(f'  [pool] head params: {n_head}, body params (zeroed): {n_body}',
+          flush=True)
     pool.append(v_k_head_only)
   else:
     # Full-policy adaptation: theta_base stays frozen, full v_k goes to pool
@@ -662,8 +674,17 @@ def train_single_task(
       out_critic_pool.append(learner.w_k_critic)
     out_critic_pool.merge_if_needed()
 
-  # Cleanup
+  # Cleanup — release resources to avoid leaking Mujoco contexts
   replay_server.stop()
+  try:
+    env.close()
+  except Exception:
+    pass
+  try:
+    eval_env.close()
+  except Exception:
+    pass
+  del learner, variable_client, eval_variable_client
 
   return (out_theta_base, out_q_params, out_target_q_params,
           out_q_optimizer_state, pool, composed_policy,
