@@ -193,14 +193,43 @@ def make_environment(env_name, start_index, end_index,
   return env, obs_dim
 
 
+def _policy_body_first_bias(params):
+  """Bias of the first policy trunk layer (plain MLP or residual actor_body)."""
+  for key in (
+      'mlp/~/linear_0',
+      'actor_body/linear',
+      'actor_body/~/linear',
+  ):
+    layer = params.get(key)
+    if isinstance(layer, dict) and 'b' in layer:
+      return layer['b']
+  raise KeyError(
+      'InitiallyRandomActor: unknown policy body param keys. Expected '
+      'mlp/~/linear_0 (hk.nets.MLP) or actor_body/linear (ResidualMLP). '
+      f'Got top-level keys: {list(params.keys())}')
+
+
+def _normal_head_action_shape(params):
+  """Shape of policy actions from NormalTanhDistribution loc head bias."""
+  for key in ('Normal/~/linear', 'Normal/linear'):
+    layer = params.get(key)
+    if isinstance(layer, dict) and 'b' in layer:
+      return layer['b'].shape
+  raise KeyError(
+      'InitiallyRandomActor: unknown Normal head keys. Expected '
+      'Normal/~/linear or Normal/linear. '
+      f'Got top-level keys: {list(params.keys())}')
+
+
 class InitiallyRandomActor(actors.GenericActor):
   """Actor that takes actions uniformly at random until the actor is updated.
   """
 
   def select_action(self,
                     observation):
-    if (self._params['mlp/~/linear_0']['b'] == 0).all():
-      shape = self._params['Normal/~/linear']['b'].shape
+    first_bias = _policy_body_first_bias(self._params)
+    if (first_bias == 0).all():
+      shape = _normal_head_action_shape(self._params)
       rng, self._state = jax.random.split(self._state)
       action = jax.random.uniform(key=rng, shape=shape,
                                   minval=-1.0, maxval=1.0)
