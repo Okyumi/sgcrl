@@ -46,6 +46,15 @@ ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
 USE_20_TASKS="${USE_20_TASKS:-false}"
 RESET_ACTOR="${RESET_ACTOR:-false}"
 
+# Scaling architecture
+USE_RESIDUAL="${USE_RESIDUAL:-false}"
+NETWORK_WIDTH="${NETWORK_WIDTH:-256}"
+CRITIC_DEPTH="${CRITIC_DEPTH:-4}"
+ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
+ENERGY_FN="${ENERGY_FN:-inner_product}"
+LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
+SINGLE_TASK="${SINGLE_TASK:-}"
+
 # Directories (all on scratch to avoid home quota issues)
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
@@ -124,6 +133,13 @@ echo "Heads only     : $ADAPT_HEADS_ONLY"
 echo "Encoder base   : $ENCODER_FROM_BASE"
 echo "20-task        : $USE_20_TASKS"
 echo "Reset actor    : $RESET_ACTOR"
+echo "Use residual   : $USE_RESIDUAL"
+echo "Network width  : $NETWORK_WIDTH"
+echo "Critic depth   : $CRITIC_DEPTH"
+echo "Actor depth    : $ACTOR_DEPTH"
+echo "Energy fn      : $ENERGY_FN"
+echo "LSE penalty    : $LOGSUMEXP_PENALTY"
+echo "Single task    : ${SINGLE_TASK:-none}"
 echo "Log dir        : $LOG_DIR"
 echo "Checkpoint dir : $CHECKPOINT_DIR"
 echo "============================================================"
@@ -176,6 +192,21 @@ if [ "$RESET_ACTOR" = "true" ]; then
   FLAGS="$FLAGS --reset_actor"
 else
   FLAGS="$FLAGS --noreset_actor"
+fi
+
+# Scaling architecture flags
+if [ "$USE_RESIDUAL" = "true" ]; then
+  FLAGS="$FLAGS --use_residual"
+else
+  FLAGS="$FLAGS --nouse_residual"
+fi
+FLAGS="$FLAGS --network_width=$NETWORK_WIDTH"
+FLAGS="$FLAGS --critic_depth=$CRITIC_DEPTH"
+FLAGS="$FLAGS --actor_depth=$ACTOR_DEPTH"
+FLAGS="$FLAGS --energy_fn=$ENERGY_FN"
+FLAGS="$FLAGS --logsumexp_penalty=$LOGSUMEXP_PENALTY"
+if [ -n "$SINGLE_TASK" ]; then
+  FLAGS="$FLAGS --single_task=$SINGLE_TASK"
 fi
 
 # ---- run -------------------------------------------------------------------

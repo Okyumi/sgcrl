@@ -67,6 +67,14 @@ class ContrastiveConfig:
   jit: bool = True
   add_mc_to_td: bool = False
   resample_neg_actions: bool = False
+
+  # Scaling architecture flags (matches Wang et al., 2025)
+  use_residual: bool = False  # Use ResidualMLP (LayerNorm+Swish+skip)
+  network_width: int = 256    # Hidden dim for ResidualMLP
+  critic_depth: int = 4       # Dense layers in residual blocks (critic)
+  actor_depth: int = 4        # Dense layers in residual blocks (actor)
+  energy_fn: str = 'inner_product'  # 'inner_product' (SGCRL) or 'l2' (1000-layer)
+  logsumexp_penalty: float = 0.01   # CPC regularizer coefficient
   
   # Parameters that should be overwritten, based on each environment.
   obs_dim: int = -1

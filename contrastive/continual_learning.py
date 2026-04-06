@@ -235,7 +235,7 @@ class ContinualContrastiveLearner(acme.Learner):
           def loss_fn(_logits):
             if config.use_cpc:
               return (optax.softmax_cross_entropy(logits=_logits, labels=I)
-                      + 0.01 * jax.nn.logsumexp(_logits, axis=1)**2)
+                      + config.logsumexp_penalty * jax.nn.logsumexp(_logits, axis=1)**2)
             else:
               return optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I)
           if len(logits.shape) == 3:

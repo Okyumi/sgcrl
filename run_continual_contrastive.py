@@ -103,6 +103,21 @@ flags.DEFINE_bool('use_20_tasks', False,
 flags.DEFINE_bool('reset_actor', False,
                   'Reset actor from scratch each task (no CKA decomposition). '
                   'Combined with critic_mode=reset, this gives a fully independent baseline.')
+# Scaling architecture (Wang et al., 2025: 1000-layer GCRL)
+flags.DEFINE_bool('use_residual', False,
+                  'Use ResidualMLP (LayerNorm+Swish+skip) instead of plain MLP.')
+flags.DEFINE_integer('network_width', 256, 'Hidden dim for ResidualMLP.')
+flags.DEFINE_integer('critic_depth', 4,
+                     'Dense layers in critic residual blocks (multiple of 4).')
+flags.DEFINE_integer('actor_depth', 4,
+                     'Dense layers in actor residual blocks (multiple of 4).')
+flags.DEFINE_string('energy_fn', 'inner_product',
+                    'Critic energy function: inner_product (SGCRL) or l2 (1000-layer paper).')
+flags.DEFINE_float('logsumexp_penalty', 0.01,
+                   'Coefficient for logsumexp regularization in CPC loss.')
+flags.DEFINE_string('single_task', '',
+                    'If set, train on this single environment only '
+                    '(e.g., sawyer_shelf_place). Overrides task sequence.')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -188,7 +203,12 @@ def evaluate_on_task(
       env_spec, obs_dim=eval_obs_dim,
       repr_dim=config.repr_dim, repr_norm=config.repr_norm,
       twin_q=config.twin_q, use_image_obs=config.use_image_obs,
-      hidden_layer_sizes=config.hidden_layer_sizes)
+      hidden_layer_sizes=config.hidden_layer_sizes,
+      use_residual=config.use_residual,
+      network_width=config.network_width,
+      critic_depth=config.critic_depth,
+      actor_depth=config.actor_depth,
+      energy_fn=config.energy_fn)
 
   if k_sample_k > 0:
     eval_policy = contrastive_networks.apply_policy_k_sample_argmax(
@@ -279,7 +299,12 @@ def train_single_task(
       env_spec, obs_dim=obs_dim,
       repr_dim=config.repr_dim, repr_norm=config.repr_norm,
       twin_q=config.twin_q, use_image_obs=config.use_image_obs,
-      hidden_layer_sizes=config.hidden_layer_sizes)
+      hidden_layer_sizes=config.hidden_layer_sizes,
+      use_residual=config.use_residual,
+      network_width=config.network_width,
+      critic_depth=config.critic_depth,
+      actor_depth=config.actor_depth,
+      energy_fn=config.energy_fn)
 
   # ---- replay buffer (reverb) -------------------------------------------
   # A fresh replay buffer is created per task so that experience from
@@ -651,11 +676,18 @@ def main(_):
   seed = FLAGS.seed
 
   # Select task sequence
-  if FLAGS.use_20_tasks:
+  if FLAGS.single_task:
+    # Single-task mode: override sequence with just one environment
+    task_sequence = (FLAGS.single_task,)
+    num_tasks = 1
+    print(f'  [single-task mode] Training on {FLAGS.single_task} only.',
+          flush=True)
+  elif FLAGS.use_20_tasks:
     task_sequence = CONTINUAL_TASK_SEQUENCE_20
+    num_tasks = min(FLAGS.num_tasks, len(task_sequence))
   else:
     task_sequence = CONTINUAL_TASK_SEQUENCE
-  num_tasks = min(FLAGS.num_tasks, len(task_sequence))
+    num_tasks = min(FLAGS.num_tasks, len(task_sequence))
 
   continual_cfg = ContinualConfig(
       num_tasks=num_tasks,
@@ -680,6 +712,12 @@ def main(_):
       'log_dir': FLAGS.log_dir,
       'time_delta_minutes': FLAGS.time_delta_minutes,
       'use_wandb': FLAGS.use_wandb,
+      'use_residual': FLAGS.use_residual,
+      'network_width': FLAGS.network_width,
+      'critic_depth': FLAGS.critic_depth,
+      'actor_depth': FLAGS.actor_depth,
+      'energy_fn': FLAGS.energy_fn,
+      'logsumexp_penalty': FLAGS.logsumexp_penalty,
   }
   if alg == 'contrastive_cpc':
     params['use_cpc'] = True

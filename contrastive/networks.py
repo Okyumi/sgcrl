@@ -76,6 +76,68 @@ def apply_policy_k_sample_argmax(networks, k=20):
   return apply_and_select
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Residual MLP (matches the architecture from Wang et al., 2025:
+# "1000 Layer Networks for Self-Supervised RL")
+#
+# Each residual block = 4x (Dense → LayerNorm → Swish) + skip.
+# Total depth = 4 * num_blocks (Dense layers).  The default "plain MLP"
+# is depth=0 blocks (residual disabled), falling back to hk.nets.MLP.
+# ═══════════════════════════════════════════════════════════════════════
+
+class ResidualMLP(hk.Module):
+  """Residual MLP with LayerNorm + Swish, matching the scaling-CRL paper.
+
+  Architecture:
+    1. Input projection: Dense(width) → LayerNorm → Swish
+    2. N residual blocks, each containing 4 × (Dense → LayerNorm → Swish)
+       with a skip connection:  h_{i+1} = h_i + block(h_i)
+    3. Output projection: Dense(output_dim)
+
+  With depth=4: one residual block (4 Dense layers in the block, plus
+  input projection + output = 6 total Dense layers).
+
+  Args:
+    output_dim: final output dimensionality.
+    width: hidden dimension of all intermediate Dense layers.
+    depth: total Dense layers inside residual blocks. Must be a multiple
+           of 4 (block_size). depth=4 gives 1 block, depth=8 gives 2, etc.
+    name: Haiku module name.
+  """
+
+  def __init__(self, output_dim: int, width: int = 256, depth: int = 4,
+               name: Optional[str] = None):
+    super().__init__(name=name)
+    assert depth >= 4 and depth % 4 == 0, (
+        f'depth must be a positive multiple of 4, got {depth}')
+    self._output_dim = output_dim
+    self._width = width
+    self._num_blocks = depth // 4
+
+  def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+    w_init = hk.initializers.VarianceScaling(
+        1.0 / 3.0, 'fan_in', 'uniform')  # LeCun uniform
+    b_init = hk.initializers.Constant(0.0)
+
+    # --- input projection ---
+    x = hk.Linear(self._width, w_init=w_init, b_init=b_init)(x)
+    x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
+    x = jax.nn.swish(x)
+
+    # --- residual blocks ---
+    for _ in range(self._num_blocks):
+      identity = x
+      for _ in range(4):
+        x = hk.Linear(self._width, w_init=w_init, b_init=b_init)(x)
+        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
+        x = jax.nn.swish(x)
+      x = x + identity
+
+    # --- output projection ---
+    x = hk.Linear(self._output_dim, w_init=w_init, b_init=b_init)(x)
+    return x
+
+
 def make_networks(
     spec,
     obs_dim,
@@ -85,8 +147,27 @@ def make_networks(
     hidden_layer_sizes = (256, 256),
     actor_min_std = 1e-6,
     twin_q = False,
-    use_image_obs = False):
-  """Creates networks used by the agent."""
+    use_image_obs = False,
+    # --- scaling architecture flags ---
+    use_residual = False,
+    network_width = 256,
+    critic_depth = 4,
+    actor_depth = 4,
+    energy_fn = 'inner_product',
+    ):
+  """Creates networks used by the agent.
+
+  Args:
+    use_residual: If True, use ResidualMLP (LayerNorm + Swish + skip) for
+        both actor and critic encoders, matching the 1000-layer GCRL paper.
+        If False (default), use plain hk.nets.MLP with ReLU (SGCRL default).
+    network_width: Hidden dim for ResidualMLP. Ignored if use_residual=False.
+    critic_depth: Total Dense layers in residual blocks for critic encoders.
+        Must be a multiple of 4. Ignored if use_residual=False.
+    actor_depth: Total Dense layers in residual blocks for the actor.
+        Must be a multiple of 4. Ignored if use_residual=False.
+    energy_fn: 'inner_product' (SGCRL default) or 'l2' (1000-layer paper).
+  """
 
   num_dimensions = np.prod(spec.actions.shape, dtype=int)
   TORSO = networks_lib.AtariTorso  # pylint: disable=invalid-name
@@ -112,18 +193,26 @@ def make_networks(
     else:
       state, goal = hidden
 
-    sa_encoder = hk.nets.MLP(
-        list(hidden_layer_sizes) + [repr_dim],
-        w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
-        activation=jax.nn.relu,
-        name='sa_encoder')
-    sa_repr = sa_encoder(jnp.concatenate([state, action], axis=-1))
+    if use_residual:
+      sa_encoder = ResidualMLP(
+          repr_dim, width=network_width, depth=critic_depth,
+          name='sa_encoder')
+      g_encoder = ResidualMLP(
+          repr_dim, width=network_width, depth=critic_depth,
+          name='g_encoder')
+    else:
+      sa_encoder = hk.nets.MLP(
+          list(hidden_layer_sizes) + [repr_dim],
+          w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
+          activation=jax.nn.relu,
+          name='sa_encoder')
+      g_encoder = hk.nets.MLP(
+          list(hidden_layer_sizes) + [repr_dim],
+          w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
+          activation=jax.nn.relu,
+          name='g_encoder')
 
-    g_encoder = hk.nets.MLP(
-        list(hidden_layer_sizes) + [repr_dim],
-        w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
-        activation=jax.nn.relu,
-        name='g_encoder')
+    sa_repr = sa_encoder(jnp.concatenate([state, action], axis=-1))
     g_repr = g_encoder(goal)
 
     if repr_norm:
@@ -138,7 +227,14 @@ def make_networks(
 
     
   def _combine_repr(sa_repr, g_repr):
-    return jax.numpy.einsum('ik,jk->ij', sa_repr, g_repr)
+    if energy_fn == 'l2':
+      # Negative L2 distance (1000-layer paper)
+      return -jnp.sqrt(
+          jnp.sum((sa_repr[:, None, :] - g_repr[None, :, :]) ** 2, axis=-1)
+          + 1e-6)
+    else:
+      # Inner product (SGCRL default)
+      return jax.numpy.einsum('ik,jk->ij', sa_repr, g_repr)
 
   def _critic_fn(obs, action):
     sa_repr, g_repr, hidden = _repr_fn(obs, action)
@@ -157,15 +253,24 @@ def make_networks(
       state, goal = _unflatten_obs(obs)
       obs = jnp.concatenate([state, goal], axis=-1)
       obs = TORSO()(obs)
-    network = hk.Sequential([
-        hk.nets.MLP(
-            list(hidden_layer_sizes),
-            w_init=hk.initializers.VarianceScaling(1.0, 'fan_in', 'uniform'),
-            activation=jax.nn.relu,
-            activate_final=True),
-        NormalTanhDistribution(num_dimensions, min_scale=actor_min_std),
-    ])
-    return network(obs)
+    if use_residual:
+      # ResidualMLP body + NormalTanhDistribution head
+      body = ResidualMLP(
+          network_width, width=network_width, depth=actor_depth,
+          name='actor_body')
+      trunk = body(obs)
+      head = NormalTanhDistribution(num_dimensions, min_scale=actor_min_std)
+      return head(trunk)
+    else:
+      network = hk.Sequential([
+          hk.nets.MLP(
+              list(hidden_layer_sizes),
+              w_init=hk.initializers.VarianceScaling(1.0, 'fan_in', 'uniform'),
+              activation=jax.nn.relu,
+              activate_final=True),
+          NormalTanhDistribution(num_dimensions, min_scale=actor_min_std),
+      ])
+      return network(obs)
 
   policy = hk.without_apply_rng(hk.transform(_actor_fn))
   critic = hk.without_apply_rng(hk.transform(_critic_fn))
