@@ -702,8 +702,34 @@ def main(_):
   q_base = None  # frozen critic base (critic_mode='cka')
   critic_pool = KnowledgePool(k_max=continual_cfg.k_max)
 
+  # ---- determine starting task (auto-resume) ----------------------------
+  # If --start_task is explicitly set (> 0), use that.
+  # If --start_task=0 (default), scan for existing checkpoints with the
+  # same config and automatically resume from the latest completed task.
   start_task = FLAGS.start_task
+  if start_task == 0:
+    # Auto-resume: find the highest task_id with an existing checkpoint
+    for probe_tid in range(num_tasks - 1, -1, -1):
+      probe_path = _ckpt_path(
+          FLAGS.checkpoint_dir, probe_tid, seed,
+          critic_mode=FLAGS.critic_mode,
+          use_task_id=FLAGS.use_task_id,
+          adapt_heads_only=FLAGS.adapt_heads_only,
+          reset_actor=FLAGS.reset_actor)
+      if os.path.exists(probe_path):
+        start_task = probe_tid + 1  # resume from the NEXT task
+        print(f'  [auto-resume] Found checkpoint for task {probe_tid} '
+              f'→ resuming from task {start_task}.', flush=True)
+        break
+    if start_task == 0:
+      print(f'  [auto-resume] No existing checkpoints found. '
+            f'Starting from task 0.', flush=True)
+
   if start_task > 0:
+    if start_task >= num_tasks:
+      print(f'  All {num_tasks} tasks already completed. Nothing to do.',
+            flush=True)
+      return
     ckpt = load_ckpt(FLAGS.checkpoint_dir, start_task - 1, seed,
                       critic_mode=FLAGS.critic_mode,
                       use_task_id=FLAGS.use_task_id,
