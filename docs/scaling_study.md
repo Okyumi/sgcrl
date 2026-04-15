@@ -99,10 +99,10 @@ All experiments use `SINGLE_TASK=sawyer_shelf_place` to override the task sequen
 
 ```bash
 # A1: SGCRL default — plain MLP (256,256), ReLU, inner product, lse=0.01
-SINGLE_TASK=sawyer_shelf_place SEED=6 sbatch draft_3.sh
+SINGLE_TASK=sawyer_shelf_place SEED=11 sbatch draft_3.sh
 
 # A2: Match 1000-layer paper's loss — plain MLP, L2 energy, lse=0.1
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   ENERGY_FN=l2 LOGSUMEXP_PENALTY=0.1 \
   sbatch draft_3.sh
 ```
@@ -111,22 +111,22 @@ SINGLE_TASK=sawyer_shelf_place SEED=6 \
 
 ```bash
 # B1: Depth 4 (1 residual block)
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=4 ACTOR_DEPTH=4 \
   sbatch draft_3.sh
 
 # B2: Depth 8 (2 residual blocks)
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=8 ACTOR_DEPTH=8 \
   sbatch draft_3.sh
 
 # B3: Depth 16 (4 residual blocks)
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=16 ACTOR_DEPTH=16 \
   sbatch draft_3.sh
 
 # B4: Depth 32 (8 residual blocks)
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=32 ACTOR_DEPTH=32 \
   sbatch draft_3.sh
 ```
@@ -135,19 +135,19 @@ SINGLE_TASK=sawyer_shelf_place SEED=6 \
 
 ```bash
 # C1: Depth 4 + L2 + lse=0.1
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=4 ACTOR_DEPTH=4 \
   ENERGY_FN=l2 LOGSUMEXP_PENALTY=0.1 \
   sbatch draft_3.sh
 
 # C2: Depth 8 + L2 + lse=0.1
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=8 ACTOR_DEPTH=8 \
   ENERGY_FN=l2 LOGSUMEXP_PENALTY=0.1 \
   sbatch draft_3.sh
 
 # C3: Depth 16 + L2 + lse=0.1
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=16 ACTOR_DEPTH=16 \
   ENERGY_FN=l2 LOGSUMEXP_PENALTY=0.1 \
   sbatch draft_3.sh
@@ -157,13 +157,13 @@ SINGLE_TASK=sawyer_shelf_place SEED=6 \
 
 ```bash
 # D1: Width 128
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=8 ACTOR_DEPTH=8 \
   NETWORK_WIDTH=128 \
   sbatch draft_3.sh
 
 # D2: Width 512
-SINGLE_TASK=sawyer_shelf_place SEED=6 \
+SINGLE_TASK=sawyer_shelf_place SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=8 ACTOR_DEPTH=8 \
   NETWORK_WIDTH=512 \
   sbatch draft_3.sh
@@ -223,7 +223,7 @@ The scaling flags are in `ContrastiveConfig` and threaded through `make_networks
 
 ```bash
 # Example: continual learning with depth-8 residual networks
-CRITIC_MODE=persistent SEED=6 \
+CRITIC_MODE=persistent SEED=11 \
   USE_RESIDUAL=true CRITIC_DEPTH=8 ACTOR_DEPTH=8 \
   sbatch draft_3.sh
 ```

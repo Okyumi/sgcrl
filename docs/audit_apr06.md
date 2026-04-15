@@ -210,19 +210,19 @@ From the checkpoint (`task_{k}.pkl`):
 
 ```bash
 # First run — starts from task 0
-CRITIC_MODE=persistent SEED=6 sbatch draft_3.sh
+CRITIC_MODE=persistent SEED=20 sbatch draft_3.sh
 
 # Run is preempted after task 4...
 
 # Re-submit the SAME command — auto-detects task 4 checkpoint, resumes from task 5
-CRITIC_MODE=persistent SEED=6 sbatch draft_3.sh
+CRITIC_MODE=persistent SEED=20 sbatch draft_3.sh
 ```
 
 To force restart from scratch, explicitly set `START_TASK=0` and delete existing checkpoints, or use a different seed.
 
 To force start from a specific task:
 ```bash
-START_TASK=3 CRITIC_MODE=persistent SEED=6 sbatch draft_3.sh
+START_TASK=3 CRITIC_MODE=persistent SEED=20 sbatch draft_3.sh
 ```
 
 ---
@@ -234,15 +234,15 @@ START_TASK=3 CRITIC_MODE=persistent SEED=6 sbatch draft_3.sh
 ```bash
 # Exp 1a: Persistent critic (our main hypothesis)
 #   Contrastive critic carried forward across tasks, CKA actor decomposition.
-CRITIC_MODE=persistent SEED=6 sbatch draft_3.sh
+CRITIC_MODE=persistent SEED=20 sbatch draft_3.sh
 
 # Exp 1b: Reset critic (CKA-RL baseline behavior)
 #   Critic reinitialized each task. Closest comparison to CKA-RL.
-CRITIC_MODE=reset SEED=6 sbatch draft_3.sh
+CRITIC_MODE=reset SEED=20 sbatch draft_3.sh
 
 # Exp 1c: CKA critic
 #   Knowledge-vector decomposition applied to critic too.
-CRITIC_MODE=cka SEED=6 sbatch draft_3.sh
+CRITIC_MODE=cka SEED=20 sbatch draft_3.sh
 ```
 
 ### Task ID ablation
@@ -250,7 +250,7 @@ CRITIC_MODE=cka SEED=6 sbatch draft_3.sh
 ```bash
 # Exp 2: Persistent critic, no task ID
 #   Tests whether the agent can distinguish tasks without explicit ID.
-CRITIC_MODE=persistent USE_TASK_ID=false SEED=6 sbatch draft_3.sh
+CRITIC_MODE=persistent USE_TASK_ID=false SEED=20 sbatch draft_3.sh
 ```
 
 ### Actor decomposition ablation
@@ -258,7 +258,7 @@ CRITIC_MODE=persistent USE_TASK_ID=false SEED=6 sbatch draft_3.sh
 ```bash
 # Exp 3: Full-policy adaptation (not head-only)
 #   Entire policy decomposed into base + vectors (not just the head).
-ADAPT_HEADS_ONLY=false ENCODER_FROM_BASE=false SEED=6 sbatch draft_3.sh
+ADAPT_HEADS_ONLY=false ENCODER_FROM_BASE=false SEED=20 sbatch draft_3.sh
 ```
 
 ### Baselines
@@ -266,11 +266,11 @@ ADAPT_HEADS_ONLY=false ENCODER_FROM_BASE=false SEED=6 sbatch draft_3.sh
 ```bash
 # Exp 4: Fully independent (reset actor + reset critic)
 #   No transfer at all. Each task trains from scratch.
-RESET_ACTOR=true CRITIC_MODE=reset SEED=6 sbatch draft_3.sh
+RESET_ACTOR=true CRITIC_MODE=reset SEED=20 sbatch draft_3.sh
 
 # Exp 5: Critic-only transfer (reset actor + persistent critic)
 #   Tests whether contrastive critic alone provides forward transfer.
-RESET_ACTOR=true CRITIC_MODE=persistent SEED=6 sbatch draft_3.sh
+RESET_ACTOR=true CRITIC_MODE=persistent SEED=20 sbatch draft_3.sh
 ```
 
 ### Summary table
