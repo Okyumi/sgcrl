@@ -459,10 +459,17 @@ class ContinualContrastiveLearner(acme.Learner):
     if theta_base is None:
       # Fresh init (base task or reset_actor mode)
       policy_params = networks.policy_network.init(key_policy)
-      q_params = networks.q_network.init(key_q)
       theta_base = policy_params
+
+      # Critic init: on base task always fresh; on reset_actor tasks,
+      # respect the critic_mode flag so critic can persist even when
+      # the actor is reset.
+      if prev_q_params is not None and critic_mode == 'persistent':
+        q_params = prev_q_params
+      else:
+        q_params = networks.q_network.init(key_q)
     else:
-      # Continual phase
+      # Continual phase (CKA actor decomposition active)
       policy_params = theta_base  # not used directly; composed via v_k
 
       if critic_mode == 'persistent':
