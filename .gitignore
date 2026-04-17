@@ -1,13 +1,27 @@
-/wandb
-.ipynb_checkpoints/
-contrastive/.ipynb_checkpoints/
+# Python
 __pycache__/
-contrastive/__pycache__/
-*.pyc
-*.out
-tensorboard/
-joblog/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and checkpoints
 logs/
-archived/
-MetaWorld-2.0.0/
+*.pkl
+wandb/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Media
 *.mp4
+*.zip
+*.pdf
