@@ -1,7 +1,5 @@
 # Continual Goal-Conditioned RL with Contrastive Critics
 
-Combines **goal-conditioned contrastive RL** (SGCRL) with **CKA-RL**-style continual knowledge adaptation. The contrastive critic learns reachability structure that may transfer across tasks, unlike SAC's task-specific Q-values.
-
 ## Quick Start
 
 ```bash
