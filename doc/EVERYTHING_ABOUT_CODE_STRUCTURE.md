@@ -1,9 +1,5 @@
 # Code Structure Guide
 
-Complete reference for the repository's code organization, showing where each component lives and how to modify it.
-
----
-
 ## Repository Layout
 
 ```
