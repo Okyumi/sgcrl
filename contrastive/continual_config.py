@@ -32,11 +32,11 @@ class ContinualConfig:
   task_sequence: Tuple[str, ...] = CONTINUAL_TASK_SEQUENCE
 
   # -- Steps ------------------------------------------------------------------
-  steps_per_task: int = 1_000_000       # env steps per task
-  base_steps: int = 1_000_000           # env steps for the base (first) task
+  steps_per_task: int = 8_000_000       # env steps per task
+  base_steps: int = 8_000_000           # env steps for the base (first) task
 
   # -- Knowledge pool ---------------------------------------------------------
-  k_max: int = 5                        # max pool size before merging
+  k_max: int = 10                       # max pool size before merging
 
   # -- Actor CKA parameters --------------------------------------------------
   beta_init_std: float = 0.01           # std for β_k initialisation (N(0, std))

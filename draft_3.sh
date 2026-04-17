@@ -32,7 +32,7 @@ ALG="${ALG:-contrastive_cpc}"
 NUM_TASKS="${NUM_TASKS:-10}"
 STEPS_PER_TASK="${STEPS_PER_TASK:-8000000}"
 BASE_STEPS="${BASE_STEPS:-8000000}"
-K_MAX="${K_MAX:-5}"
+K_MAX="${K_MAX:-10}"
 START_TASK="${START_TASK:-0}"
 EVAL_EVERY="${EVAL_EVERY:-50000}"
 USE_WANDB="${USE_WANDB:-true}"
@@ -44,7 +44,7 @@ K_SAMPLE_K="${K_SAMPLE_K:-0}"
 ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
 ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
 USE_20_TASKS="${USE_20_TASKS:-false}"
-RESET_ACTOR="${RESET_ACTOR:-false}"
+ACTOR_MODE="${ACTOR_MODE:-cka}"
 
 # Scaling architecture
 USE_RESIDUAL="${USE_RESIDUAL:-false}"
@@ -132,7 +132,7 @@ echo "K-sample K     : $K_SAMPLE_K"
 echo "Heads only     : $ADAPT_HEADS_ONLY"
 echo "Encoder base   : $ENCODER_FROM_BASE"
 echo "20-task        : $USE_20_TASKS"
-echo "Reset actor    : $RESET_ACTOR"
+echo "Actor mode     : $ACTOR_MODE"
 echo "Use residual   : $USE_RESIDUAL"
 echo "Network width  : $NETWORK_WIDTH"
 echo "Critic depth   : $CRITIC_DEPTH"
@@ -188,11 +188,7 @@ if [ "$USE_20_TASKS" = "true" ]; then
 else
   FLAGS="$FLAGS --nouse_20_tasks"
 fi
-if [ "$RESET_ACTOR" = "true" ]; then
-  FLAGS="$FLAGS --reset_actor"
-else
-  FLAGS="$FLAGS --noreset_actor"
-fi
+FLAGS="$FLAGS --actor_mode=$ACTOR_MODE"
 
 # Scaling architecture flags
 if [ "$USE_RESIDUAL" = "true" ]; then

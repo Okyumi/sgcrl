@@ -13,8 +13,8 @@ For each task:
 
 Usage:
   python run_continual_contrastive.py \
-      --seed=42 --num_tasks=10 --steps_per_task=1000000 \
-      --alg=contrastive_cpc --k_max=5
+      --seed=42 --num_tasks=10 --steps_per_task=8000000 \
+      --alg=contrastive_cpc --k_max=10
 
 For a quick test (2 tasks, 10k steps each):
   python run_continual_contrastive.py \
@@ -74,9 +74,9 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer('seed', 42, 'Random seed.')
 flags.DEFINE_string('alg', 'contrastive_cpc', 'Algorithm variant.')
 flags.DEFINE_integer('num_tasks', 10, 'Number of tasks.')
-flags.DEFINE_integer('steps_per_task', 1_000_000, 'Env steps per continual task.')
-flags.DEFINE_integer('base_steps', 1_000_000, 'Env steps for base task.')
-flags.DEFINE_integer('k_max', 5, 'Max pool size before merging.')
+flags.DEFINE_integer('steps_per_task', 8_000_000, 'Env steps per continual task.')
+flags.DEFINE_integer('base_steps', 8_000_000, 'Env steps for base task.')
+flags.DEFINE_integer('k_max', 10, 'Max pool size before merging.')
 flags.DEFINE_string('checkpoint_dir', 'logs/continual_checkpoints',
                     'Directory for cross-task checkpoints.')
 flags.DEFINE_bool('use_wandb', False, 'Log to W&B.')
@@ -100,9 +100,11 @@ flags.DEFINE_bool('encoder_from_base', False,
                   'Freeze shared encoder from base task.')
 flags.DEFINE_bool('use_20_tasks', False,
                   'Use 20-task sequence (two passes of the 10-task sequence).')
-flags.DEFINE_bool('reset_actor', False,
-                  'Reset actor from scratch each task (no CKA decomposition). '
-                  'Combined with critic_mode=reset, this gives a fully independent baseline.')
+flags.DEFINE_string('actor_mode', 'cka',
+                    'Actor evolution across tasks: '
+                    '"cka" (CKA-RL style base+vectors, default), '
+                    '"reset" (reinitialize actor each task), '
+                    '"persistent" (single network, continuously trained, no decomposition).')
 # Scaling architecture (Wang et al., 2025: 1000-layer GCRL)
 flags.DEFINE_bool('use_residual', False,
                   'Use ResidualMLP (LayerNorm+Swish+skip) instead of plain MLP.')
@@ -137,22 +139,22 @@ FIXED_GOALS = {
 # ---- checkpoint utilities ------------------------------------------------
 
 def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
-               use_task_id=True, adapt_heads_only=True, reset_actor=False):
+               use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   """Checkpoint path keyed by all ablation-relevant config.
 
-  Structure: {ckpt_dir}/critic_{mode}_tid_{bool}_heads_{bool}_areset_{bool}/seed_{seed}/task_{id}.pkl
+  Structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
   This ensures different ablation configurations never share checkpoints.
   """
-  config_key = (f'critic_{critic_mode}_tid_{use_task_id}'
-                f'_heads_{adapt_heads_only}_areset_{reset_actor}')
+  config_key = (f'actor_{actor_mode}_critic_{critic_mode}'
+                f'_tid_{use_task_id}_heads_{adapt_heads_only}')
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
 
 def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
-              use_task_id=True, adapt_heads_only=True, reset_actor=False):
+              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
-                     adapt_heads_only, reset_actor)
+                     adapt_heads_only, actor_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_map(
@@ -164,15 +166,15 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
 
 
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
-              use_task_id=True, adapt_heads_only=True, reset_actor=False):
+              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
-                     adapt_heads_only, reset_actor)
+                     adapt_heads_only, actor_mode)
   if not os.path.exists(path):
     raise FileNotFoundError(
         f'No checkpoint found at {path}. Make sure the previous run used '
-        f'the same configuration (seed={seed}, critic_mode={critic_mode}, '
-        f'use_task_id={use_task_id}, adapt_heads_only={adapt_heads_only}, '
-        f'reset_actor={reset_actor}).')
+        f'the same configuration (seed={seed}, actor_mode={actor_mode}, '
+        f'critic_mode={critic_mode}, use_task_id={use_task_id}, '
+        f'adapt_heads_only={adapt_heads_only}).')
   with open(path, 'rb') as f:
     data = pickle.load(f)
   # Convert back to JAX arrays
@@ -397,9 +399,8 @@ def train_single_task(
   # backpressure deadlocks.
 
   # ---- learner -----------------------------------------------------------
-  config_tag = (f'critic_{critic_mode}_tid_{FLAGS.use_task_id}'
-                f'_heads_{FLAGS.adapt_heads_only}'
-                f'_areset_{FLAGS.reset_actor}')
+  config_tag = (f'actor_{FLAGS.actor_mode}_critic_{critic_mode}'
+                f'_tid_{FLAGS.use_task_id}_heads_{FLAGS.adapt_heads_only}')
   log_dir = os.path.join(
       FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
       f'task{task_id}_{env_name}_s{seed}')
@@ -774,7 +775,7 @@ def main(_):
           critic_mode=FLAGS.critic_mode,
           use_task_id=FLAGS.use_task_id,
           adapt_heads_only=FLAGS.adapt_heads_only,
-          reset_actor=FLAGS.reset_actor)
+          actor_mode=FLAGS.actor_mode)
       if os.path.exists(probe_path):
         start_task = probe_tid + 1  # resume from the NEXT task
         print(f'  [auto-resume] Found checkpoint for task {probe_tid} '
@@ -793,7 +794,7 @@ def main(_):
                       critic_mode=FLAGS.critic_mode,
                       use_task_id=FLAGS.use_task_id,
                       adapt_heads_only=FLAGS.adapt_heads_only,
-                      reset_actor=FLAGS.reset_actor)
+                      actor_mode=FLAGS.actor_mode)
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
@@ -817,7 +818,7 @@ def main(_):
     print(f'Critic: {FLAGS.critic_mode} | Task ID: {FLAGS.use_task_id} | '
           f'Heads only: {FLAGS.adapt_heads_only} | '
           f'Encoder base: {FLAGS.encoder_from_base}', flush=True)
-    print(f'Reset actor: {FLAGS.reset_actor} | '
+    print(f'Actor mode: {FLAGS.actor_mode} | '
           f'Eval: {FLAGS.eval_episodes}ep, K={FLAGS.k_sample_k} | '
           f'20-task: {FLAGS.use_20_tasks}', flush=True)
     print(f'{"="*60}\n', flush=True)
@@ -837,18 +838,25 @@ def main(_):
                   'adapt_heads_only': FLAGS.adapt_heads_only,
                   'encoder_from_base': FLAGS.encoder_from_base,
                   'use_20_tasks': FLAGS.use_20_tasks,
-                  'reset_actor': FLAGS.reset_actor,
+                  'actor_mode': FLAGS.actor_mode,
                   'eval_episodes': FLAGS.eval_episodes,
                   'k_sample_k': FLAGS.k_sample_k},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,
       )
 
-    # Reset actor: each task trains a fresh policy independently
-    if FLAGS.reset_actor and task_id > 0:
+    # Actor mode branching before each task
+    if FLAGS.actor_mode == 'reset' and task_id > 0:
+      # Reset: each task trains a fresh policy independently
       _theta_base = None
       _pool = KnowledgePool(k_max=continual_cfg.k_max)
+    elif FLAGS.actor_mode == 'persistent' and task_id > 0:
+      # Persistent: carry forward composed policy, no decomposition
+      # theta_base was set to composed_policy after previous task
+      _theta_base = theta_base
+      _pool = KnowledgePool(k_max=continual_cfg.k_max)  # empty pool
     else:
+      # CKA (default) or task_id == 0
       _theta_base = theta_base
       _pool = pool
 
@@ -872,10 +880,15 @@ def main(_):
         critic_pool=critic_pool,
     )
 
-    # Reset actor: discard actor state, keep only critic
-    if FLAGS.reset_actor:
+    # Post-task actor state management
+    if FLAGS.actor_mode == 'reset':
+      # Discard actor state, keep only critic
       theta_base = None
       pool = KnowledgePool(k_max=continual_cfg.k_max)
+    elif FLAGS.actor_mode == 'persistent':
+      # Fold v_k into theta_base: carry forward composed policy
+      theta_base = composed_policy
+      pool = KnowledgePool(k_max=continual_cfg.k_max)  # empty pool
 
     # Save checkpoint
     ckpt_data = {
@@ -894,7 +907,7 @@ def main(_):
     save_ckpt(FLAGS.checkpoint_dir, task_id, seed, ckpt_data,
               critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
               adapt_heads_only=FLAGS.adapt_heads_only,
-              reset_actor=FLAGS.reset_actor)
+              actor_mode=FLAGS.actor_mode)
 
     # ---- cross-task evaluation (forgetting measurement) ------------------
     if FLAGS.eval_episodes > 0:
