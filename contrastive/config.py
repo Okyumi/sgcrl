@@ -69,7 +69,7 @@ class ContrastiveConfig:
   resample_neg_actions: bool = False
 
   # Scaling architecture flags (matches Wang et al., 2025)
-  use_residual: bool = False  # Use ResidualMLP (LayerNorm+Swish+skip)
+  use_residual: bool = True   # Use ResidualMLP (LayerNorm+Swish+skip)
   network_width: int = 256    # Hidden dim for ResidualMLP
   critic_depth: int = 4       # Dense layers in residual blocks (critic)
   actor_depth: int = 4        # Dense layers in residual blocks (actor)

@@ -149,7 +149,7 @@ def make_networks(
     twin_q = False,
     use_image_obs = False,
     # --- scaling architecture flags ---
-    use_residual = False,
+    use_residual = True,
     network_width = 256,
     critic_depth = 4,
     actor_depth = 4,

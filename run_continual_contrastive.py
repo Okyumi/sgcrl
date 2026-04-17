@@ -106,7 +106,7 @@ flags.DEFINE_string('actor_mode', 'cka',
                     '"reset" (reinitialize actor each task), '
                     '"persistent" (single network, continuously trained, no decomposition).')
 # Scaling architecture (Wang et al., 2025: 1000-layer GCRL)
-flags.DEFINE_bool('use_residual', False,
+flags.DEFINE_bool('use_residual', True,
                   'Use ResidualMLP (LayerNorm+Swish+skip) instead of plain MLP.')
 flags.DEFINE_integer('network_width', 256, 'Hidden dim for ResidualMLP.')
 flags.DEFINE_integer('critic_depth', 4,
