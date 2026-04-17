@@ -17,7 +17,7 @@ python run_continual_contrastive.py \
 
 ## Configurations
 
-Two axes — actor mode and critic mode — give 9 experiment configurations:
+Two axes, actor mode and critic mode, give 9 experiment configurations:
 
 |  | reset critic | persistent critic | cka critic |
 |---|---|---|---|
