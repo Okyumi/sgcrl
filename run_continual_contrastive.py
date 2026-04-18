@@ -552,11 +552,10 @@ def train_single_task(
   next_eval_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   next_evaluator_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   episodes_done = 0
-  # Metric logging schedule: frequent (1x), occasional (5x), rare (20x)
+  # Metric logging schedule: frequent (1x), occasional (5x)
   metrics_every = eval_every if eval_every > 0 else 50000
   next_metrics_frequent = metrics_every if FLAGS.log_rl_metrics else float('inf')
   next_metrics_occasional = 5 * metrics_every if FLAGS.log_rl_metrics else float('inf')
-  next_metrics_rare = 20 * metrics_every if FLAGS.log_rl_metrics else float('inf')
   print(f'  Training for {train_steps} env steps...', flush=True)
 
   while env_steps_done < train_steps:
@@ -620,13 +619,7 @@ def train_single_task(
 
     # ---- RL representation metrics ----------------------------------------
     if env_steps_done >= next_metrics_frequent:
-      # Determine level: rare > occasional > frequent
-      if env_steps_done >= next_metrics_rare:
-        level = 'rare'
-        next_metrics_rare = env_steps_done + 20 * metrics_every
-        next_metrics_occasional = env_steps_done + 5 * metrics_every
-        next_metrics_frequent = env_steps_done + metrics_every
-      elif env_steps_done >= next_metrics_occasional:
+      if env_steps_done >= next_metrics_occasional:
         level = 'occasional'
         next_metrics_occasional = env_steps_done + 5 * metrics_every
         next_metrics_frequent = env_steps_done + metrics_every
