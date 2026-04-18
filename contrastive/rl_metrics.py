@@ -119,7 +119,8 @@ def feature_rank(features: jnp.ndarray, tau: float = 0.99) -> int:
   """Effective rank: minimum k such that top-k singular values
   explain >= tau fraction of total variance."""
   X = features - jnp.mean(features, axis=0, keepdims=True)
-  s = jnp.linalg.svdvals(X)
+  # jnp.linalg.svdvals may not exist in older JAX versions
+  _, s, _ = jnp.linalg.svd(X, full_matrices=False)
   s2 = s * s
   denom = jnp.maximum(jnp.sum(s2), 1e-12)
   cumsum = jnp.cumsum(s2) / denom
@@ -270,24 +271,21 @@ def compute_all_metrics(
   """
   metrics = {}
 
-  # ---- FREQUENT (always computed) ----
-  # Weight norms
+  # ---- FREQUENT (always computed, no forward pass needed) ----
   metrics['actor/weight_norm'] = weight_norm_l2(actor_params)
   metrics['critic/weight_norm'] = weight_norm_l2(q_params)
   metrics['actor/final_layer_norm'] = final_layer_norm(actor_params)
 
-  # Extract features for feature-based metrics
-  sa_feats, g_feats = extract_features(networks, q_params, obs_batch, action_batch)
-
-  # Feature entropy and Gini
-  metrics['critic_sa/entropy'] = feature_entropy(sa_feats)
-  metrics['critic_g/entropy'] = feature_entropy(g_feats)
-  metrics['critic_sa/gini'] = gini_sparsity(sa_feats)
-  metrics['critic_g/gini'] = gini_sparsity(g_feats)
-
   if level in ('occasional', 'rare'):
-    # ---- OCCASIONAL ----
+    # ---- OCCASIONAL (requires forward pass through critic encoders) ----
+    sa_feats, g_feats = extract_features(networks, q_params, obs_batch, action_batch)
     action_dim = action_batch.shape[-1]
+
+    # Feature entropy and Gini
+    metrics['critic_sa/entropy'] = feature_entropy(sa_feats)
+    metrics['critic_g/entropy'] = feature_entropy(g_feats)
+    metrics['critic_sa/gini'] = gini_sparsity(sa_feats)
+    metrics['critic_g/gini'] = gini_sparsity(g_feats)
 
     # Feature rank
     metrics['critic_sa/feature_rank'] = feature_rank(sa_feats, tau=0.99)
