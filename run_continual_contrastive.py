@@ -577,6 +577,19 @@ def train_single_task(
     if episodes_done == 1:
       print(f'  JIT compilation done.', flush=True)
 
+    # Log learner metrics to W&B with global env_steps as x-axis
+    if FLAGS.use_wandb and wandb is not None and env_steps_done >= next_log_at:
+      try:
+        last_metrics = learner.last_metrics
+        if last_metrics:
+          wandb_learner = {f'learner/{k}': float(v)
+                          for k, v in last_metrics.items()
+                          if k not in ('steps', 'learner_steps', 'walltime')}
+          wandb_learner['learner/env_steps'] = env_steps_done
+          wandb.log(wandb_learner)
+      except (AttributeError, Exception):
+        pass  # learner may not have last_metrics yet
+
     # Periodic progress logging (to stdout, independent of TimeFilter)
     if env_steps_done >= next_log_at:
       print(f'  Task {task_id} [{env_name}]: '
@@ -587,7 +600,22 @@ def train_single_task(
     # Periodic evaluation (deterministic policy on current task)
     if env_steps_done >= next_evaluator_at:
       eval_variable_client.update_and_wait()
-      eval_loop.run(num_episodes=FLAGS.eval_episodes)
+      eval_successes = []
+      eval_returns = []
+      for _ in range(FLAGS.eval_episodes):
+        ep_result = eval_loop.run_episode()
+        eval_successes.append(ep_result.get('success', 0))
+        eval_returns.append(float(ep_result.get('episode_return', 0)))
+      eval_success_rate = np.mean(eval_successes)
+      eval_mean_return = np.mean(eval_returns)
+      if FLAGS.use_wandb and wandb is not None:
+        wandb.log({
+            'evaluator/success_rate': eval_success_rate,
+            'evaluator/mean_return': eval_mean_return,
+            'evaluator/env_steps': env_steps_done,
+        })
+      print(f'  [eval @ {env_steps_done}] success={eval_success_rate:.1%} '
+            f'return={eval_mean_return:.1f}', flush=True)
       next_evaluator_at = env_steps_done + eval_every
 
     # ---- RL representation metrics ----------------------------------------

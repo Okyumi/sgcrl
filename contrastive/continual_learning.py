@@ -729,7 +729,14 @@ class ContinualContrastiveLearner(acme.Learner):
       metrics['alpha_weights'] = float(jnp.max(alpha))
       metrics['alpha_scale'] = float(self._state.alpha_scale[0])
 
-    self._logger.write({**metrics, **counts})
+    # Cache last metrics for external logging (e.g., W&B with global step)
+    self._last_metrics = {**metrics, **counts}
+    self._logger.write(self._last_metrics)
+
+  @property
+  def last_metrics(self):
+    """Last metrics dict from the most recent step() call."""
+    return getattr(self, '_last_metrics', {})
 
   # ---- variable source (for actors) ---------------------------------------
 
