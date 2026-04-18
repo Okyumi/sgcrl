@@ -30,19 +30,20 @@ def weight_norm_l2(params) -> float:
 
 
 def final_layer_norm(params) -> float:
-  """L2 norm of the actor's policy head (NormalTanhDistribution) weights.
+  """L2 norm of the actor's policy head (NormalTanhDistribution) loc weight.
 
-  Searches the param pytree for the 'Normal' module's loc layer weight.
+  Haiku flattens module paths into top-level keys like 'Normal/linear'.
+  We look for the loc layer (first linear under 'Normal').
   Returns -1.0 if not found.
   """
-  # Walk all leaves looking for 'Normal' scope with a 'w' param
-  flat, treedef = jax.tree_util.tree_flatten_with_path(params)
-  for path, val in flat:
-    path_str = '/'.join(str(p) for p in path)
-    if "['Normal']" in path_str and "['w']" in path_str and "['linear']" in path_str:
-      # Take only the loc layer (first linear), skip linear_1 (scale layer)
-      if "['linear_1']" not in path_str:
-        return float(jnp.sqrt(jnp.sum(val ** 2)))
+  # Haiku top-level keys are like 'Normal/linear', 'Normal/linear_1', etc.
+  for key in params:
+    key_str = str(key)
+    if 'Normal' in key_str and 'linear' in key_str and 'linear_1' not in key_str:
+      node = params[key]
+      if isinstance(node, dict) and 'w' in node:
+        w = node['w']
+        return float(jnp.sqrt(jnp.sum(w ** 2)))
   return -1.0
 
 
@@ -130,24 +131,25 @@ def extract_features(networks, params, obs, actions):
 
 
 def _get_encoder_final_weights(q_params, encoder_name):
-  """Extract the final Dense layer's weight from a critic encoder."""
-  flat, _ = jax.tree_util.tree_flatten_with_path(q_params)
-  # Find the highest-indexed linear 'w' under the encoder scope
+  """Extract the final Dense layer's weight from a critic encoder.
+
+  Haiku keys look like 'sa_encoder/linear_5' (the highest-indexed linear
+  under the encoder scope). We find the one with the highest index.
+  """
   best_w = None
   best_idx = -1
-  for path, val in flat:
-    path_str = '/'.join(str(p) for p in path)
-    if encoder_name in path_str and "['w']" in path_str and 'linear' in path_str:
-      # Extract the index (linear=0, linear_1=1, etc.)
-      for p in path:
-        s = str(p)
-        if 'linear' in s:
-          suffix = s.replace("['linear", '').replace("']", '').replace('_', '')
-          idx = int(suffix) if suffix.isdigit() else 0
-          if idx > best_idx:
-            best_idx = idx
-            best_w = val
-          break
+  for key in q_params:
+    key_str = str(key)
+    if encoder_name in key_str and 'linear' in key_str:
+      node = q_params[key]
+      if isinstance(node, dict) and 'w' in node:
+        # Extract index: 'sa_encoder/linear' -> 0, 'sa_encoder/linear_5' -> 5
+        parts = key_str.split('linear')
+        suffix = parts[-1].rstrip("']")
+        idx = int(suffix.lstrip('_')) if suffix.lstrip('_').isdigit() else 0
+        if idx > best_idx:
+          best_idx = idx
+          best_w = node['w']
   return best_w
 
 
