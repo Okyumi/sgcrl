@@ -457,22 +457,15 @@ class ContinualContrastiveLearner(acme.Learner):
     key_policy, key_q, rng = jax.random.split(rng, 3)
 
     if theta_base is None:
-      # Fresh init (base task, actor_mode='reset', or actor_mode='persistent'
-      # on task 0).  The actor is initialised from scratch.
+      # Fresh init (base task or reset_actor mode)
       policy_params = networks.policy_network.init(key_policy)
       theta_base = policy_params
 
-      # Critic init: respect critic_mode even when actor is fresh.
+      # Critic init: on base task always fresh; on reset_actor tasks,
+      # respect the critic_mode flag so critic can persist even when
+      # the actor is reset.
       if prev_q_params is not None and critic_mode == 'persistent':
         q_params = prev_q_params
-      elif critic_mode == 'cka' and self._q_base is not None:
-        # Actor is reset but critic uses CKA decomposition:
-        # compose q_params = q_base + pool_c (w_k starts at zero)
-        critic_pool_c = self._compute_critic_pool_contribution()
-        q_params = jax.tree_map(
-            lambda b, pc: b + pc,
-            self._q_base, critic_pool_c)
-        self._critic_pool_c_at_init = critic_pool_c
       else:
         q_params = networks.q_network.init(key_q)
     else:
@@ -523,20 +516,16 @@ class ContinualContrastiveLearner(acme.Learner):
     beta_opt_state = beta_optimizer.init(beta_k)
     alpha_scale_opt_state = alpha_scale_optimizer.init(alpha_scale)
 
-    # Track whether critic was freshly initialised / recomposed.
-    # When True, optimizer state and target Q must be reinitialised.
-    critic_was_freshly_init = (
-        task_id == 0
-        or critic_mode in ('reset', 'cka')
-        or prev_q_optimizer_state is None
-    )
-
-    if critic_was_freshly_init:
+    if critic_mode in ('reset', 'cka') and task_id > 0:
+      # reset: fresh init; cka: q_params recomposed, old opt state invalid
       q_opt_state = q_optimizer.init(q_params)
-    else:
+    elif prev_q_optimizer_state is not None and task_id > 0:
       q_opt_state = prev_q_optimizer_state
+    else:
+      q_opt_state = q_optimizer.init(q_params)
 
-    if critic_was_freshly_init:
+    if critic_mode in ('reset', 'cka') and task_id > 0:
+      # For both reset and cka, target starts from the (re)composed q_params
       target_q = q_params
     else:
       target_q = prev_target_q_params if prev_target_q_params is not None else q_params
@@ -729,14 +718,7 @@ class ContinualContrastiveLearner(acme.Learner):
       metrics['alpha_weights'] = float(jnp.max(alpha))
       metrics['alpha_scale'] = float(self._state.alpha_scale[0])
 
-    # Cache last metrics for external logging (e.g., W&B with global step)
-    self._last_metrics = {**metrics, **counts}
-    self._logger.write(self._last_metrics)
-
-  @property
-  def last_metrics(self):
-    """Last metrics dict from the most recent step() call."""
-    return getattr(self, '_last_metrics', {})
+    self._logger.write({**metrics, **counts})
 
   # ---- variable source (for actors) ---------------------------------------
 
