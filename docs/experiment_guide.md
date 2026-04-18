@@ -197,8 +197,13 @@ Both are run periodically during training (every `eval_every` env steps). The ev
 
 Every `eval_every` env steps during each task's training:
 
-1. **Evaluator run**: Deterministic policy evaluated on the CURRENT task for `eval_episodes` episodes. Logged to `evaluator` logger.
-2. **Cross-task eval**: Deterministic policy evaluated on ALL tasks seen so far (tasks 0 through k). Logged to W&B under `intra_eval/`.
+1. **Evaluator run** (always on): Deterministic policy evaluated on the CURRENT task for `eval_episodes` episodes. Logged to `evaluator` logger.
+2. **Cross-task eval on previous tasks** (off by default): When `--intra_eval_previous_tasks` is enabled, also evaluates on ALL tasks seen so far (tasks 0 through k). Logged to W&B under `intra_eval/`. This is disabled by default because it is expensive — it creates a new environment for every past task at each evaluation interval.
+
+To enable intra-training evaluation on previous tasks:
+```bash
+INTRA_EVAL_PREVIOUS=true sbatch draft_3.sh
+```
 
 ### Post-task evaluation (after training completes)
 
