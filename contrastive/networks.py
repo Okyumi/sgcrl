@@ -254,11 +254,21 @@ def make_networks(
       obs = jnp.concatenate([state, goal], axis=-1)
       obs = TORSO()(obs)
     if use_residual:
-      # ResidualMLP body + NormalTanhDistribution head
+      # ResidualMLP body + normalize + NormalTanhDistribution head.
+      # The body's output projection is linear (no activation), so we add
+      # LayerNorm + Swish before the policy head to match the scaling-CRL
+      # paper's pattern where the head sees well-conditioned features.
+      # Without this, the policy head receives raw linear outputs whose
+      # magnitude depends on the body's skip connections, leading to poor
+      # initial exploration and slow learning.
       body = ResidualMLP(
           network_width, width=network_width, depth=actor_depth,
           name='actor_body')
       trunk = body(obs)
+      trunk = hk.LayerNorm(
+          axis=-1, create_scale=True, create_offset=True,
+          name='actor_trunk_ln')(trunk)
+      trunk = jax.nn.swish(trunk)
       head = NormalTanhDistribution(num_dimensions, min_scale=actor_min_std)
       return head(trunk)
     else:
