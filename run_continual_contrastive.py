@@ -86,7 +86,7 @@ flags.DEFINE_integer('start_task', 0, 'Resume from this task (loads ckpt from ta
 flags.DEFINE_integer('eval_every', 50_000, 'Evaluate every N env steps.')
 flags.DEFINE_integer('time_delta_minutes', 5, 'Checkpoint frequency (minutes).')
 flags.DEFINE_integer('num_actors', 1, 'Number of parallel actors (1 for sequential).')
-flags.DEFINE_bool('use_task_id', True, 'Append one-hot task ID to state and goal.')
+flags.DEFINE_bool('use_task_id', False, 'Append one-hot task ID to state and goal.')
 flags.DEFINE_string('critic_mode', 'persistent',
                     'Critic evolution across tasks: "persistent" (never reset, carry forward), '
                     '"reset" (reinitialize critic each task), '
@@ -147,7 +147,7 @@ FIXED_GOALS = {
 # ---- checkpoint utilities ------------------------------------------------
 
 def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
-               use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
+               use_task_id=False, adapt_heads_only=True, actor_mode='cka'):
   """Checkpoint path keyed by all ablation-relevant config.
 
   Structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
@@ -160,7 +160,7 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
 
 
 def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
-              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
+              use_task_id=False, adapt_heads_only=True, actor_mode='cka'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -174,7 +174,7 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
 
 
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
-              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
+              use_task_id=False, adapt_heads_only=True, actor_mode='cka'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode)
   if not os.path.exists(path):
