@@ -147,7 +147,7 @@ FIXED_GOALS = {
 # ---- checkpoint utilities ------------------------------------------------
 
 def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
-               use_task_id=False, adapt_heads_only=True, actor_mode='cka'):
+               use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   """Checkpoint path keyed by all ablation-relevant config.
 
   Structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
@@ -160,7 +160,7 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
 
 
 def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
-              use_task_id=False, adapt_heads_only=True, actor_mode='cka'):
+              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -174,7 +174,7 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
 
 
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
-              use_task_id=False, adapt_heads_only=True, actor_mode='cka'):
+              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode)
   if not os.path.exists(path):
@@ -620,6 +620,7 @@ def train_single_task(
 
     # ---- RL representation metrics ----------------------------------------
     if env_steps_done >= next_metrics_frequent:
+      # Determine level: rare > occasional > frequent
       if env_steps_done >= next_metrics_rare:
         level = 'rare'
         next_metrics_rare = env_steps_done + 20 * metrics_every
@@ -638,6 +639,9 @@ def train_single_task(
         if transitions is not None:
           current_actor = learner.get_variables(['policy'])[0]
           current_critic = learner.q_params
+          # Use the last preprocessed batch from the learner (already has
+          # goal relabeling applied). The batch has shape [B*N, ...] where
+          # B=batch_size and N=num_sgd_steps_per_step. Take the first B.
           bs = config.batch_size
           obs_sample = jnp.array(transitions.observation[:bs])
           act_sample = jnp.array(transitions.action[:bs])
@@ -904,7 +908,7 @@ def main(_):
     # without this call all wandb.log() silently fail.
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
-          project='continual_gcrl',
+          project='continual_gcrl_paper',
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,
