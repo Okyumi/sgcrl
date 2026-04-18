@@ -59,6 +59,7 @@ from contrastive.continual_learning import (
     ContinualContrastiveLearner, ContinualTrainingState,
 )
 from contrastive.knowledge_pool import KnowledgePool, _pytree_zeros_like
+from contrastive import rl_metrics
 from default import make_default_logger
 
 import env_utils
@@ -96,6 +97,9 @@ flags.DEFINE_bool('intra_eval_previous_tasks', False,
                   'During training on the current task, periodically evaluate on '
                   'all previously learned tasks. Disabled by default because it '
                   'is expensive (creates envs for every past task at each eval interval).')
+flags.DEFINE_bool('log_rl_metrics', True,
+                  'Log representation metrics (weight norms, feature rank, '
+                  'NRC, dormant ratio, intrinsic dimension). Enabled by default.')
 flags.DEFINE_integer('k_sample_k', 0,
                      'K for K-sample-argmax evaluation (0 = deterministic mean).')
 flags.DEFINE_bool('adapt_heads_only', True,
@@ -548,6 +552,11 @@ def train_single_task(
   next_eval_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   next_evaluator_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   episodes_done = 0
+  # Metric logging schedule: frequent (1x), occasional (5x), rare (20x)
+  metrics_every = eval_every if eval_every > 0 else 50000
+  next_metrics_frequent = metrics_every if FLAGS.log_rl_metrics else float('inf')
+  next_metrics_occasional = 5 * metrics_every if FLAGS.log_rl_metrics else float('inf')
+  next_metrics_rare = 20 * metrics_every if FLAGS.log_rl_metrics else float('inf')
   print(f'  Training for {train_steps} env steps...', flush=True)
 
   while env_steps_done < train_steps:
@@ -580,6 +589,39 @@ def train_single_task(
       eval_variable_client.update_and_wait()
       eval_loop.run(num_episodes=FLAGS.eval_episodes)
       next_evaluator_at = env_steps_done + eval_every
+
+    # ---- RL representation metrics ----------------------------------------
+    if env_steps_done >= next_metrics_frequent:
+      if env_steps_done >= next_metrics_rare:
+        level = 'rare'
+        next_metrics_rare = env_steps_done + 20 * metrics_every
+        next_metrics_occasional = env_steps_done + 5 * metrics_every
+        next_metrics_frequent = env_steps_done + metrics_every
+      elif env_steps_done >= next_metrics_occasional:
+        level = 'occasional'
+        next_metrics_occasional = env_steps_done + 5 * metrics_every
+        next_metrics_frequent = env_steps_done + metrics_every
+      else:
+        level = 'frequent'
+        next_metrics_frequent = env_steps_done + metrics_every
+
+      try:
+        current_actor = learner.get_variables(['policy'])[0]
+        current_critic = learner.q_params
+        sample = replay_client.sample(1)
+        sample_data = sample[0].data
+        obs_sample = jnp.array(sample_data.observation[:config.batch_size])
+        act_sample = jnp.array(sample_data.action[:config.batch_size])
+        m = rl_metrics.compute_all_metrics(
+            networks, current_actor, current_critic,
+            obs_sample, act_sample, obs_dim=obs_dim, level=level)
+        if FLAGS.use_wandb and wandb is not None:
+          wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
+          wandb_m['rl_metrics/env_steps'] = env_steps_done
+          wandb_m['rl_metrics/level'] = level
+          wandb.log(wandb_m)
+      except Exception as e:
+        print(f'  [rl_metrics] Warning: {e}', flush=True)
 
     # Intra-task periodic evaluation on all tasks seen so far
     if FLAGS.intra_eval_previous_tasks and env_steps_done >= next_eval_at:
@@ -845,6 +887,7 @@ def main(_):
                   'actor_mode': FLAGS.actor_mode,
                   'eval_episodes': FLAGS.eval_episodes,
                   'intra_eval_previous_tasks': FLAGS.intra_eval_previous_tasks,
+                  'log_rl_metrics': FLAGS.log_rl_metrics,
                   'k_sample_k': FLAGS.k_sample_k},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,

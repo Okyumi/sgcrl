@@ -17,6 +17,7 @@
 │   ├── continual_builder.py        # Continual distributed builder
 │   ├── distributed_layout.py       # LaunchPad distributed layout
 │   ├── learning.py                 # Original (non-continual) learner
+│   ├── rl_metrics.py               # Representation metrics (JAX): norms, rank, NRC, dormancy, ID
 │   └── utils.py                    # Environment creation, observers, InitiallyRandomActor
 ├── env_utils.py                    # MetaWorld Sawyer wrappers + TaskIDGymWrapper
 ├── distributional.py               # NormalTanhDistribution (policy head)

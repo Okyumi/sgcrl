@@ -119,6 +119,7 @@ These are the shared defaults for all experiments unless explicitly overridden:
 | `--eval_every` | int | 50,000 | Evaluate every N env steps (0 to disable) |
 | `--eval_episodes` | int | 10 | Episodes per evaluation |
 | `--intra_eval_previous_tasks` | bool | `False` | Evaluate on all previous tasks during current-task training |
+| `--log_rl_metrics` | bool | `True` | Log representation metrics (weight norms, feature rank, NRC, etc.) |
 | `--k_sample_k` | int | 0 | K-sample-argmax K (0 = deterministic mean) |
 
 ### Infrastructure
@@ -229,6 +230,20 @@ Logged during training by the `evaluator` logger (deterministic policy, `params.
 ### Intra-Task Cross-Evaluation (Optional)
 
 When `--intra_eval_previous_tasks` is enabled, periodically evaluates the current policy on ALL tasks seen so far during training. Logged to W&B under `intra_eval/`. Disabled by default because it is expensive (creates environments for every past task at each eval interval). Enable with `INTRA_EVAL_PREVIOUS=true`.
+
+### RL Representation Metrics (enabled by default)
+
+When `--log_rl_metrics` is enabled (default), representation-quality metrics are logged at three frequency levels:
+
+| Level | Frequency | Metrics logged |
+|---|---|---|
+| Frequent | Every `eval_every` steps | weight_norm, final_layer_norm, feature_entropy, gini_sparsity |
+| Occasional | Every `5 × eval_every` steps | + feature_rank, NRC1, NRC2, dormant_ratio |
+| Rare | Every `20 × eval_every` steps | + intrinsic_dimension (TWO-NN) |
+
+All metrics are logged to W&B under `rl_metrics/`. Disable with `LOG_RL_METRICS=false`.
+
+See `contrastive/rl_metrics.py` for implementation details.
 
 ### Post-Task Cross-Evaluation (Forgetting)
 
