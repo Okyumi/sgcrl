@@ -696,10 +696,11 @@ def train_single_task(
     # - Store only head portion of v_k in the pool (CKA decomposition)
     def _split_head_body(base_val, vk_val, path):
       path_str = '/'.join(str(p) for p in path)
-      # NormalTanhDistribution(hk.Module) is named 'Normal' in __init__.
-      # DictKey('Normal') stringifies as "['Normal']".
-      is_head = ("['Normal']" in path_str
-                 or 'normal_tanh_distribution' in path_str.lower())
+      # Haiku flattens module paths into top-level keys like
+      # 'Normal/linear'. DictKey('Normal/linear') stringifies as
+      # "['Normal/linear']". We check if 'Normal' appears anywhere
+      # in the path string (case-insensitive).
+      is_head = 'Normal' in path_str or 'normal' in path_str.lower()
       if is_head:
         return base_val, vk_val  # head: base unchanged, v_k goes to pool
       else:

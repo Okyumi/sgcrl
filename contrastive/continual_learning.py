@@ -356,9 +356,10 @@ class ContinualContrastiveLearner(acme.Learner):
         if mask_body_grads:
           def _mask_leaf(path, g):
             # Haiku key path is a tuple of DictKey / GetAttrKey objects.
-            # Head leaves have 'normal_tanh_distribution' in their path.
+            # Head leaves have 'Normal' in their Haiku path.
+            # Haiku flattens keys as 'Normal/linear', 'Normal/linear_1'.
             path_str = '/'.join(str(p) for p in path)
-            is_head = 'normal_tanh_distribution' in path_str
+            is_head = 'Normal' in path_str
             return g if is_head else jnp.zeros_like(g)
           a_grads_combined = jax.tree_util.tree_map_with_path(
               _mask_leaf, a_grads_combined)
