@@ -40,14 +40,16 @@ ADD_UID="${ADD_UID:-true}"
 CRITIC_MODE="${CRITIC_MODE:-persistent}"
 USE_TASK_ID="${USE_TASK_ID:-false}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
+INTRA_EVAL_PREVIOUS="${INTRA_EVAL_PREVIOUS:-false}"
+LOG_RL_METRICS="${LOG_RL_METRICS:-true}"
 K_SAMPLE_K="${K_SAMPLE_K:-0}"
 ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
 ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
 USE_20_TASKS="${USE_20_TASKS:-false}"
-RESET_ACTOR="${RESET_ACTOR:-false}"
+ACTOR_MODE="${ACTOR_MODE:-cka}"
 
 # Scaling architecture
-USE_RESIDUAL="${USE_RESIDUAL:-false}"
+USE_RESIDUAL="${USE_RESIDUAL:-true}"
 NETWORK_WIDTH="${NETWORK_WIDTH:-256}"
 CRITIC_DEPTH="${CRITIC_DEPTH:-4}"
 ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
@@ -128,11 +130,13 @@ echo "W&B            : $USE_WANDB"
 echo "Critic mode    : $CRITIC_MODE"
 echo "Use task ID    : $USE_TASK_ID"
 echo "Eval episodes  : $EVAL_EPISODES"
+echo "Intra-eval prev: $INTRA_EVAL_PREVIOUS"
+echo "RL metrics     : $LOG_RL_METRICS"
 echo "K-sample K     : $K_SAMPLE_K"
 echo "Heads only     : $ADAPT_HEADS_ONLY"
 echo "Encoder base   : $ENCODER_FROM_BASE"
 echo "20-task        : $USE_20_TASKS"
-echo "Reset actor    : $RESET_ACTOR"
+echo "Actor mode     : $ACTOR_MODE"
 echo "Use residual   : $USE_RESIDUAL"
 echo "Network width  : $NETWORK_WIDTH"
 echo "Critic depth   : $CRITIC_DEPTH"
@@ -171,6 +175,16 @@ else
 fi
 
 FLAGS="$FLAGS --eval_episodes=$EVAL_EPISODES"
+if [ "$INTRA_EVAL_PREVIOUS" = "true" ]; then
+  FLAGS="$FLAGS --intra_eval_previous_tasks"
+else
+  FLAGS="$FLAGS --nointra_eval_previous_tasks"
+fi
+if [ "$LOG_RL_METRICS" = "true" ]; then
+  FLAGS="$FLAGS --log_rl_metrics"
+else
+  FLAGS="$FLAGS --nolog_rl_metrics"
+fi
 FLAGS="$FLAGS --k_sample_k=$K_SAMPLE_K"
 
 if [ "$ADAPT_HEADS_ONLY" = "true" ]; then
@@ -188,11 +202,7 @@ if [ "$USE_20_TASKS" = "true" ]; then
 else
   FLAGS="$FLAGS --nouse_20_tasks"
 fi
-if [ "$RESET_ACTOR" = "true" ]; then
-  FLAGS="$FLAGS --reset_actor"
-else
-  FLAGS="$FLAGS --noreset_actor"
-fi
+FLAGS="$FLAGS --actor_mode=$ACTOR_MODE"
 
 # Scaling architecture flags
 if [ "$USE_RESIDUAL" = "true" ]; then

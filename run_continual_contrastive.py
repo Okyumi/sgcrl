@@ -13,8 +13,8 @@ For each task:
 
 Usage:
   python run_continual_contrastive.py \
-      --seed=42 --num_tasks=10 --steps_per_task=1000000 \
-      --alg=contrastive_cpc --k_max=5
+      --seed=42 --num_tasks=10 --steps_per_task=8000000 \
+      --alg=contrastive_cpc --k_max=10
 
 For a quick test (2 tasks, 10k steps each):
   python run_continual_contrastive.py \
@@ -59,6 +59,7 @@ from contrastive.continual_learning import (
     ContinualContrastiveLearner, ContinualTrainingState,
 )
 from contrastive.knowledge_pool import KnowledgePool, _pytree_zeros_like
+from contrastive import rl_metrics
 from default import make_default_logger
 
 import env_utils
@@ -74,9 +75,9 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer('seed', 42, 'Random seed.')
 flags.DEFINE_string('alg', 'contrastive_cpc', 'Algorithm variant.')
 flags.DEFINE_integer('num_tasks', 10, 'Number of tasks.')
-flags.DEFINE_integer('steps_per_task', 1_000_000, 'Env steps per continual task.')
-flags.DEFINE_integer('base_steps', 1_000_000, 'Env steps for base task.')
-flags.DEFINE_integer('k_max', 5, 'Max pool size before merging.')
+flags.DEFINE_integer('steps_per_task', 8_000_000, 'Env steps per continual task.')
+flags.DEFINE_integer('base_steps', 8_000_000, 'Env steps for base task.')
+flags.DEFINE_integer('k_max', 10, 'Max pool size before merging.')
 flags.DEFINE_string('checkpoint_dir', 'logs/continual_checkpoints',
                     'Directory for cross-task checkpoints.')
 flags.DEFINE_bool('use_wandb', False, 'Log to W&B.')
@@ -85,13 +86,20 @@ flags.DEFINE_integer('start_task', 0, 'Resume from this task (loads ckpt from ta
 flags.DEFINE_integer('eval_every', 50_000, 'Evaluate every N env steps.')
 flags.DEFINE_integer('time_delta_minutes', 5, 'Checkpoint frequency (minutes).')
 flags.DEFINE_integer('num_actors', 1, 'Number of parallel actors (1 for sequential).')
-flags.DEFINE_bool('use_task_id', True, 'Append one-hot task ID to state and goal.')
+flags.DEFINE_bool('use_task_id', False, 'Append one-hot task ID to state and goal.')
 flags.DEFINE_string('critic_mode', 'persistent',
                     'Critic evolution across tasks: "persistent" (never reset, carry forward), '
                     '"reset" (reinitialize critic each task), '
                     '"cka" (CKA-RL style base+vectors for critic too).')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Episodes per task for cross-task evaluation (0 to disable).')
+flags.DEFINE_bool('intra_eval_previous_tasks', False,
+                  'During training on the current task, periodically evaluate on '
+                  'all previously learned tasks. Disabled by default because it '
+                  'is expensive (creates envs for every past task at each eval interval).')
+flags.DEFINE_bool('log_rl_metrics', True,
+                  'Log representation metrics (weight norms, feature rank, '
+                  'NRC, dormant ratio, intrinsic dimension). Enabled by default.')
 flags.DEFINE_integer('k_sample_k', 0,
                      'K for K-sample-argmax evaluation (0 = deterministic mean).')
 flags.DEFINE_bool('adapt_heads_only', True,
@@ -100,11 +108,13 @@ flags.DEFINE_bool('encoder_from_base', False,
                   'Freeze shared encoder from base task.')
 flags.DEFINE_bool('use_20_tasks', False,
                   'Use 20-task sequence (two passes of the 10-task sequence).')
-flags.DEFINE_bool('reset_actor', False,
-                  'Reset actor from scratch each task (no CKA decomposition). '
-                  'Combined with critic_mode=reset, this gives a fully independent baseline.')
+flags.DEFINE_string('actor_mode', 'cka',
+                    'Actor evolution across tasks: '
+                    '"cka" (CKA-RL style base+vectors, default), '
+                    '"reset" (reinitialize actor each task), '
+                    '"persistent" (single network, continuously trained, no decomposition).')
 # Scaling architecture (Wang et al., 2025: 1000-layer GCRL)
-flags.DEFINE_bool('use_residual', False,
+flags.DEFINE_bool('use_residual', True,
                   'Use ResidualMLP (LayerNorm+Swish+skip) instead of plain MLP.')
 flags.DEFINE_integer('network_width', 256, 'Hidden dim for ResidualMLP.')
 flags.DEFINE_integer('critic_depth', 4,
@@ -137,22 +147,22 @@ FIXED_GOALS = {
 # ---- checkpoint utilities ------------------------------------------------
 
 def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
-               use_task_id=True, adapt_heads_only=True, reset_actor=False):
+               use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   """Checkpoint path keyed by all ablation-relevant config.
 
-  Structure: {ckpt_dir}/critic_{mode}_tid_{bool}_heads_{bool}_areset_{bool}/seed_{seed}/task_{id}.pkl
+  Structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
   This ensures different ablation configurations never share checkpoints.
   """
-  config_key = (f'critic_{critic_mode}_tid_{use_task_id}'
-                f'_heads_{adapt_heads_only}_areset_{reset_actor}')
+  config_key = (f'actor_{actor_mode}_critic_{critic_mode}'
+                f'_tid_{use_task_id}_heads_{adapt_heads_only}')
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
 
 def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
-              use_task_id=True, adapt_heads_only=True, reset_actor=False):
+              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
-                     adapt_heads_only, reset_actor)
+                     adapt_heads_only, actor_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_map(
@@ -164,15 +174,15 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
 
 
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
-              use_task_id=True, adapt_heads_only=True, reset_actor=False):
+              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
-                     adapt_heads_only, reset_actor)
+                     adapt_heads_only, actor_mode)
   if not os.path.exists(path):
     raise FileNotFoundError(
         f'No checkpoint found at {path}. Make sure the previous run used '
-        f'the same configuration (seed={seed}, critic_mode={critic_mode}, '
-        f'use_task_id={use_task_id}, adapt_heads_only={adapt_heads_only}, '
-        f'reset_actor={reset_actor}).')
+        f'the same configuration (seed={seed}, actor_mode={actor_mode}, '
+        f'critic_mode={critic_mode}, use_task_id={use_task_id}, '
+        f'adapt_heads_only={adapt_heads_only}).')
   with open(path, 'rb') as f:
     data = pickle.load(f)
   # Convert back to JAX arrays
@@ -397,9 +407,8 @@ def train_single_task(
   # backpressure deadlocks.
 
   # ---- learner -----------------------------------------------------------
-  config_tag = (f'critic_{critic_mode}_tid_{FLAGS.use_task_id}'
-                f'_heads_{FLAGS.adapt_heads_only}'
-                f'_areset_{FLAGS.reset_actor}')
+  config_tag = (f'actor_{FLAGS.actor_mode}_critic_{critic_mode}'
+                f'_tid_{FLAGS.use_task_id}_heads_{FLAGS.adapt_heads_only}')
   log_dir = os.path.join(
       FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
       f'task{task_id}_{env_name}_s{seed}')
@@ -543,6 +552,11 @@ def train_single_task(
   next_eval_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   next_evaluator_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   episodes_done = 0
+  # Metric logging schedule: frequent (1x), occasional (5x), rare (20x)
+  metrics_every = eval_every if eval_every > 0 else 50000
+  next_metrics_frequent = metrics_every if FLAGS.log_rl_metrics else float('inf')
+  next_metrics_occasional = 5 * metrics_every if FLAGS.log_rl_metrics else float('inf')
+  next_metrics_rare = 20 * metrics_every if FLAGS.log_rl_metrics else float('inf')
   print(f'  Training for {train_steps} env steps...', flush=True)
 
   while env_steps_done < train_steps:
@@ -563,6 +577,19 @@ def train_single_task(
     if episodes_done == 1:
       print(f'  JIT compilation done.', flush=True)
 
+    # Log learner metrics to W&B with global env_steps as x-axis
+    if FLAGS.use_wandb and wandb is not None and env_steps_done >= next_log_at:
+      try:
+        last_metrics = learner.last_metrics
+        if last_metrics:
+          wandb_learner = {f'learner/{k}': float(v)
+                          for k, v in last_metrics.items()
+                          if k not in ('steps', 'learner_steps', 'walltime')}
+          wandb_learner['learner/env_steps'] = env_steps_done
+          wandb.log(wandb_learner)
+      except (AttributeError, Exception):
+        pass  # learner may not have last_metrics yet
+
     # Periodic progress logging (to stdout, independent of TimeFilter)
     if env_steps_done >= next_log_at:
       print(f'  Task {task_id} [{env_name}]: '
@@ -573,11 +600,61 @@ def train_single_task(
     # Periodic evaluation (deterministic policy on current task)
     if env_steps_done >= next_evaluator_at:
       eval_variable_client.update_and_wait()
-      eval_loop.run(num_episodes=FLAGS.eval_episodes)
+      eval_successes = []
+      eval_returns = []
+      for _ in range(FLAGS.eval_episodes):
+        ep_result = eval_loop.run_episode()
+        eval_successes.append(ep_result.get('success', 0))
+        eval_returns.append(float(ep_result.get('episode_return', 0)))
+      eval_success_rate = np.mean(eval_successes)
+      eval_mean_return = np.mean(eval_returns)
+      if FLAGS.use_wandb and wandb is not None:
+        wandb.log({
+            'evaluator/success_rate': eval_success_rate,
+            'evaluator/mean_return': eval_mean_return,
+            'evaluator/env_steps': env_steps_done,
+        })
+      print(f'  [eval @ {env_steps_done}] success={eval_success_rate:.1%} '
+            f'return={eval_mean_return:.1f}', flush=True)
       next_evaluator_at = env_steps_done + eval_every
 
+    # ---- RL representation metrics ----------------------------------------
+    if env_steps_done >= next_metrics_frequent:
+      # Determine level: rare > occasional > frequent
+      if env_steps_done >= next_metrics_rare:
+        level = 'rare'
+        next_metrics_rare = env_steps_done + 20 * metrics_every
+        next_metrics_occasional = env_steps_done + 5 * metrics_every
+        next_metrics_frequent = env_steps_done + metrics_every
+      elif env_steps_done >= next_metrics_occasional:
+        level = 'occasional'
+        next_metrics_occasional = env_steps_done + 5 * metrics_every
+        next_metrics_frequent = env_steps_done + metrics_every
+      else:
+        level = 'frequent'
+        next_metrics_frequent = env_steps_done + metrics_every
+
+      try:
+        current_actor = learner.get_variables(['policy'])[0]
+        current_critic = learner.q_params
+        # Sample a batch from the replay buffer for feature extraction
+        sample = replay_client.sample(1)
+        sample_data = sample[0].data
+        obs_sample = jnp.array(sample_data.observation[:config.batch_size])
+        act_sample = jnp.array(sample_data.action[:config.batch_size])
+        m = rl_metrics.compute_all_metrics(
+            networks, current_actor, current_critic,
+            obs_sample, act_sample, obs_dim=obs_dim, level=level)
+        if FLAGS.use_wandb and wandb is not None:
+          wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
+          wandb_m['rl_metrics/env_steps'] = env_steps_done
+          wandb_m['rl_metrics/level'] = level
+          wandb.log(wandb_m)
+      except Exception as e:
+        print(f'  [rl_metrics] Warning: {e}', flush=True)
+
     # Intra-task periodic evaluation on all tasks seen so far
-    if env_steps_done >= next_eval_at:
+    if FLAGS.intra_eval_previous_tasks and env_steps_done >= next_eval_at:
       next_eval_at = env_steps_done + eval_every
       current_policy = learner.get_variables(['policy'])[0]
       current_q = learner.q_params
@@ -774,7 +851,7 @@ def main(_):
           critic_mode=FLAGS.critic_mode,
           use_task_id=FLAGS.use_task_id,
           adapt_heads_only=FLAGS.adapt_heads_only,
-          reset_actor=FLAGS.reset_actor)
+          actor_mode=FLAGS.actor_mode)
       if os.path.exists(probe_path):
         start_task = probe_tid + 1  # resume from the NEXT task
         print(f'  [auto-resume] Found checkpoint for task {probe_tid} '
@@ -793,7 +870,7 @@ def main(_):
                       critic_mode=FLAGS.critic_mode,
                       use_task_id=FLAGS.use_task_id,
                       adapt_heads_only=FLAGS.adapt_heads_only,
-                      reset_actor=FLAGS.reset_actor)
+                      actor_mode=FLAGS.actor_mode)
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
@@ -817,7 +894,7 @@ def main(_):
     print(f'Critic: {FLAGS.critic_mode} | Task ID: {FLAGS.use_task_id} | '
           f'Heads only: {FLAGS.adapt_heads_only} | '
           f'Encoder base: {FLAGS.encoder_from_base}', flush=True)
-    print(f'Reset actor: {FLAGS.reset_actor} | '
+    print(f'Actor mode: {FLAGS.actor_mode} | '
           f'Eval: {FLAGS.eval_episodes}ep, K={FLAGS.k_sample_k} | '
           f'20-task: {FLAGS.use_20_tasks}', flush=True)
     print(f'{"="*60}\n', flush=True)
@@ -829,7 +906,7 @@ def main(_):
     # without this call all wandb.log() silently fail.
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
-          project='continual_gcrl',
+          project='continual_gcrl_paper',
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,
@@ -837,18 +914,27 @@ def main(_):
                   'adapt_heads_only': FLAGS.adapt_heads_only,
                   'encoder_from_base': FLAGS.encoder_from_base,
                   'use_20_tasks': FLAGS.use_20_tasks,
-                  'reset_actor': FLAGS.reset_actor,
+                  'actor_mode': FLAGS.actor_mode,
                   'eval_episodes': FLAGS.eval_episodes,
+                  'intra_eval_previous_tasks': FLAGS.intra_eval_previous_tasks,
+                  'log_rl_metrics': FLAGS.log_rl_metrics,
                   'k_sample_k': FLAGS.k_sample_k},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,
       )
 
-    # Reset actor: each task trains a fresh policy independently
-    if FLAGS.reset_actor and task_id > 0:
+    # Actor mode branching before each task
+    if FLAGS.actor_mode == 'reset' and task_id > 0:
+      # Reset: each task trains a fresh policy independently
       _theta_base = None
       _pool = KnowledgePool(k_max=continual_cfg.k_max)
+    elif FLAGS.actor_mode == 'persistent' and task_id > 0:
+      # Persistent: carry forward composed policy, no decomposition
+      # theta_base was set to composed_policy after previous task
+      _theta_base = theta_base
+      _pool = KnowledgePool(k_max=continual_cfg.k_max)  # empty pool
     else:
+      # CKA (default) or task_id == 0
       _theta_base = theta_base
       _pool = pool
 
@@ -872,10 +958,15 @@ def main(_):
         critic_pool=critic_pool,
     )
 
-    # Reset actor: discard actor state, keep only critic
-    if FLAGS.reset_actor:
+    # Post-task actor state management
+    if FLAGS.actor_mode == 'reset':
+      # Discard actor state, keep only critic
       theta_base = None
       pool = KnowledgePool(k_max=continual_cfg.k_max)
+    elif FLAGS.actor_mode == 'persistent':
+      # Fold v_k into theta_base: carry forward composed policy
+      theta_base = composed_policy
+      pool = KnowledgePool(k_max=continual_cfg.k_max)  # empty pool
 
     # Save checkpoint
     ckpt_data = {
@@ -894,7 +985,7 @@ def main(_):
     save_ckpt(FLAGS.checkpoint_dir, task_id, seed, ckpt_data,
               critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
               adapt_heads_only=FLAGS.adapt_heads_only,
-              reset_actor=FLAGS.reset_actor)
+              actor_mode=FLAGS.actor_mode)
 
     # ---- cross-task evaluation (forgetting measurement) ------------------
     if FLAGS.eval_episodes > 0:
