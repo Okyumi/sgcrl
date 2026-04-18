@@ -878,7 +878,7 @@ def main(_):
     # without this call all wandb.log() silently fail.
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
-          project='continual_gcrl',
+          project='continual_gcrl_paper',
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,
