@@ -86,7 +86,7 @@ flags.DEFINE_integer('start_task', 0, 'Resume from this task (loads ckpt from ta
 flags.DEFINE_integer('eval_every', 50_000, 'Evaluate every N env steps.')
 flags.DEFINE_integer('time_delta_minutes', 5, 'Checkpoint frequency (minutes).')
 flags.DEFINE_integer('num_actors', 1, 'Number of parallel actors (1 for sequential).')
-flags.DEFINE_bool('use_task_id', True, 'Append one-hot task ID to state and goal.')
+flags.DEFINE_bool('use_task_id', False, 'Append one-hot task ID to state and goal.')
 flags.DEFINE_string('critic_mode', 'persistent',
                     'Critic evolution across tasks: "persistent" (never reset, carry forward), '
                     '"reset" (reinitialize critic each task), '
