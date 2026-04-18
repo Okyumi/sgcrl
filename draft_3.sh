@@ -40,6 +40,7 @@ ADD_UID="${ADD_UID:-true}"
 CRITIC_MODE="${CRITIC_MODE:-persistent}"
 USE_TASK_ID="${USE_TASK_ID:-true}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
+INTRA_EVAL_PREVIOUS="${INTRA_EVAL_PREVIOUS:-false}"
 K_SAMPLE_K="${K_SAMPLE_K:-0}"
 ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
 ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
@@ -128,6 +129,7 @@ echo "W&B            : $USE_WANDB"
 echo "Critic mode    : $CRITIC_MODE"
 echo "Use task ID    : $USE_TASK_ID"
 echo "Eval episodes  : $EVAL_EPISODES"
+echo "Intra-eval prev: $INTRA_EVAL_PREVIOUS"
 echo "K-sample K     : $K_SAMPLE_K"
 echo "Heads only     : $ADAPT_HEADS_ONLY"
 echo "Encoder base   : $ENCODER_FROM_BASE"
@@ -171,6 +173,11 @@ else
 fi
 
 FLAGS="$FLAGS --eval_episodes=$EVAL_EPISODES"
+if [ "$INTRA_EVAL_PREVIOUS" = "true" ]; then
+  FLAGS="$FLAGS --intra_eval_previous_tasks"
+else
+  FLAGS="$FLAGS --nointra_eval_previous_tasks"
+fi
 FLAGS="$FLAGS --k_sample_k=$K_SAMPLE_K"
 
 if [ "$ADAPT_HEADS_ONLY" = "true" ]; then

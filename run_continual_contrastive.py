@@ -92,6 +92,10 @@ flags.DEFINE_string('critic_mode', 'persistent',
                     '"cka" (CKA-RL style base+vectors for critic too).')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Episodes per task for cross-task evaluation (0 to disable).')
+flags.DEFINE_bool('intra_eval_previous_tasks', False,
+                  'During training on the current task, periodically evaluate on '
+                  'all previously learned tasks. Disabled by default because it '
+                  'is expensive (creates envs for every past task at each eval interval).')
 flags.DEFINE_integer('k_sample_k', 0,
                      'K for K-sample-argmax evaluation (0 = deterministic mean).')
 flags.DEFINE_bool('adapt_heads_only', True,
@@ -578,7 +582,7 @@ def train_single_task(
       next_evaluator_at = env_steps_done + eval_every
 
     # Intra-task periodic evaluation on all tasks seen so far
-    if env_steps_done >= next_eval_at:
+    if FLAGS.intra_eval_previous_tasks and env_steps_done >= next_eval_at:
       next_eval_at = env_steps_done + eval_every
       current_policy = learner.get_variables(['policy'])[0]
       current_q = learner.q_params
@@ -840,6 +844,7 @@ def main(_):
                   'use_20_tasks': FLAGS.use_20_tasks,
                   'actor_mode': FLAGS.actor_mode,
                   'eval_episodes': FLAGS.eval_episodes,
+                  'intra_eval_previous_tasks': FLAGS.intra_eval_previous_tasks,
                   'k_sample_k': FLAGS.k_sample_k},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,

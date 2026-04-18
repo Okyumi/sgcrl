@@ -118,6 +118,7 @@ These are the shared defaults for all experiments unless explicitly overridden:
 |---|---|---|---|
 | `--eval_every` | int | 50,000 | Evaluate every N env steps (0 to disable) |
 | `--eval_episodes` | int | 10 | Episodes per evaluation |
+| `--intra_eval_previous_tasks` | bool | `False` | Evaluate on all previous tasks during current-task training |
 | `--k_sample_k` | int | 0 | K-sample-argmax K (0 = deterministic mean) |
 
 ### Infrastructure
@@ -223,11 +224,15 @@ SINGLE_TASK=sawyer_shelf_place SEED=6 sbatch draft_3.sh
 
 ### Per-Task Training Performance
 
-Logged during training by the `evaluator` logger (deterministic policy, `params.mode()`). This gives the learning curve for the current task.
+Logged during training by the `evaluator` logger (deterministic policy, `params.mode()`). This gives the learning curve for the current task. Always enabled.
 
-### Cross-Task Evaluation (Forgetting)
+### Intra-Task Cross-Evaluation (Optional)
 
-After each task k, evaluate the current composed policy on all tasks 0..k. Logged to W&B under `eval/`. This measures how much past task performance degrades.
+When `--intra_eval_previous_tasks` is enabled, periodically evaluates the current policy on ALL tasks seen so far during training. Logged to W&B under `intra_eval/`. Disabled by default because it is expensive (creates environments for every past task at each eval interval). Enable with `INTRA_EVAL_PREVIOUS=true`.
+
+### Post-Task Cross-Evaluation (Forgetting)
+
+After each task k completes training, evaluate the final composed policy on all tasks 0..k. Logged to W&B under `eval/`. This always runs and measures how much past task performance degrades.
 
 ### Forward Transfer
 
