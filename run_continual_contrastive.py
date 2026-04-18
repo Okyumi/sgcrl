@@ -634,20 +634,20 @@ def train_single_task(
         next_metrics_frequent = env_steps_done + metrics_every
 
       try:
-        current_actor = learner.get_variables(['policy'])[0]
-        current_critic = learner.q_params
-        sample = replay_client.sample(1)
-        sample_data = sample[0].data
-        obs_sample = jnp.array(sample_data.observation[:config.batch_size])
-        act_sample = jnp.array(sample_data.action[:config.batch_size])
-        m = rl_metrics.compute_all_metrics(
-            networks, current_actor, current_critic,
-            obs_sample, act_sample, obs_dim=obs_dim, level=level)
-        if FLAGS.use_wandb and wandb is not None:
-          wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
-          wandb_m['rl_metrics/env_steps'] = env_steps_done
-          wandb_m['rl_metrics/level'] = level
-          wandb.log(wandb_m)
+        transitions = learner.last_transitions
+        if transitions is not None:
+          current_actor = learner.get_variables(['policy'])[0]
+          current_critic = learner.q_params
+          bs = config.batch_size
+          obs_sample = jnp.array(transitions.observation[:bs])
+          act_sample = jnp.array(transitions.action[:bs])
+          m = rl_metrics.compute_all_metrics(
+              networks, current_actor, current_critic,
+              obs_sample, act_sample, obs_dim=obs_dim, level=level)
+          if FLAGS.use_wandb and wandb is not None:
+            wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
+            wandb_m['rl_metrics/env_steps'] = env_steps_done
+            wandb.log(wandb_m)
       except Exception as e:
         print(f'  [rl_metrics] Warning: {e}', flush=True)
 

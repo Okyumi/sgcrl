@@ -694,6 +694,9 @@ class ContinualContrastiveLearner(acme.Learner):
       sample = next(self._iterator)
       transitions = types.Transition(*sample.data)
 
+      # Cache the last batch for external use (e.g., rl_metrics)
+      self._last_transitions = transitions
+
       # Compute pool contribution (outside JIT for variable-length pool)
       pool_c = self._compute_pool_contribution()
 
@@ -737,6 +740,11 @@ class ContinualContrastiveLearner(acme.Learner):
   def last_metrics(self):
     """Last metrics dict from the most recent step() call."""
     return getattr(self, '_last_metrics', {})
+
+  @property
+  def last_transitions(self):
+    """Last preprocessed batch of transitions from the most recent step()."""
+    return getattr(self, '_last_transitions', None)
 
   # ---- variable source (for actors) ---------------------------------------
 
