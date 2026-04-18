@@ -56,16 +56,28 @@ def final_layer_norm(params, layer_key='Normal') -> float:
     params: Haiku parameter pytree.
     layer_key: top-level key of the final module.
   Returns:
-    L2 norm of the weight matrix, or 0.0 if not found.
+    L2 norm of the weight matrix, or -1.0 if not found.
   """
-  if layer_key in params and '~' in params[layer_key]:
-    sub = params[layer_key]['~']
-    # Find the first linear layer
-    for k in ('linear', 'linear_0'):
-      if k in sub and 'w' in sub[k]:
-        w = sub[k]['w']
-        return float(jnp.sqrt(jnp.sum(w ** 2)))
-  return 0.0
+  # Direct key lookup
+  if layer_key in params:
+    node = params[layer_key]
+    if isinstance(node, dict) and '~' in node:
+      sub = node['~']
+      for k in ('linear', 'linear_0'):
+        if k in sub and isinstance(sub[k], dict) and 'w' in sub[k]:
+          w = sub[k]['w']
+          return float(jnp.sqrt(jnp.sum(w ** 2)))
+  # Fallback: search all top-level keys for one containing 'Normal'
+  for key in params:
+    if 'Normal' in str(key) or 'normal' in str(key).lower():
+      node = params[key]
+      if isinstance(node, dict) and '~' in node:
+        sub = node['~']
+        for k in ('linear', 'linear_0'):
+          if k in sub and isinstance(sub[k], dict) and 'w' in sub[k]:
+            w = sub[k]['w']
+            return float(jnp.sqrt(jnp.sum(w ** 2)))
+  return -1.0  # return -1 to distinguish 'not found' from 'zero'
 
 
 def feature_entropy(features: jnp.ndarray, eps: float = 1e-8) -> float:
@@ -314,9 +326,16 @@ def _get_encoder_final_weights(q_params, encoder_name):
   Works for both plain MLP ('sa_encoder/~/linear_2') and ResidualMLP
   ('sa_encoder/~/linear' — the output projection).
   """
-  if encoder_name not in q_params:
+  # Try direct key, then fallback search
+  node = q_params.get(encoder_name)
+  if node is None:
+    for key in q_params:
+      if encoder_name in str(key):
+        node = q_params[key]
+        break
+  if node is None or not isinstance(node, dict):
     return None
-  sub = q_params[encoder_name]
+  sub = node
   if '~' not in sub:
     return None
   layers = sub['~']
