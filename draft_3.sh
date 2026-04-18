@@ -41,6 +41,7 @@ CRITIC_MODE="${CRITIC_MODE:-persistent}"
 USE_TASK_ID="${USE_TASK_ID:-true}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
 INTRA_EVAL_PREVIOUS="${INTRA_EVAL_PREVIOUS:-false}"
+LOG_RL_METRICS="${LOG_RL_METRICS:-true}"
 K_SAMPLE_K="${K_SAMPLE_K:-0}"
 ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
 ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
@@ -130,6 +131,7 @@ echo "Critic mode    : $CRITIC_MODE"
 echo "Use task ID    : $USE_TASK_ID"
 echo "Eval episodes  : $EVAL_EPISODES"
 echo "Intra-eval prev: $INTRA_EVAL_PREVIOUS"
+echo "RL metrics     : $LOG_RL_METRICS"
 echo "K-sample K     : $K_SAMPLE_K"
 echo "Heads only     : $ADAPT_HEADS_ONLY"
 echo "Encoder base   : $ENCODER_FROM_BASE"
@@ -177,6 +179,11 @@ if [ "$INTRA_EVAL_PREVIOUS" = "true" ]; then
   FLAGS="$FLAGS --intra_eval_previous_tasks"
 else
   FLAGS="$FLAGS --nointra_eval_previous_tasks"
+fi
+if [ "$LOG_RL_METRICS" = "true" ]; then
+  FLAGS="$FLAGS --log_rl_metrics"
+else
+  FLAGS="$FLAGS --nolog_rl_metrics"
 fi
 FLAGS="$FLAGS --k_sample_k=$K_SAMPLE_K"
 
