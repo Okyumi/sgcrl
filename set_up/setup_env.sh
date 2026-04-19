@@ -152,6 +152,19 @@ echo "============================================="
 # dm-acme with jax and tf extras (but constrain transitive deps)
 pip install "dm-acme[jax,tf]"
 
+# dm-acme[jax,tf] may pull TensorFlow 2.1x; dm-launchpad's courier .so expects TF 2.8 + protobuf 3.19
+# (otherwise: ImportError undefined symbol scc_info_TensorProto_... in libserialization_cc_proto.so).
+pip install --force-reinstall \
+  "tensorflow==2.8.2" \
+  "tensorflow-probability==0.15.0" \
+  "tensorflow-estimator==2.8.0" \
+  "keras==2.8.0" \
+  "protobuf==3.19.6" \
+  "tensorboard==2.8.0"
+
+# TF reinstall often upgrades NumPy to 2.x; JAX 0.4.x + jaxlib/ml_dtypes need NumPy 1.x.
+pip install --force-reinstall --no-deps "numpy==1.26.4"
+
 # Pin jax-ecosystem packages to mutually compatible versions.
 # setup_gpu.sh will later replace jax/jaxlib with GPU builds,
 # but we need valid versions now to avoid broken transitive deps.
@@ -167,8 +180,9 @@ pip install ml_dtypes==0.2.0
 pip install gymnasium-robotics
 
 # scipy - uninstall first then install specific version
+# scipy>=1.11 removed scipy.linalg.tril; JAX 0.4.7 (GPU stack) still imports it via optax.
 pip uninstall scipy -y
-pip install scipy==1.12
+pip install "scipy==1.10.1"
 
 # torch CPU-only (only used for tensorboard SummaryWriter, no GPU needed)
 # This avoids downloading ~2GB of bundled nvidia-cu12 libraries
