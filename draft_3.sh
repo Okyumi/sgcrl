@@ -56,6 +56,7 @@ ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
 ENERGY_FN="${ENERGY_FN:-inner_product}"
 LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
 SINGLE_TASK="${SINGLE_TASK:-}"
+ACTOR_RESET_INTERVAL="${ACTOR_RESET_INTERVAL:-0}"
 
 # Directories (all on scratch to avoid home quota issues)
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
@@ -144,6 +145,7 @@ echo "Actor depth    : $ACTOR_DEPTH"
 echo "Energy fn      : $ENERGY_FN"
 echo "LSE penalty    : $LOGSUMEXP_PENALTY"
 echo "Single task    : ${SINGLE_TASK:-none}"
+echo "Actor reset    : $ACTOR_RESET_INTERVAL"
 echo "Log dir        : $LOG_DIR"
 echo "Checkpoint dir : $CHECKPOINT_DIR"
 echo "============================================================"
@@ -218,6 +220,7 @@ FLAGS="$FLAGS --logsumexp_penalty=$LOGSUMEXP_PENALTY"
 if [ -n "$SINGLE_TASK" ]; then
   FLAGS="$FLAGS --single_task=$SINGLE_TASK"
 fi
+FLAGS="$FLAGS --actor_reset_interval=$ACTOR_RESET_INTERVAL"
 
 # ---- run -------------------------------------------------------------------
 cd "$REPO_DIR"

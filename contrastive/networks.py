@@ -26,6 +26,7 @@ class ContrastiveNetworks:
   repr_fn: Callable[Ellipsis, networks_lib.NetworkOutput]
   sample: networks_lib.SampleFn
   sample_eval: Optional[networks_lib.SampleFn] = None
+  actor_repr_fn: Optional[Callable] = None  # (params, obs) -> trunk features
 
 
 def apply_policy_and_sample(
@@ -282,9 +283,38 @@ def make_networks(
       ])
       return network(obs)
 
+  # Actor trunk feature extractor: runs the body + LayerNorm + Swish but
+  # NOT the NormalTanhDistribution head.  Shares the same parameter tree as
+  # policy_network; Haiku reuses params by module name.
+  def _actor_repr_fn(obs):
+    if use_image_obs:
+      state, goal = _unflatten_obs(obs)
+      obs = jnp.concatenate([state, goal], axis=-1)
+      obs = TORSO()(obs)
+    if use_residual:
+      body = ResidualMLP(
+          network_width, width=network_width, depth=actor_depth,
+          name='actor_body')
+      trunk = body(obs)
+      trunk = hk.LayerNorm(
+          axis=-1, create_scale=True, create_offset=True,
+          name='actor_trunk_ln')(trunk)
+      trunk = jax.nn.swish(trunk)
+      return trunk
+    else:
+      # Plain MLP: return the last hidden layer output (before
+      # NormalTanh head).  We rebuild the same MLP as _actor_fn.
+      mlp = hk.nets.MLP(
+          list(hidden_layer_sizes),
+          w_init=hk.initializers.VarianceScaling(1.0, 'fan_in', 'uniform'),
+          activation=jax.nn.relu,
+          activate_final=True)
+      return mlp(obs)
+
   policy = hk.without_apply_rng(hk.transform(_actor_fn))
   critic = hk.without_apply_rng(hk.transform(_critic_fn))
   repr_fn = hk.without_apply_rng(hk.transform(_repr_fn))
+  actor_repr = hk.without_apply_rng(hk.transform(_actor_repr_fn))
 
   # Create dummy observations and actions to create network parameters.
   dummy_action = utils.zeros_like(spec.actions)
@@ -301,4 +331,5 @@ def make_networks(
       log_prob=lambda params, actions: params.log_prob(actions),
       sample=lambda params, key: params.sample(seed=key),
       sample_eval=lambda params, key: params.mode(),
+      actor_repr_fn=actor_repr.apply,
       )
