@@ -175,6 +175,17 @@ def extract_features(networks, params, obs, actions):
   return sa_repr, g_repr
 
 
+def extract_critic_hidden_features(networks, q_params, obs, actions):
+  """Extract pre-output-projection hidden features from critic encoders.
+
+  Returns (sa_hidden, g_hidden) each of shape [batch, network_width],
+  or (None, None) if critic_hidden_repr_fn is not available (plain MLP).
+  """
+  if networks.critic_hidden_repr_fn is None:
+    return None, None
+  return networks.critic_hidden_repr_fn(q_params, obs, actions)
+
+
 def extract_actor_features(networks, actor_params, obs):
   """Extract actor trunk features (body output before the policy head).
 
@@ -196,9 +207,7 @@ def _get_encoder_final_weights(q_params, encoder_name):
   Haiku keys look like 'sa_encoder/linear_5' (the highest-indexed linear
   under the encoder scope). We find the one with the highest index.
 
-  NOTE: Currently unused because critic NRC2 is not meaningful (see
-  compute_all_metrics). Kept for potential future use with pre-projection
-  feature extraction.
+  Used for critic NRC2 with pre-output-projection hidden features.
   """
   best_w = None
   best_idx = -1
@@ -289,14 +298,16 @@ def compute_all_metrics(
     metrics['critic_sa/nrc1'] = compute_nrc1(sa_feats, target_dim=action_dim)
     metrics['critic_g/nrc1'] = compute_nrc1(g_feats, target_dim=1)
 
-    # NOTE: critic NRC2 is omitted. The critic encoder's output IS the
-    # repr_dim features (e.g. 64-d). The output projection weight maps
-    # hidden (256-d) → repr (64-d). Since the features are already
-    # post-projection, and rank(W) = repr_dim, projecting 64-d features
-    # onto the 64-d row space gives the identity — NRC2 ≡ 0 always.
-    # For a meaningful NRC2 we'd need pre-projection (hidden-layer)
-    # features, which are not extracted.  The actor NRC2 IS meaningful
-    # because actor features are the pre-head (256-d) trunk output.
+    # Critic NRC2: uses pre-output-projection hidden features (width-dim)
+    # paired with the output projection weight (width → repr_dim).
+    sa_hidden, g_hidden = extract_critic_hidden_features(
+        networks, q_params, obs_batch, action_batch)
+    sa_final_w = _get_encoder_final_weights(q_params, 'sa_encoder')
+    g_final_w = _get_encoder_final_weights(q_params, 'g_encoder')
+    if sa_hidden is not None and sa_final_w is not None:
+      metrics['critic_sa/nrc2'] = compute_nrc2(sa_hidden, sa_final_w)
+    if g_hidden is not None and g_final_w is not None:
+      metrics['critic_g/nrc2'] = compute_nrc2(g_hidden, g_final_w)
 
     metrics['critic_sa/dormant_ratio'] = dormant_ratio(sa_feats)
     metrics['critic_g/dormant_ratio'] = dormant_ratio(g_feats)

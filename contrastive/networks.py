@@ -27,6 +27,7 @@ class ContrastiveNetworks:
   sample: networks_lib.SampleFn
   sample_eval: Optional[networks_lib.SampleFn] = None
   actor_repr_fn: Optional[Callable] = None  # (params, obs) -> trunk features
+  critic_hidden_repr_fn: Optional[Callable] = None  # (params, obs, act) -> (sa_hidden, g_hidden)
 
 
 def apply_policy_and_sample(
@@ -115,7 +116,8 @@ class ResidualMLP(hk.Module):
     self._width = width
     self._num_blocks = depth // 4
 
-  def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+  def __call__(self, x: jnp.ndarray,
+               return_hidden: bool = False) -> jnp.ndarray:
     w_init = hk.initializers.VarianceScaling(
         1.0 / 3.0, 'fan_in', 'uniform')  # LeCun uniform
     b_init = hk.initializers.Constant(0.0)
@@ -133,6 +135,9 @@ class ResidualMLP(hk.Module):
         x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
         x = jax.nn.swish(x)
       x = x + identity
+
+    if return_hidden:
+      return x  # [batch, width] — pre-output-projection hidden state
 
     # --- output projection ---
     x = hk.Linear(self._output_dim, w_init=w_init, b_init=b_init)(x)
@@ -283,6 +288,33 @@ def make_networks(
       ])
       return network(obs)
 
+  # Critic hidden feature extractor: runs the encoder body (input projection
+  # + residual blocks) but stops before the output projection.  Returns
+  # the width-dimensional hidden state.  Shares params with q_network via
+  # matching Haiku module names.
+  def _critic_hidden_repr_fn(obs, action):
+    if use_image_obs:
+      state, goal = _unflatten_obs(obs)
+      state = TORSO()(state)
+      goal = TORSO()(goal)
+    else:
+      state = obs[:, :obs_dim]
+      goal = obs[:, obs_dim:]
+    if use_residual:
+      sa_encoder = ResidualMLP(
+          repr_dim, width=network_width, depth=critic_depth,
+          name='sa_encoder')
+      g_encoder = ResidualMLP(
+          repr_dim, width=network_width, depth=critic_depth,
+          name='g_encoder')
+      sa_hidden = sa_encoder(jnp.concatenate([state, action], axis=-1),
+                             return_hidden=True)
+      g_hidden = g_encoder(goal, return_hidden=True)
+      return sa_hidden, g_hidden
+    else:
+      # Plain MLP: no clean hidden-layer extraction; return None.
+      return None, None
+
   # Actor trunk feature extractor: runs the body + LayerNorm + Swish but
   # NOT the NormalTanhDistribution head.  Shares the same parameter tree as
   # policy_network; Haiku reuses params by module name.
@@ -314,6 +346,7 @@ def make_networks(
   policy = hk.without_apply_rng(hk.transform(_actor_fn))
   critic = hk.without_apply_rng(hk.transform(_critic_fn))
   repr_fn = hk.without_apply_rng(hk.transform(_repr_fn))
+  critic_hidden_repr = hk.without_apply_rng(hk.transform(_critic_hidden_repr_fn))
   actor_repr = hk.without_apply_rng(hk.transform(_actor_repr_fn))
 
   # Create dummy observations and actions to create network parameters.
@@ -332,4 +365,5 @@ def make_networks(
       sample=lambda params, key: params.sample(seed=key),
       sample_eval=lambda params, key: params.mode(),
       actor_repr_fn=actor_repr.apply,
+      critic_hidden_repr_fn=critic_hidden_repr.apply,
       )
