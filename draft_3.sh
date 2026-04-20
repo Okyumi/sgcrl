@@ -6,9 +6,9 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32GB
 #SBATCH --partition=nvidia
-#SBATCH --output=/scratch/zd662/sgcrl/logs/continual/%j.out
-#SBATCH --error=/scratch/zd662/sgcrl/logs/continual/%j.err
-#SBATCH --mail-user=zd662@nyu.edu
+#SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%j.out
+#SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%j.err
+#SBATCH --mail-user=yd2247@nyu.edu
 
 # ==========================================================================
 # Continual Goal-Conditioned Contrastive RL – SLURM launcher
@@ -56,12 +56,15 @@ ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
 ENERGY_FN="${ENERGY_FN:-inner_product}"
 LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
 SINGLE_TASK="${SINGLE_TASK:-}"
-ACTOR_RESET_INTERVAL="${ACTOR_RESET_INTERVAL:-0}"
+ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-true}"
+ACTOR_RESET_DORMANT_THRESHOLD="${ACTOR_RESET_DORMANT_THRESHOLD:-0.1}"
+ACTOR_RESET_WARMUP="${ACTOR_RESET_WARMUP:-200000}"
+ACTOR_RESET_MAX="${ACTOR_RESET_MAX:-3}"
 
 # Directories (all on scratch to avoid home quota issues)
-LOG_DIR="${LOG_DIR:-/scratch/zd662/sgcrl/logs/continual}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/zd662/sgcrl/logs/continual_checkpoints}"
-REPO_DIR="/scratch/zd662/sgcrl"
+LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
+REPO_DIR="/scratch/yd2247/sgcrl"
 
 # ---- environment setup (same as draft.sh) ---------------------------------
 module purge
@@ -84,9 +87,9 @@ export TF_CPP_MIN_VLOG_LEVEL=3
 export PYTHONUNBUFFERED=1
 
 # Scratch-based caches
-export XDG_CACHE_HOME=/scratch/zd662/.cache
-export PIP_CACHE_DIR=/scratch/zd662/.cache/pip
-export TMPDIR=/scratch/zd662/tmp
+export XDG_CACHE_HOME=/scratch/yd2247/.cache
+export PIP_CACHE_DIR=/scratch/yd2247/.cache/pip
+export TMPDIR=/scratch/yd2247/tmp
 mkdir -p "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
 
 # Conda
@@ -145,7 +148,7 @@ echo "Actor depth    : $ACTOR_DEPTH"
 echo "Energy fn      : $ENERGY_FN"
 echo "LSE penalty    : $LOGSUMEXP_PENALTY"
 echo "Single task    : ${SINGLE_TASK:-none}"
-echo "Actor reset    : $ACTOR_RESET_INTERVAL"
+echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
 echo "Log dir        : $LOG_DIR"
 echo "Checkpoint dir : $CHECKPOINT_DIR"
 echo "============================================================"
@@ -220,7 +223,14 @@ FLAGS="$FLAGS --logsumexp_penalty=$LOGSUMEXP_PENALTY"
 if [ -n "$SINGLE_TASK" ]; then
   FLAGS="$FLAGS --single_task=$SINGLE_TASK"
 fi
-FLAGS="$FLAGS --actor_reset_interval=$ACTOR_RESET_INTERVAL"
+if [ "$ACTOR_AUTO_RESET" = "true" ]; then
+  FLAGS="$FLAGS --actor_auto_reset"
+else
+  FLAGS="$FLAGS --noactor_auto_reset"
+fi
+FLAGS="$FLAGS --actor_reset_dormant_threshold=$ACTOR_RESET_DORMANT_THRESHOLD"
+FLAGS="$FLAGS --actor_reset_warmup=$ACTOR_RESET_WARMUP"
+FLAGS="$FLAGS --actor_reset_max=$ACTOR_RESET_MAX"
 
 # ---- run -------------------------------------------------------------------
 cd "$REPO_DIR"
