@@ -855,7 +855,17 @@ def main(_):
   params = {
       'seed': seed,
       'use_random_actor': True,
-      'entropy_coefficient': 0.0,
+      # entropy_coefficient=None enables adaptive (learned) alpha, matching
+      # the scaling-crl study.  The SAC dual-gradient descent automatically
+      # tunes alpha toward the target_entropy.  Previously this was 0.0
+      # which disabled entropy entirely, contributing to high inter-seed
+      # variance (bad actor inits couldn't recover through exploration).
+      'entropy_coefficient': None,
+      # target_entropy = -0.5 * action_dim.  For MetaWorld Sawyer (action_dim=4)
+      # this equals -2.0, matching the scaling-crl convention.  The standard
+      # SAC heuristic is -action_dim = -4; the 0.5 factor is less aggressive
+      # and works well with contrastive critics.
+      'target_entropy': -2.0,
       'env_name': '',
       'max_number_of_steps': 0,
       'alg_name': alg,
