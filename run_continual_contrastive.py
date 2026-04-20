@@ -80,7 +80,7 @@ flags.DEFINE_integer('base_steps', 8_000_000, 'Env steps for base task.')
 flags.DEFINE_integer('k_max', 10, 'Max pool size before merging.')
 flags.DEFINE_string('checkpoint_dir', 'logs/continual_checkpoints',
                     'Directory for cross-task checkpoints.')
-flags.DEFINE_bool('use_wandb', True, 'Log to W&B.')
+flags.DEFINE_bool('use_wandb', False, 'Log to W&B.')
 flags.DEFINE_bool('add_uid', False, 'Add UID to log dirs.')
 flags.DEFINE_integer('start_task', 0, 'Resume from this task (loads ckpt from task-1).')
 flags.DEFINE_integer('eval_every', 50_000, 'Evaluate every N env steps.')
@@ -855,7 +855,17 @@ def main(_):
   params = {
       'seed': seed,
       'use_random_actor': True,
-      'entropy_coefficient': 0.0,
+      # entropy_coefficient=None enables adaptive (learned) alpha, matching
+      # the scaling-crl study.  The SAC dual-gradient descent automatically
+      # tunes alpha toward the target_entropy.  Previously this was 0.0
+      # which disabled entropy entirely, contributing to high inter-seed
+      # variance (bad actor inits couldn't recover through exploration).
+      'entropy_coefficient': None,
+      # target_entropy = -0.5 * action_dim.  For MetaWorld Sawyer (action_dim=4)
+      # this equals -2.0, matching the scaling-crl convention.  The standard
+      # SAC heuristic is -action_dim = -4; the 0.5 factor is less aggressive
+      # and works well with contrastive critics.
+      'target_entropy': -2.0,
       'env_name': '',
       'max_number_of_steps': 0,
       'alg_name': alg,
