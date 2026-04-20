@@ -312,8 +312,25 @@ def make_networks(
       g_hidden = g_encoder(goal, return_hidden=True)
       return sa_hidden, g_hidden
     else:
-      # Plain MLP: no clean hidden-layer extraction; return None.
-      return None, None
+      # Plain MLP: build a shorter MLP with just the hidden layers
+      # (dropping the repr_dim output projection) to get the last
+      # hidden layer activations.  Uses the same module name so
+      # Haiku reuses the body parameters from the full encoder.
+      sa_body = hk.nets.MLP(
+          list(hidden_layer_sizes),
+          w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
+          activation=jax.nn.relu,
+          activate_final=True,
+          name='sa_encoder')
+      g_body = hk.nets.MLP(
+          list(hidden_layer_sizes),
+          w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
+          activation=jax.nn.relu,
+          activate_final=True,
+          name='g_encoder')
+      sa_hidden = sa_body(jnp.concatenate([state, action], axis=-1))
+      g_hidden = g_body(goal)
+      return sa_hidden, g_hidden
 
   # Actor trunk feature extractor: runs the body + LayerNorm + Swish but
   # NOT the NormalTanhDistribution head.  Shares the same parameter tree as
