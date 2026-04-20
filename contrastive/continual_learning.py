@@ -747,6 +747,39 @@ class ContinualContrastiveLearner(acme.Learner):
     """Last preprocessed batch of transitions from the most recent step()."""
     return getattr(self, '_last_transitions', None)
 
+  # ---- periodic actor reset (task 0 only) ---------------------------------
+
+  def reset_actor(self, rng_key):
+    """Reinitialise the actor with fresh random weights.
+
+    Used during task 0 to escape seed-dependent initialisation traps
+    (low weight norms, high dormancy).  The critic is left untouched.
+
+    Steps:
+      1. Generate fresh policy params from policy_network.init()
+      2. Set policy_base_params = fresh params
+      3. Reset v_k to zeros
+      4. Reset v_k optimizer state
+      5. Reset beta_k and alpha_scale (these are empty at task 0 anyway)
+
+    This is only safe at task 0 because there is no pool, no base to
+    preserve, and no cross-task state to corrupt.
+    """
+    assert self._task_id == 0, (
+        'reset_actor is only safe during task 0 (base task).')
+
+    new_policy_params = self._networks.policy_network.init(rng_key)
+    new_v_k = _pytree_zeros_like(new_policy_params)
+    new_vk_opt = self._vk_optimizer.init(new_v_k)
+
+    self._state = self._state._replace(
+        policy_base_params=new_policy_params,
+        v_k=new_v_k,
+        v_k_optimizer_state=new_vk_opt,
+    )
+    print(f'  [actor_reset] Actor reinitialised with fresh random weights.',
+          flush=True)
+
   # ---- variable source (for actors) ---------------------------------------
 
   def get_variables(self, names):
