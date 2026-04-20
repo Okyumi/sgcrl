@@ -121,13 +121,26 @@ def compute_nrc1(features: jnp.ndarray, target_dim: int) -> float:
 
 
 def compute_nrc2(features: jnp.ndarray, final_weights: jnp.ndarray) -> float:
-  """NRC2: alignment between features and the final layer's row space."""
+  """NRC2: alignment between features and the final layer's column space.
+
+  Measures how much the features deviate from the column space of the
+  weight matrix that maps features → outputs.  Haiku Linear stores
+  weights as [input_dim, output_dim] with forward pass x @ W + b, so
+  the column space of W contains the input-space directions that
+  contribute to the output.
+
+  NRC2 ≈ 0 means features are well-aligned with the output layer;
+  NRC2 ≈ 1 means features lie mostly outside the output layer's reach.
+  """
   H = features
   H_centered = H - jnp.mean(H, axis=0, keepdims=True)
   H_norm = jnp.maximum(jnp.linalg.norm(H_centered, axis=1, keepdims=True), 1e-8)
   H_normalized = H_centered / H_norm
-  _, _, Vh = jnp.linalg.svd(final_weights, full_matrices=False)
-  P = Vh.T @ Vh
+  # W shape: [input_dim, output_dim].  Column space lives in R^input_dim.
+  # SVD: W = U @ diag(S) @ Vh.  Columns of U[:, :k] span the column space.
+  U, _, _ = jnp.linalg.svd(final_weights, full_matrices=False)
+  # U shape: [input_dim, min(input_dim, output_dim)]
+  P = U @ U.T  # [input_dim, input_dim] projection matrix
   H_proj = H_normalized @ P
   nrc2 = jnp.sum((H_proj - H_normalized) ** 2) / H.shape[0]
   return float(nrc2)
@@ -182,6 +195,10 @@ def _get_encoder_final_weights(q_params, encoder_name):
 
   Haiku keys look like 'sa_encoder/linear_5' (the highest-indexed linear
   under the encoder scope). We find the one with the highest index.
+
+  NOTE: Currently unused because critic NRC2 is not meaningful (see
+  compute_all_metrics). Kept for potential future use with pre-projection
+  feature extraction.
   """
   best_w = None
   best_idx = -1
@@ -221,12 +238,20 @@ def _get_actor_head_weights(actor_params):
 
 def compute_all_metrics(
     networks, actor_params, q_params,
-    obs_batch, action_batch, obs_dim,
-    level='frequent'):
+    obs_batch, action_batch,
+    level='frequent',
+    obs_dim=None):
   """Compute RL metrics at the specified frequency level.
 
   Args:
+    networks: ContrastiveNetworks with repr_fn and actor_repr_fn.
+    actor_params: Composed actor params (θ_base + pool_c + v_k).
+    q_params: Full critic params.
+    obs_batch: [batch, state_dim + goal_dim] observations.
+    action_batch: [batch, action_dim] actions.
     level: 'frequent' or 'occasional'.
+    obs_dim: Unused (kept for backward compat). The repr_fn closure
+             already captures obs_dim from make_networks.
   Returns:
     dict of metric_name -> value.
   """
@@ -264,12 +289,14 @@ def compute_all_metrics(
     metrics['critic_sa/nrc1'] = compute_nrc1(sa_feats, target_dim=action_dim)
     metrics['critic_g/nrc1'] = compute_nrc1(g_feats, target_dim=1)
 
-    sa_final_w = _get_encoder_final_weights(q_params, 'sa_encoder')
-    g_final_w = _get_encoder_final_weights(q_params, 'g_encoder')
-    if sa_final_w is not None:
-      metrics['critic_sa/nrc2'] = compute_nrc2(sa_feats, sa_final_w)
-    if g_final_w is not None:
-      metrics['critic_g/nrc2'] = compute_nrc2(g_feats, g_final_w)
+    # NOTE: critic NRC2 is omitted. The critic encoder's output IS the
+    # repr_dim features (e.g. 64-d). The output projection weight maps
+    # hidden (256-d) → repr (64-d). Since the features are already
+    # post-projection, and rank(W) = repr_dim, projecting 64-d features
+    # onto the 64-d row space gives the identity — NRC2 ≡ 0 always.
+    # For a meaningful NRC2 we'd need pre-projection (hidden-layer)
+    # features, which are not extracted.  The actor NRC2 IS meaningful
+    # because actor features are the pre-head (256-d) trunk output.
 
     metrics['critic_sa/dormant_ratio'] = dormant_ratio(sa_feats)
     metrics['critic_g/dormant_ratio'] = dormant_ratio(g_feats)
