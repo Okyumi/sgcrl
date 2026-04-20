@@ -1,4 +1,4 @@
-# Actor Metrics + Periodic Reset — April 20, 2026
+# Actor Metrics + Automatic Actor Reset — April 20, 2026
 
 ## Problem
 
@@ -50,42 +50,58 @@ New metrics:
 - This aligns with the Nature plasticity paper (Lyle et al., 2024) showing Swish has lower dormancy than ReLU but is NOT immune — a sensitive-enough threshold is needed to detect it
 - The threshold constant is defined as `DORMANT_THRESHOLD = 0.025` in `rl_metrics.py` for easy adjustment
 
-### 3. Periodic Actor Reset During Task 0
+### 3. Automatic Actor Reset During Task 0 (dormancy-triggered)
 
-**Motivation**: Certain seeds produce actor initializations with low weight norms and high dormancy that persist throughout training. Since the actor is initialized independently of the critic, and the problem manifests only in the actor, the solution is to give the actor multiple chances at a good initialization.
+**Motivation**: Certain seeds produce actor initializations with low weight norms and high dormancy that persist throughout training. Rather than resetting on a fixed schedule, the system monitors the actor's health and only resets when it detects a problem. If the actor learns well, no reset ever fires.
 
 **Design constraints**:
 - Reset ONLY during task 0 (base task)
 - Never reset during tasks 1..N (would interfere with continual learning ablation studies on actor_mode and critic_mode)
 - Critic is never touched by the reset
-- Must use fresh random weights (not the same initialization that caused the trap)
+- Condition-based, not periodic: only fires when the actor's dormant ratio exceeds a threshold
+- If the actor is healthy, the mechanism is completely silent
 
-**Implementation**:
-- `--actor_reset_interval` flag (default 0 = disabled). When > 0, every N env steps during task 0, the actor is reinitialized.
-- `ContinualContrastiveLearner.reset_actor(rng_key)` method:
-  1. Generates fresh policy params via `policy_network.init(rng_key)` 
-  2. Sets `policy_base_params = fresh params`
-  3. Resets `v_k` to zeros
-  4. Resets `v_k_optimizer_state`
-  5. Asserts `task_id == 0` (safety check)
-- Uses a separate RNG stream (`PRNGKey(seed + 9999)`) so each reset produces different random weights
-- Logs `actor_reset/count` and `actor_reset/env_steps` to W&B
+**How it works**:
 
-**Usage examples**:
-```bash
-# Reset actor every 500K steps during task 0
-ACTOR_RESET_INTERVAL=500000 SEED=42 sbatch draft_3.sh
+1. At every RL metrics logging interval during task 0, the actor's dormant ratio is computed from the trunk features (body + LayerNorm + Swish output, before the NormalTanh head).
+2. If `actor_dormant_ratio > actor_reset_dormant_threshold` (default 0.1 = 10% of neurons dormant), the actor is reinitialized with fresh random weights.
+3. A warmup period (`actor_reset_warmup`, default 200K steps) prevents premature resets before the actor has had time to stabilize after initialization.
+4. A safety cap (`actor_reset_max`, default 3) prevents infinite reset loops.
 
-# Reset actor every 1M steps during task 0
-ACTOR_RESET_INTERVAL=1000000 SEED=42 sbatch draft_3.sh
-
-# Disabled (default)
-SEED=42 sbatch draft_3.sh
+**Decision flow**:
+```
+for each rl_metrics check during task 0:
+  if reset_count >= max_resets: skip
+  if env_steps < warmup: skip
+  compute actor dormant ratio from trunk features
+  if dormant_ratio > threshold:
+    reinit actor (fresh weights + optimizer)
+    increment reset_count
+  else:
+    do nothing (actor is healthy)
 ```
 
-**Recommended interval**: For 8M-step base tasks, `actor_reset_interval=2000000` (reset at 2M, 4M, 6M). This gives the actor 4 initialization chances while still allowing 2M steps of training after the last reset. Adjust based on how early the bad-seed pathology becomes apparent.
+**Flags**:
+| Flag | Default | Description |
+|---|---|---|
+| `--actor_auto_reset` | `True` | Enable dormancy-triggered actor reset during task 0 |
+| `--actor_reset_dormant_threshold` | `0.1` | Dormant ratio that triggers reset (10% of neurons dormant) |
+| `--actor_reset_warmup` | `200000` | Min env steps before first check |
+| `--actor_reset_max` | `3` | Max resets per task-0 run |
 
-**Relationship to the Primacy Bias paper (Nikishin et al., 2022)**: The periodic actor reset follows the same principle — periodically reinitializing network weights to combat loss of plasticity. The key difference is that our reset is restricted to the actor during task 0, preserving the integrity of the critic (whose representations are shared across tasks) and the continual learning ablation design.
+**W&B logging** (only when a reset fires):
+- `actor_reset/triggered`: 1
+- `actor_reset/dormant_ratio_at_reset`: the measured dormancy that triggered the reset
+- `actor_reset/count`: cumulative resets so far
+- `actor_reset/env_steps`: when the reset happened
+
+**Threshold justification**: The reset threshold (0.1) is DIFFERENT from the dormancy measurement threshold (0.025). The measurement threshold (0.025) is what defines "dormant" at the individual neuron level (activation score < 2.5% of layer mean, calibrated for Swish). The reset threshold (0.1) is the FRACTION of neurons that must be dormant to trigger a reset. When 10% or more of the trunk neurons are dormant, the actor is clearly in a pathological regime — healthy actors with Swish + LayerNorm + ResidualMLP typically show <1% dormancy. The two thresholds work together:
+- Swish neuron i is dormant if: `mean_abs(h_i) / mean_abs(h) < 0.025`
+- Actor is pathological if: `count(dormant neurons) / total_neurons > 0.1`
+
+**Relationship to prior work**:
+- **ReDo (Sokar et al., 2023)**: Resets individual dormant neurons by reinitializing their incoming weights and zeroing outgoing weights. Our approach is coarser (full actor reset) but simpler and appropriate for the continual learning setting where individual neuron surgery during base task training is overkill.
+- **Primacy Bias (Nikishin et al., 2022)**: Periodic full network resets. Our approach improves on this by being condition-based: if the initialization is good, the mechanism stays silent.
 
 ## Files Changed
 
@@ -94,5 +110,5 @@ SEED=42 sbatch draft_3.sh
 | `contrastive/networks.py` | Added `actor_repr_fn` field to `ContrastiveNetworks`, `_actor_repr_fn` Haiku transform, and wired it into `make_networks` |
 | `contrastive/rl_metrics.py` | Added actor metrics (dormant, NRC1, NRC2, rank, entropy, gini), updated threshold to 0.025, added `extract_actor_features`, `_get_actor_head_weights`, documented Swish threshold rationale |
 | `contrastive/continual_learning.py` | Added `reset_actor(rng_key)` method |
-| `run_continual_contrastive.py` | Added `--actor_reset_interval` flag, periodic reset logic in training loop, W&B config logging |
-| `draft_3.sh` | Added `ACTOR_RESET_INTERVAL` parameter |
+| `run_continual_contrastive.py` | Added `--actor_auto_reset`, `--actor_reset_dormant_threshold`, `--actor_reset_warmup`, `--actor_reset_max` flags; dormancy-triggered reset logic inside rl_metrics block |
+| `draft_3.sh` | Added `ACTOR_AUTO_RESET`, `ACTOR_RESET_DORMANT_THRESHOLD`, `ACTOR_RESET_WARMUP`, `ACTOR_RESET_MAX` parameters |

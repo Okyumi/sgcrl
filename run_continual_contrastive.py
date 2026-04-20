@@ -128,13 +128,24 @@ flags.DEFINE_float('logsumexp_penalty', 0.01,
 flags.DEFINE_string('single_task', '',
                     'If set, train on this single environment only '
                     '(e.g., sawyer_shelf_place). Overrides task sequence.')
-# Periodic actor reset during task 0 (Primacy Bias mitigation)
-flags.DEFINE_integer('actor_reset_interval', 0,
-                     'Reset actor every N env steps during task 0 (0 = disabled). '
-                     'Resets actor weights + optimizer; critic is unchanged. '
-                     'Prevents seed-dependent initialization traps where the actor '
-                     'gets stuck with low weight norms and high dormancy. '
-                     'Only active during task 0 to preserve continual ablation integrity.')
+# Automatic actor reset during task 0 (dormancy-triggered)
+flags.DEFINE_bool('actor_auto_reset', True,
+                  'Monitor actor health during task 0 and automatically reset '
+                  'if dormant ratio exceeds threshold.  Resets actor weights + '
+                  'optimizer; critic is unchanged.  Only active during task 0 '
+                  'to preserve continual ablation integrity.  When the actor '
+                  'learns well, no reset ever fires.')
+flags.DEFINE_float('actor_reset_dormant_threshold', 0.1,
+                   'Dormant ratio threshold that triggers an automatic actor '
+                   'reset.  0.1 = reset when >=10%% of trunk neurons are dormant '
+                   '(activation score < 2.5%% of layer mean under Swish).')
+flags.DEFINE_integer('actor_reset_warmup', 200000,
+                     'Minimum env steps before the first dormancy check. '
+                     'Gives the actor time to stabilise after initialisation '
+                     'before judging it.')
+flags.DEFINE_integer('actor_reset_max', 3,
+                     'Maximum number of automatic actor resets per task-0 run. '
+                     'Safety cap to prevent infinite reset loops.')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -563,14 +574,15 @@ def train_single_task(
   metrics_every = eval_every if eval_every > 0 else 50000
   next_metrics_frequent = metrics_every if FLAGS.log_rl_metrics else float('inf')
   next_metrics_occasional = 5 * metrics_every if FLAGS.log_rl_metrics else float('inf')
-  # Periodic actor reset schedule (task 0 only)
-  actor_reset_interval = FLAGS.actor_reset_interval
-  next_actor_reset = actor_reset_interval if (task_id == 0 and actor_reset_interval > 0) else float('inf')
+  # Automatic actor reset state (task 0 only)
+  auto_reset_active = (task_id == 0 and FLAGS.actor_auto_reset)
   actor_reset_count = 0
   actor_reset_rng = jax.random.PRNGKey(seed + 9999)  # separate RNG stream
   print(f'  Training for {train_steps} env steps...', flush=True)
-  if task_id == 0 and actor_reset_interval > 0:
-    print(f'  Actor periodic reset enabled: every {actor_reset_interval} steps.', flush=True)
+  if auto_reset_active:
+    print(f'  Actor auto-reset enabled: warmup={FLAGS.actor_reset_warmup}, '
+          f'threshold={FLAGS.actor_reset_dormant_threshold}, '
+          f'max_resets={FLAGS.actor_reset_max}.', flush=True)
 
   while env_steps_done < train_steps:
     # Actor step: run one full episode and count actual env steps.
@@ -589,18 +601,6 @@ def train_single_task(
     learner.step()
     if episodes_done == 1:
       print(f'  JIT compilation done.', flush=True)
-
-    # Periodic actor reset (task 0 only)
-    if env_steps_done >= next_actor_reset:
-      actor_reset_rng, reset_key = jax.random.split(actor_reset_rng)
-      learner.reset_actor(reset_key)
-      actor_reset_count += 1
-      next_actor_reset = env_steps_done + actor_reset_interval
-      if FLAGS.use_wandb and wandb is not None:
-        wandb.log({
-            'actor_reset/count': actor_reset_count,
-            'actor_reset/env_steps': env_steps_done,
-        })
 
     # Log learner metrics to W&B with global env_steps as x-axis
     if FLAGS.use_wandb and wandb is not None and env_steps_done >= next_log_at:
@@ -671,6 +671,38 @@ def train_single_task(
             wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
             wandb_m['rl_metrics/env_steps'] = env_steps_done
             wandb.log(wandb_m)
+          # ---- Automatic actor reset (dormancy-triggered, task 0 only) ----
+          if (auto_reset_active
+              and actor_reset_count < FLAGS.actor_reset_max
+              and env_steps_done >= FLAGS.actor_reset_warmup):
+            # Compute actor dormant ratio (cheap: one forward pass + mean).
+            # Use the already-extracted actor features when available;
+            # otherwise compute them on the fly.
+            actor_dr = m.get('actor/dormant_ratio')
+            if actor_dr is None:
+              # Occasional-level metrics weren't computed this cycle;
+              # compute dormant ratio directly.
+              actor_feats = rl_metrics.extract_actor_features(
+                  networks, current_actor, obs_sample)
+              if actor_feats is not None:
+                actor_dr = rl_metrics.dormant_ratio(actor_feats)
+            if actor_dr is not None and actor_dr > FLAGS.actor_reset_dormant_threshold:
+              actor_reset_rng, reset_key = jax.random.split(actor_reset_rng)
+              print(f'  [auto-reset @ {env_steps_done}] '
+                    f'actor dormant_ratio={actor_dr:.3f} > '
+                    f'{FLAGS.actor_reset_dormant_threshold} — '
+                    f'resetting actor (#{actor_reset_count + 1}).',
+                    flush=True)
+              learner.reset_actor(reset_key)
+              actor_reset_count += 1
+              if FLAGS.use_wandb and wandb is not None:
+                wandb.log({
+                    'actor_reset/triggered': 1,
+                    'actor_reset/dormant_ratio_at_reset': actor_dr,
+                    'actor_reset/count': actor_reset_count,
+                    'actor_reset/env_steps': env_steps_done,
+                })
+
       except Exception as e:
         print(f'  [rl_metrics] Warning: {e}', flush=True)
 
@@ -941,7 +973,10 @@ def main(_):
                   'intra_eval_previous_tasks': FLAGS.intra_eval_previous_tasks,
                   'log_rl_metrics': FLAGS.log_rl_metrics,
                   'k_sample_k': FLAGS.k_sample_k,
-                  'actor_reset_interval': FLAGS.actor_reset_interval},
+                  'actor_auto_reset': FLAGS.actor_auto_reset,
+                  'actor_reset_dormant_threshold': FLAGS.actor_reset_dormant_threshold,
+                  'actor_reset_warmup': FLAGS.actor_reset_warmup,
+                  'actor_reset_max': FLAGS.actor_reset_max},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,
       )
