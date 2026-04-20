@@ -80,7 +80,7 @@ flags.DEFINE_integer('base_steps', 8_000_000, 'Env steps for base task.')
 flags.DEFINE_integer('k_max', 10, 'Max pool size before merging.')
 flags.DEFINE_string('checkpoint_dir', 'logs/continual_checkpoints',
                     'Directory for cross-task checkpoints.')
-flags.DEFINE_bool('use_wandb', False, 'Log to W&B.')
+flags.DEFINE_bool('use_wandb', True, 'Log to W&B.')
 flags.DEFINE_bool('add_uid', False, 'Add UID to log dirs.')
 flags.DEFINE_integer('start_task', 0, 'Resume from this task (loads ckpt from task-1).')
 flags.DEFINE_integer('eval_every', 50_000, 'Evaluate every N env steps.')
@@ -971,6 +971,7 @@ def main(_):
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
           project='continual_gcrl_paper',
+          group="test",
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,
