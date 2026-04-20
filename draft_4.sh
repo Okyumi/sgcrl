@@ -32,9 +32,9 @@
 #   sbatch draft_4.sh                   # run all 45 configs (23 GPUs)
 #   sbatch --array=0-4 draft_4.sh       # run first 10 configs only
 #
-# JAX Memory:
-#   Each process preallocates 45% of GPU memory (total 90%, 10% headroom).
-#   This is set via XLA_PYTHON_CLIENT_MEM_FRACTION=0.45.
+# JAX / TF GPU memory:
+#   No fixed fraction: JAX grows on demand (XLA_PYTHON_CLIENT_PREALLOCATE=false).
+#   TensorFlow also allows growth so Reverb/JAX can share VRAM more flexibly.
 # ==========================================================================
 
 set -euo pipefail
@@ -126,11 +126,10 @@ done
 CUDNN_LIB=$(python -c "import nvidia.cudnn, os; print(os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'lib'))" 2>/dev/null) || true
 [ -n "$CUDNN_LIB" ] && [ -d "$CUDNN_LIB" ] && export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDNN_LIB}"
 
-# ---- JAX GPU memory allocation for multi-process sharing ------------------
-# By default JAX preallocates 75% of GPU memory, which prevents a second
-# process from using the same GPU.  With TASKS_PER_GPU=2 we give each
-# process 45% (total 90%, leaving 10% headroom for CUDA context etc.).
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.45
+# ---- JAX / TF GPU memory (no upfront lock of a VRAM fraction) --------------
+unset XLA_PYTHON_CLIENT_MEM_FRACTION
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export TF_FORCE_GPU_ALLOW_GROWTH=true
 
 # ---- create output dirs ---------------------------------------------------
 mkdir -p "$LOG_DIR" "$CHECKPOINT_DIR"
@@ -237,7 +236,8 @@ echo "Node               : $(hostname)"
 echo "GPU                : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
 echo "Tasks per GPU      : $TASKS_PER_GPU"
 echo "Total configs      : $TOTAL_CONFIGS"
-echo "JAX mem fraction   : $XLA_PYTHON_CLIENT_MEM_FRACTION"
+echo "JAX preallocate    : ${XLA_PYTHON_CLIENT_PREALLOCATE:-unset}"
+echo "TF GPU growth      : ${TF_FORCE_GPU_ALLOW_GROWTH:-unset}"
 echo "============================================================"
 
 PIDS=()
