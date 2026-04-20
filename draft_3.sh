@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32GB
 #SBATCH --partition=nvidia
-#SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%j.out
-#SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%j.err
+#SBATCH --output=/scratch/zd662/sgcrl/logs/continual/%j.out
+#SBATCH --error=/scratch/zd662/sgcrl/logs/continual/%j.err
 #SBATCH --mail-user=yd2247@nyu.edu
 
 # ==========================================================================
@@ -62,9 +62,9 @@ ACTOR_RESET_WARMUP="${ACTOR_RESET_WARMUP:-200000}"
 ACTOR_RESET_MAX="${ACTOR_RESET_MAX:-3}"
 
 # Directories (all on scratch to avoid home quota issues)
-LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
-REPO_DIR="/scratch/yd2247/sgcrl"
+LOG_DIR="${LOG_DIR:-/scratch/zd662/sgcrl/logs/continual}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/zd662/sgcrl/logs/continual_checkpoints}"
+REPO_DIR="/scratch/zd662/sgcrl"
 
 # ---- environment setup (same as draft.sh) ---------------------------------
 module purge
@@ -87,9 +87,9 @@ export TF_CPP_MIN_VLOG_LEVEL=3
 export PYTHONUNBUFFERED=1
 
 # Scratch-based caches
-export XDG_CACHE_HOME=/scratch/yd2247/.cache
-export PIP_CACHE_DIR=/scratch/yd2247/.cache/pip
-export TMPDIR=/scratch/yd2247/tmp
+export XDG_CACHE_HOME=/scratch/zd662/.cache
+export PIP_CACHE_DIR=/scratch/zd662/.cache/pip
+export TMPDIR=/scratch/zd662/tmp
 mkdir -p "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
 
 # Conda
