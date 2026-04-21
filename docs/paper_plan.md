@@ -2,63 +2,59 @@
 
 - We study continual reinforcement learning in a sparse-reward, goal-conditioned setting.
 - In continual RL, an agent faces a sequence of tasks and must learn each new task while retaining competence on earlier ones.
-- In practice, most continual RL benchmarks and algorithms rely on dense, hand-crafted reward functions, one per task.
-- These dense rewards are engineered to carry per-task expert knowledge, and they largely decide how well an algorithm appears to perform.
-- This hides the representational question that continual RL is actually supposed to be about: whether a policy and a value function can develop structure that transfers across a task sequence.
-- It also does not reflect how an agent would be deployed on a real robot, where the reward is effectively a success event.
-- In this paper we remove the dense rewards entirely.
-- The only reward signal the agent sees is the goal-reaching event $r_g(s_t,a_t)=(1-\gamma)\,p(s_{t+1}=g\mid s_t,a_t)$.
+- Most continual RL benchmarks and algorithms rely on dense, hand-crafted reward functions, one per task.
+- Dense rewards carry per-task expert knowledge and largely decide how well an algorithm appears to perform.
+- They obscure the representational question that continual RL is supposed to be about: whether a policy and a value function develop structure that transfers across a task sequence.
+- They also do not reflect how an agent is deployed on a real robot, where reward is effectively a success event.
+- We remove dense rewards.
+- The only reward signal is the goal-reaching event $r_g(s_t,a_t)=(1-\gamma)\,p(s_{t+1}=g\mid s_t,a_t)$.
 - We instantiate this setting on a ten-task Meta-World Sawyer manipulation sequence, trained with eight million environment steps per task and five seeds per configuration.
-- We call this setting sparse-reward continual goal-conditioned RL, and we treat the setting itself as a contribution of the paper.
-- To operate in this setting we propose a framework that puts together three ingredients.
+- We call this setting sparse-reward continual goal-conditioned RL, and the setting itself is a contribution of the paper.
+- Our framework combines three ingredients in this setting.
 - The first ingredient is a contrastive goal-conditioned RL critic $f(s,a,g)=\phi(s,a)^\top\psi(g)$, trained with InfoNCE on hindsight-relabeled positives.
-- Contrastive GCRL is not our contribution: we use it as the underlying RL algorithm, following the line of work of Eysenbach et al. 2022, Liu et al. 2025, and Wang et al. 2025.
-- What matters for us is what the contrastive critic encodes: reachability structure, rather than a task-specific scalar return.
-- Reachability structure is exactly what should be shared across a sequence of manipulation tasks that use the same robot embodiment.
+- The contrastive critic encodes reachability structure, not a task-specific scalar return.
+- Reachability structure is shared across a sequence of manipulation tasks that use the same robot embodiment.
 - The second ingredient is a policy decomposition.
-- We express the policy at task $k$ as $\theta'=\theta_{\text{base}}+\sum_{j=1}^{k-1}\alpha_j v_j + v_k$, with $\alpha=\text{softmax}(\beta\cdot\alpha_{\text{scale}})$.
-- Here $\theta_{\text{base}}$ is frozen after task 0, each $v_j$ is a knowledge vector learned on a past task, and $v_k$ is the current task's knowledge vector.
+- The policy at task $k$ is expressed as $\theta'=\theta_{\text{base}}+\sum_{j=1}^{k-1}\alpha_j v_j + v_k$, with $\alpha=\text{softmax}(\beta\cdot\alpha_{\text{scale}})$.
+- $\theta_{\text{base}}$ is frozen after task 0, each $v_j$ is a knowledge vector learned on a past task, and $v_k$ is the current task's knowledge vector.
 - By default only the output head is decomposed, while the encoder body receives gradients so that representations can drift without growing the number of knowledge vectors.
-- The third ingredient is a bounded knowledge pool $\mathcal{V}=\{v_1,\ldots,v_{k-1}\}$.
-- The pool is capped at $K_{\max}=5$ vectors; whenever it overflows, the two most cosine-similar vectors are merged by averaging.
-- Policy decomposition and a bounded knowledge pool are not original to this paper.
-- Prior work has studied them in continual RL, most recently Hu et al. (NeurIPS 2025) in a dense-reward SAC setting.
-- We cite that line of work and use the same functional form; we do not position this paper as an extension of it.
-- Our claim is about the combination: what happens when a policy decomposition and a knowledge pool are paired with a contrastive goal-conditioned critic, under sparse rewards.
-- The fourth piece is a negative-sampling mechanism that is specific to the continual contrastive setting.
-- By the time the agent reaches task $k$, it owns replay buffers from tasks $0,\ldots,k-1$, all full of HER-relabeled goals.
-- These past-task goals are wasted data: the InfoNCE loss on the current task only uses in-batch negatives.
-- The natural thing to do is to reuse those past goals as extra contrastive negatives when training the current critic.
-- The naive version of this idea fails, and the failure is informative.
+- The third ingredient is a bounded knowledge pool $\mathcal{V}=\{v_1,\ldots,v_{k-1}\}$, capped at $K_{\max}=5$ vectors.
+- Whenever the pool overflows, the two most cosine-similar vectors are merged by averaging.
+- Policy decomposition and bounded knowledge pools have been studied in prior work on continual RL, most recently by Hu et al. (NeurIPS 2025) in a dense-reward SAC setting.
+- A fourth piece is specific to the continual contrastive setting.
+- By task $k$, the agent owns replay buffers from tasks $0,\ldots,k-1$, all full of HER-relabeled goals.
+- These past-task goals can serve as extra contrastive negatives when training the current critic.
+- A naive version of this idea fails, and the failure is informative.
 - Meta-World Sawyer tasks occupy disjoint workspace regions, so a goal drawn from a past task's buffer is trivially distinguishable from a current-task goal by raw coordinates alone.
-- The critic then achieves high categorical accuracy without learning a useful representation, and learning slows down relative to not using the extra negatives at all.
+- The critic then achieves high categorical accuracy without learning a useful representation, and learning slows down relative to using no extra negatives.
 - We address this with a hard-weighted negative bank.
-- For each anchor in the batch, we score a candidate pool of past-task goals against that anchor and keep only the top $M$ — the candidates that currently receive the highest score and therefore provide the strongest gradient signal.
-- We then append these hard negatives to the in-batch logits with a scalar weight $w_{\text{bank}}=0.3$, so that even hard-mined bank negatives cannot dominate the softmax.
-- The resulting framework is: contrastive GCRL, with a policy decomposition and a knowledge pool on the actor, in a sparse-reward continual setting, with an offline-to-online hard-weighted negative bank on the contrastive loss.
-- To evaluate the framework we study a nine-cell ablation over actor and critic evolution modes.
+- For each anchor in the batch, we score a candidate pool of past-task goals and keep only the top $M$ — the candidates that currently receive the highest score and therefore provide the strongest gradient signal.
+- These hard negatives are appended to the in-batch logits with a scalar weight $w_{\text{bank}}=0.3$, so that bank negatives cannot dominate the softmax.
+- The framework is then: contrastive goal-conditioned RL, with a policy decomposition and a knowledge pool on the actor, in a sparse-reward continual setting, with a hard-weighted negative bank on the contrastive loss.
+- We evaluate through a nine-cell ablation over actor and critic evolution modes.
 - The actor can be reset, carried forward persistently, or decomposed; the critic can be reset, carried forward persistently, or decomposed.
-- Running all nine cells lets us separate the contribution of actor-side mechanisms from the contribution of critic-side mechanisms.
-- Previous work has conflated the two, because in SAC-based continual RL the critic does not transfer well regardless of what happens on the actor side.
+- Running all nine cells separates the contribution of actor-side mechanisms from the contribution of critic-side mechanisms.
+- Earlier work conflated the two, because in SAC-based continual RL the critic does not transfer well regardless of what happens on the actor side.
 - We ask two primary empirical questions.
 - First, when the critic is contrastive rather than SAC, does persisting it across tasks help?
 - Second, given a persistent contrastive critic, does the policy decomposition and knowledge pool on the actor add value on top of that?
-- We expect the answer to the first question to be yes, extending the SAC-dense-reward finding of Wołczyk et al. (NeurIPS 2022) that critic transfer dominates actor transfer for forward transfer.
-- We expect the answer to the second question to be yes as well, but for a different reason: the decomposition is what converts critic-side retention into actor-side retention, which is what drives backward transfer.
-- Our predicted headline configuration is therefore the cell with a decomposed actor and a persistent contrastive critic.
-- We also ask a third question, motivated by previous observations in our own runs.
-- Actor-side representation quality, measured by dormant-neuron ratio (with the $\tau=0.025$ threshold from Sokar et al. 2023), neural-collapse statistics NRC1 and NRC2 (Papyan et al. 2020), and feature rank, degrades over long task sequences.
-- In long sequences, actor plasticity loss — not critic forgetting — is what eventually bottlenecks performance.
+- The answer to the first question extends the finding of Wołczyk et al. (NeurIPS 2022), who showed in dense-reward SAC that critic transfer dominates actor transfer for forward transfer, into the sparse-reward contrastive regime.
+- The answer to the second question is driven by a different mechanism: the decomposition converts critic-side retention into actor-side retention, which is what drives backward transfer.
+- The predicted headline configuration is a decomposed actor with a persistent contrastive critic.
+- A third question concerns actor-side representation quality over long sequences.
+- We measure dormant-neuron ratio (with the $\tau=0.025$ threshold from Sokar et al. 2023), neural-collapse statistics NRC1 and NRC2 (Papyan et al. 2020), and feature rank on the actor encoder.
+- These degrade over long task sequences, and we expect actor plasticity loss — not critic forgetting — to eventually bottleneck performance.
 - We track these metrics across the full ten-task sequence for all nine cells, and correlate delayed success jumps on late tasks with shifts in actor-feature rank.
-- Finally, the negative bank gives us a clean fourth question: does reusing past-task data as contrastive negatives help, and if so, what kind of reuse.
+- A fourth question concerns the negative bank: does reusing past-task data as contrastive negatives help, and if so, under what filtering.
 - We compare three settings: no bank, a vanilla bank, and the hard-weighted bank.
-- We predict that vanilla cross-task negatives hurt, that the hard-weighted bank helps, and that the gap is explained by how much of the critic's softmax probability ends up on trivially-separable workspace regions versus on genuinely goal-relevant features.
-- To make all of this testable, we run the full nine-cell ablation with five seeds, on the ten-task Sawyer sequence, with eight million environment steps per task, giving $9\times 5=45$ full-scale runs.
-- Around the headline cell we run sensitivity sweeps over $K_{\max}$, over $w_{\text{bank}}$, and over the target entropy of the adaptive-entropy actor.
-- For calibration against the literature we additionally run a sparse-reward SAC baseline and a sparse-reward re-implementation of policy-decomposition-with-SAC; a dense-reward SAC baseline is reported only to connect our numbers to published Continual World results.
-- The broader message we want to deliver is not that contrastive RL beats SAC, or that decomposition beats no-decomposition.
-- It is that the right way to do continual RL is to pick a value function whose representation is task-agnostic (which is what a contrastive critic gives), then use lightweight parameter-level mechanisms (policy decomposition, bounded knowledge pool) to translate critic-side retention into actor-side retention, and finally use the data you already have from past tasks in a principled way (hard-weighted negative bank) rather than discard it.
-- Sparse reward is what forces this discipline: under dense reward, a poorly-designed reward can carry an algorithm to a decent number, so the representational question does not have to be answered.
+- We expect vanilla cross-task negatives to hurt, the hard-weighted bank to help, and the gap to be explained by how much of the critic's softmax probability ends up on trivially-separable workspace regions versus on genuinely goal-relevant features.
+- The full nine-cell ablation runs with five seeds on the ten-task Sawyer sequence, with eight million environment steps per task, yielding $9\times 5=45$ full-scale runs.
+- Around the headline cell we run sensitivity sweeps over $K_{\max}$, $w_{\text{bank}}$, and the target entropy of the adaptive-entropy actor.
+- A sparse-reward SAC baseline and a sparse-reward re-implementation of policy-decomposition-with-SAC calibrate the role of the contrastive critic under matched continual machinery.
+- A dense-reward SAC baseline connects our numbers to published Continual World results.
+- The broader message is not that contrastive RL beats SAC, or that decomposition beats no-decomposition.
+- Progress in continual RL comes from pairing a value function whose representation is task-agnostic (a contrastive critic) with lightweight parameter-level mechanisms (policy decomposition, bounded knowledge pool) that translate critic-side retention into actor-side retention, and from using the data already accumulated from past tasks as a principled contrastive signal rather than discarding it.
+- Sparse reward is what forces this discipline: under dense reward, a well-engineered reward function can carry an algorithm to a respectable number, and the representational question does not have to be answered.
 
 ---
 
