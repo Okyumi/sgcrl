@@ -1065,7 +1065,7 @@ def main(_):
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
           project='continual_gcrl_paper',
-          group="test",
+          group="contrastive-replay",
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,

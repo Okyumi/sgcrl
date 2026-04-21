@@ -96,3 +96,16 @@ If `bank/extended_categorical_accuracy` saturates near 1.0 very early, the negat
 ## Also: `actor_auto_reset` default
 
 The automatic actor reset is now **disabled by default** (`--actor_auto_reset=false`) to ensure the dormancy-triggered reset mechanism cannot interfere with any ablation experiment. To enable: set `ACTOR_AUTO_RESET=true` in the SLURM submission env.
+--
+
+# Principled variant (recommended)
+SEED=1002 NEG_BANK_MODE=hard_weighted NEG_BANK_N_PER_STEP=256 \
+  NEG_BANK_CANDIDATE_POOL=1024 NEG_BANK_WEIGHT=0.3 \
+  sbatch draft_3.sh
+
+# Vanilla variant (for comparison — expected to hurt)
+SEED=1001 NEG_BANK_MODE=vanilla NEG_BANK_N_PER_STEP=256 NEG_BANK_WEIGHT=1.0 \
+  sbatch draft_3.sh
+
+# Disabled (default, current behavior)
+sbatch draft_3.sh
