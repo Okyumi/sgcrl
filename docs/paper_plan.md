@@ -1,306 +1,220 @@
-# NeurIPS 2026 Paper — Writing Plan & Bulleted Outline
+# Paper Plan — Sparse-Reward Continual Goal-Conditioned RL
 
-**Working title:** *Continual Goal-Conditioned Contrastive RL with Knowledge Decomposition*
-(Placeholder — a method name like **CGCL** for "Continual Goal-Conditioned Contrastive Learning," or **CoCReL**, or **PoolCRL** can be chosen later.)
+**Target venue.** NeurIPS 2026 (abstract May 4 AOE; full paper May 6 AOE).
+**Working title (draft).** *Contrastive Goal-Conditioned Reinforcement Learning with Policy Decomposition and a Knowledge Pool for Sparse-Reward Continual Control.*
+**Branch of record.** `section3_done` (SGCRL repository). BuilderBench results are appendix-only.
 
-**Deadline:** Abstract May 4 AOE — Full paper May 6 AOE
-**Authors:** Yumi, Zixuan, Prof. Keith W. Ross (NYU Abu Dhabi)
-
----
-
-## Framing (one-paragraph elevator pitch)
-
-We introduce **continual goal-conditioned contrastive RL in a sparse-reward setting** — a new problem setup in which an agent sequentially faces MetaWorld manipulation tasks whose only supervision is a binary reach/no-reach signal. On top of contrastive goal-conditioned RL (GCRL), which turns goal-reaching into a classification problem and thereby sidesteps reward engineering, we layer CKA-RL-style **knowledge decomposition with a bounded pool**: after a base task, every subsequent task learns a lightweight delta on top of a frozen base; deltas are stored, blended, and merged in a bounded pool. A full 3 × 3 ablation of actor / critic transfer regimes (reset, persistent, knowledge-decomposed) plus a novel **offline-to-online negative bank** (previous tasks' HER-relabeled goals as hard negatives for InfoNCE) reveals what transfers across tasks and what does not. We complement this with a **representation-level analysis** of both actor and critic across training — feature rank, Neural Rank Collapse (NRC1/NRC2), Gini index, dormant-neuron ratio, and weight norms — showing that actor plasticity, not critic degradation, is the primary bottleneck in continual RL.
+This document is the writing plan for the main paper. It is organised as an abstract draft followed by section-by-section narratives describing the argument, evidence, and structure we intend to produce in the manuscript. Citation keys follow `docs/citations.md`.
 
 ---
 
-## Why this framing is defensible (differentiation from nearest neighbours)
+## 1. Abstract (draft)
 
-| Nearest neighbour | What they do | What we do differently |
-|---|---|---|
-| Contrastive RL / SGCRL (Eysenbach 2022; Liu 2025) | Contrastive critic on a **single** goal-reaching task | Continual sequence; adds knowledge decomposition + pool; adds offline-to-online negative bank |
-| CKA-RL (Kaplanis 2024) | Actor knowledge decomposition on continual **SAC with dense reward**; critic reset every task | Contrastive critic (no reward engineering); **critic transfer** ablation; both actor and critic decomposition |
-| Continual World (Wolczyk 2021) / Disentangling Transfer (Wolczyk 2022) | Continual manipulation benchmark + transfer diagnostics with SAC | Sparse reward regime; contrastive critic; richer representation diagnostics |
-| Scaling CRL (1000-layer paper) | Single-task contrastive RL at huge scale | Continual; decomposed; representation analysis over task boundaries |
-| Primacy Bias (Nikishin 2022), ReDo (Sokar 2023), plasticity loss lit. | Periodic full resets or per-neuron resurrection on single-task | We study plasticity loss *in the continual regime specifically*, tie it to actor-side metrics, and propose a dormancy-triggered reset that preserves ablation integrity |
-
-Our novelty is not a single new loss or a single new pool mechanism. It is the **composition**: sparse-reward continual setting × contrastive critic × knowledge decomposition × offline-to-online negative mining × representation-level analysis. Any one of these pieces alone is a minor contribution; together they give a clean story with clearly differentiable ablations.
+Continual reinforcement learning requires an agent to acquire a growing set of skills without forgetting previously mastered ones, and most existing benchmarks and algorithms attack this problem with dense, hand-crafted reward functions that encode per-task expert knowledge. Such reward shaping is laborious, brittle across environments, and arguably sidesteps the central representational challenge: learning policies and value functions whose structure transfers across a task sequence. We study continual reinforcement learning in the *sparse-reward* regime, where the reward signal is the self-supervised event of reaching a commanded goal, and we instantiate this setting on a ten-task Meta-World Sawyer manipulation sequence with eight million environment steps per task and no dense shaping. Within this setting we propose a framework that combines three ingredients: (i) a contrastive goal-conditioned critic that represents reachability through a dual encoder trained with InfoNCE, (ii) a policy decomposition that expresses the per-task policy as a frozen base plus a linear combination of knowledge vectors drawn from a bounded knowledge pool, and (iii) an offline-to-online hard-negative mining scheme that reuses goals from prior tasks as additional, per-anchor-selected negatives in the contrastive objective. Across a nine-cell ablation over actor and critic evolution strategies, we find that the combination of a decomposed actor with a persistent contrastive critic delivers the strongest forward transfer, that actor-side representational quality is the primary bottleneck in long task sequences, and that naïve cross-task negatives degrade learning whereas principled per-anchor hard mining yields consistent improvements. The results position contrastive representation learning as a natural substrate for sparse-reward continual control and separate the respective contributions of critic persistence and actor decomposition.
 
 ---
 
-## Writing plan (section by section, time budget)
+## 2. Contributions
 
-| Section | Target length | Writer | Target deadline | Status |
-|---|---|---|---|---|
-| 0. Title + Abstract (150 words) | 0.5 pg | Yumi | May 3 | stub |
-| 1. Introduction (contributions, setup, TL;DR figure) | 1.5 pg | Yumi | May 2 | outline below |
-| 2. Related Work | 1 pg | Yumi | May 3 | outline below |
-| 3. Preliminaries (MDP, GCRL, InfoNCE, CKA-RL) | 0.75 pg | Yumi | May 1 | skeleton exists in `algorithm_pseudocode.md` |
-| 4. Problem Setup (sparse-reward continual GCRL) | 0.5 pg | Yumi | May 1 | outline below |
-| 5. Method (9-config grid + pool + negative bank) | 2 pg | Yumi + Zixuan | May 3 | code + pseudocode exist |
-| 6. Experimental Setup (benchmark, baselines, seeds, metrics) | 0.75 pg | Yumi | May 3 | `batch_experiments.md` + `draft_4.sh` exist |
-| 7. Results: Main comparison (9-config grid) | 1.5 pg | Yumi | May 4 | batches running |
-| 8. Results: Representation analysis | 1 pg | Yumi | May 5 | metrics in place |
-| 9. Results: Negative-bank ablation | 0.5 pg | Yumi | May 5 | variant implemented |
-| 10. Discussion + Limitations | 0.5 pg | Yumi + Keith | May 5 | — |
-| 11. Conclusion | 0.25 pg | Yumi | May 5 | — |
-| Appendix: hyperparams, extra curves, 20-task, BuilderBench | 3 pg | Yumi | May 6 | — |
-| **TOTAL main body** | **10 pg** | | | |
+We structure the manuscript around the following contributions, each stated in a single sentence, most important first, with abbreviations defined on first use.
 
-The NeurIPS main-track page limit is 9 pages + references; appendix is unlimited. Above budget targets 10 pages assuming some trimming during editing.
+1. **Problem setting.** We introduce and empirically instantiate *sparse-reward continual goal-conditioned reinforcement learning* on a ten-task Meta-World Sawyer manipulation sequence, where the only reward is the self-supervised goal-reaching event `r_g(s_t,a_t) = (1-γ)·p(s_{t+1}=g | s_t, a_t)`, removing the hand-crafted dense rewards that previous continual reinforcement learning (CRL) benchmarks rely on.
+2. **Framework.** We propose a framework that combines a dual-encoder contrastive goal-conditioned RL (GCRL) critic `f(s,a,g) = φ(s,a)^⊤ψ(g)` trained with the InfoNCE objective, a policy decomposition of the form `θ′ = θ_base + Σ_j α_j v_j + v_k` managed by a bounded cosine-similarity knowledge pool, and an offline-to-online hard-weighted negative bank that draws per-anchor hard negatives from the buffers of previously seen tasks.
+3. **Empirical findings.** We isolate, through a 9-cell ablation over actor and critic evolution modes (`{reset, persistent, decomposed} × {reset, persistent, decomposed}`), that actor-side decomposition combined with a persistent contrastive critic is the strongest configuration, that critic representation retention dominates forward transfer in line with prior SAC-based evidence, and that actor plasticity loss becomes the primary bottleneck over long sequences.
+4. **Negative-sampling analysis.** We show that naïve cross-task negatives are trivially separable and *hurt* the contrastive objective in multi-region workspaces, whereas per-anchor top-K hard mining with logit down-weighting (`w_bank = 0.3`) converts the offline task history into a useful signal.
 
 ---
 
-## TL;DR figure (front-page headline result)
+## 3. Introduction
 
-A single figure, on page 1 or 2, that conveys the whole paper at a glance. Proposed contents:
+### 3.1 Motivation
 
-- **Panel A (main result).** 10-task Meta-World sparse-reward sequence. Four curves: (i) Contrastive GCRL + decomposed actor + persistent critic (ours, best); (ii) Contrastive GCRL with everything reset (ablation baseline); (iii) SAC with sparse reward (floor); (iv) SAC with dense reward (ceiling reference). y = mean success rate across tasks seen, x = env steps.
-- **Panel B (representation).** Actor dormant ratio over time for a "healthy" seed vs a "stuck" seed of the vanilla (no-adaptive-entropy) variant, showing the plasticity-loss mechanism we discovered.
-- **Panel C (forward transfer heatmap).** Evaluation matrix M[i,j] = success on task i after training through task j. Columns show how performance on earlier tasks behaves when later tasks are trained — and whether newer tasks learn faster given prior knowledge.
+Continual reinforcement learning (CRL) concerns an agent that faces a sequence of tasks `M^(1), …, M^(N)`, each a Markov decision process, and must learn the current task while preserving competence on earlier ones ([Khetarpal et al., 2022]). Existing evaluation pipelines, including Continual World ([Wołczyk et al., 2021]) and the CKA-RL benchmark ([Hu et al., 2025]), are built on the dense, hand-crafted reward functions that Meta-World ships with ([Yu et al., 2020]). These dense rewards entangle two very different questions: (a) whether an algorithm can preserve and reuse knowledge across tasks, and (b) whether it can cope with the engineering choices baked into each per-task reward. In practice, results reported under dense rewards frequently fail to transfer to settings where the reward is only the success event, which is the regime most faithful to deployment on real robots and to the goal-conditioned formulation of reinforcement learning ([Liu et al., 2025]).
 
----
+We therefore study continual reinforcement learning in the *sparse-reward, goal-conditioned* regime. The agent receives reward only when the commanded goal is reached; it must discover its own dense learning signal through contrastive classification of future states ([Eysenbach et al., 2022]). This shift of setting is not cosmetic. It removes a substantial source of inter-task variance (differences in reward scaling), it eliminates per-task reward engineering, and it forces the critic to represent reachability structure rather than task-specific scalar returns. We argue that this representational shift is precisely what a continual-learning algorithm should exploit.
 
-## Section-by-section bullets
+### 3.2 Framing of the contribution
 
-### 1. Introduction (1.5 pg)
+We develop an algorithmic framework that instantiates three complementary ideas inside this setting. First, a contrastive goal-conditioned critic whose dual encoders are trained with the InfoNCE objective ([van den Oord et al., 2018]; [Eysenbach et al., 2022]). Second, a policy decomposition that expresses the per-task policy as a frozen base plus a linear combination of knowledge vectors drawn from a bounded pool. Policy decomposition and bounded knowledge pools have been previously studied in the continual RL literature, most recently by [Hu et al., 2025], and we adopt them as building blocks rather than as objects of study in their own right. Third, an offline-to-online negative-sampling scheme that converts the replay buffers of earlier tasks into additional contrastive negatives for the current task, after filtering them per-anchor to retain only those that exert meaningful gradient pressure on the critic.
 
-**Opening hook**
-- Continual RL is the right abstraction for real-world deployed agents: tasks arrive sequentially, the agent cannot revisit old environments at will, and replay from past tasks is always available offline.
-- Two pervasive obstacles make continual RL hard in practice: (i) **reward engineering** — every new task demands a shaped reward, making per-task design a bottleneck — and (ii) **catastrophic forgetting / plasticity loss** — later training destroys earlier skills or exhausts the network's capacity to learn new ones.
-- Goal-conditioned RL (GCRL) partly addresses (i): specify a target state, not a reward function.
-- Contrastive GCRL goes further — it reduces goal-reaching to a classification problem over InfoNCE and learns reachability representations (φ, ψ) that, unlike scalar Q functions, are intrinsically shared across tasks on the same robot.
+We explicitly do not position this work as an extension of any single prior algorithm. The thesis is that the *combination* — contrastive GCRL, policy decomposition with a knowledge pool, and a principled cross-task negative bank — produces a coherent approach to sparse-reward CRL that existing components, applied in isolation, do not.
 
-**Gap we address**
-- Despite its natural fit, contrastive GCRL has never been studied in a sparse-reward continual setting.
-- The most relevant continual-learning framework (CKA-RL) decomposes the actor into base + knowledge pool but **resets the SAC critic every task** because scalar Q-values do not transfer.
-- But a contrastive critic is not a scalar Q: it factors into two encoders that represent state-action reachability and goal identity, and these can — and should — transfer across tasks.
+### 3.3 Summary of findings
 
-**What we do**
-- Build **Continual Goal-Conditioned Contrastive RL with Knowledge Decomposition**: at each task, maintain a base policy θ_base, a frozen or slowly evolving base critic (φ_base, ψ_base), a shared knowledge pool of per-task deltas, and adaptive entropy.
-- Run a full 3 × 3 ablation over actor transfer × critic transfer regimes (reset / persistent / knowledge-decomposed), giving nine configurations that each isolate a specific mechanism.
-- Introduce an **offline-to-online negative bank**: use HER-relabeled goals from past replay buffers as extra hard negatives in the current task's InfoNCE contrast, with a principled hard-mining and down-weighting scheme to prevent trivial cross-task shortcuts.
-- Instrument both actor and critic with **representation diagnostics** — feature rank, NRC1, NRC2, Gini, dormant ratio, weight norms — captured throughout training at both frequent and occasional sampling rates.
-
-**Contributions** (as promised to the supervisor; 3–4 sentences, most important first, all abbreviations defined)
-1. We formalise **continual goal-conditioned contrastive reinforcement learning (RL) under sparse rewards** as a new problem setup — a sequence of MetaWorld manipulation tasks in which the only supervision is a binary goal-reaching signal — and introduce an algorithm that combines contrastive goal-conditioned RL (GCRL) with knowledge decomposition inspired by Continual Knowledge Adaptation RL (CKA-RL), enabling sequential skill acquisition without per-task reward engineering.
-2. Through a systematic ablation across nine actor–critic transfer configurations (reset, persistent, and knowledge-decomposed), we find that a knowledge-decomposed actor paired with a persistent critic achieves the best performance, and that retaining critic representations across tasks is the primary driver of forward transfer — more so than actor-side knowledge reuse.
-3. We propose an **offline-to-online negative bank** that uses hindsight-relabeled goals from previous tasks' replay buffers as hard negatives for the current task's InfoNCE contrast, with a principled hard-mining and down-weighting scheme that prevents trivial cross-task shortcuts.
-4. We provide a representation-level analysis of continual contrastive RL, tracking feature rank, Neural Rank Collapse (NRC), dormant neuron ratio, and weight norms throughout training, showing that successful task transitions are driven by rapid shifts in actor expressivity rather than gradual critic adaptation, and that actor plasticity loss is the primary bottleneck in longer task sequences.
-
-### 2. Related Work (1 pg)
-
-Organised into four short paragraphs:
-
-**Contrastive goal-conditioned RL.** Eysenbach et al. (2022) showed that learning the discounted state occupancy measure as a critic reduces goal-reaching to a binary classification problem, training (φ, ψ) via InfoNCE. Liu et al. (2025, "Single Goal Is All You Need") extended this to the case of a single fixed goal and identified an "overexploitation" failure mode on sparse-reward manipulation. Scaling laws for contrastive RL have been studied at billion-parameter scale (Wang et al., "scaling CRL"). None of these works address sequential task learning.
-
-**Continual reinforcement learning.** Continual World (Wolczyk et al., 2021) established Meta-World task sequences as the de-facto benchmark for continual manipulation. Wolczyk et al. (2022) disentangled forward and backward transfer and showed that critic transfer often matters more than actor transfer in SAC-based continual learning. Methods include knowledge pools with task-identification (PackNet, CLEAR), parameter-efficient adaptation (LoRA-like deltas), and experience replay (CLEAR, ER). Continual Knowledge Adaptation RL (CKA-RL; Kaplanis et al., 2024) is the closest methodological neighbour: it decomposes the actor head via learnable deltas with a softmax-blended pool, but resets the SAC critic because scalar Q does not transfer. We replace the SAC critic with a contrastive dual-encoder critic (φ, ψ) that transfers naturally and extend the decomposition to both actor and critic.
-
-**Plasticity loss and network resets in RL.** Dohare et al. (2024, Nature) documented plasticity loss in deep RL. Nikishin et al. (2022, "Primacy Bias") showed that periodic full network resets can improve long-horizon training. Sokar et al. (2023, ReDo) proposed per-neuron resurrection based on a dormancy threshold. Lyle et al. (2024) and Abbas et al. (2026) tied plasticity loss to activation geometry. Our diagnostics adopt these metrics; we extend them to the actor side (most prior work focuses on critic) and tie plasticity loss specifically to seed-dependent variance in sparse-reward continual RL.
-
-**Representation analysis in deep RL.** Neural Rank Collapse (Papyan et al., 2020; Zhu et al., 2021) was originally formulated for classification but has been imported into RL (Lyle et al.; He et al. on feature rank in DQN). We compute both NRC1 (subspace collapse toward action dimension) and NRC2 (alignment of hidden features with the final-layer weight's column space), separately for the actor trunk and critic encoders, across continual task boundaries.
-
-### 3. Preliminaries (0.75 pg)
-
-- **Notation.** Goal-reaching MDP (S, A, p, γ). Goal g ∈ G ⊆ S. Contrastive critic f(s, a, g) = φ(s,a)^⊤ ψ(g) trained with InfoNCE over batches of (s, a, g^+) tuples where g^+ is sampled from future states of the same trajectory (HER-style).
-- **InfoNCE training objective** (equation).
-- **Actor objective** (equation): π maximises E[φ(s, π(s, g))^⊤ ψ(g)] plus adaptive entropy (log α autotuned toward target entropy H_* = -½|A|).
-- **CKA-RL actor decomposition** (equation): θ' = θ_base + Σ_j α_j v_j + v_k, α = softmax(β), pool {v_j} merged by cosine similarity when |pool| > K_max.
-- **Critic-side analogue** (equation): (φ, ψ)' = (φ, ψ)_base + Σ_j α_j w_j + w_k.
-
-### 4. Problem Setup (0.5 pg) — **the "new problem setup" Keith wants emphasised**
-
-- **Sequence of N tasks** (τ_1, …, τ_N), each an MDP sharing state/action space but differing in goal distribution and physics.
-- **Sparse reward.** r(s, a, g) = 1 iff ‖obs_to_goal(s) − g‖ < ε; 0 otherwise. No shaping. No demonstrations. Only replay.
-- **Offline-to-online asymmetry** (key framing insight).
-  - While learning task k (online phase), all earlier tasks 0, …, k−1 have already produced trajectories stored in replay buffers.
-  - This is a natural offline-to-online structure that most continual-RL methods ignore: they either discard past replay (CKA-RL, progress-and-compress) or use it only as a regularisation / rehearsal term (CLEAR, ER).
-  - Contrastive learning is a particularly good fit because its loss is naturally a function of *negatives* — more negatives, from more diverse distributions, can improve representation quality if they are used carefully.
-- **Evaluation protocol.** After each task finishes, evaluate on all tasks 0..k. Two scalar summaries: (i) learning curve on task k (plasticity / forward transfer); (ii) retention on tasks 0..k−1 (stability / forgetting).
-
-### 5. Method (2 pg) — core technical section
-
-- **Section 5.1 Architecture.** ResidualMLP body (SGCRL / scaling-CRL default) for both actor and critic encoders φ, ψ. Policy head = NormalTanhDistribution. 1024-width, depth 4, LayerNorm + Swish. Bound actor trunk with extra LayerNorm + Swish so the head sees well-conditioned features (matches scaling-CRL).
-- **Section 5.2 Base-phase training (task 0).** Standard contrastive GCRL. At task 0 the pool is empty and v_0 = 0, so the composed policy equals θ_base (the random init) exactly. Critic and actor both receive full gradients. This reduces *exactly* to SGCRL / scaling-CRL and we verify this empirically (single-task sanity check).
-- **Section 5.3 Continual-phase training (tasks k ≥ 1).**
-  - **Actor.** θ' = θ_base + Σ α_j v_j + v_k. Gradients flow through v_k only; v_j and θ_base are frozen additive constants. Head-only decomposition (adapt_heads_only=True, matching CKA-RL) stores only the `Normal/linear` delta in the pool; the body delta is folded into θ_base post-task so the encoder can evolve.
-  - **Critic.** Three modes: (a) persistent — carry forward φ, ψ with optimizer state; (b) reset — fresh init each task; (c) CKA — (φ, ψ)' = (φ, ψ)_base + Σ α_j w_j + w_k.
-  - **Adaptive entropy.** Per-task log α initialised at 0, autotuned toward target entropy H_* = -½|A| via SAC's dual gradient. Alpha is *not* part of the CKA state — each task has its own exploration schedule.
-- **Section 5.4 Offline-to-online negative bank.**
-  - **Motivation.** Natural offline-to-online structure: previous task's HER goals are free contrastive negatives.
-  - **Vanilla variant.** Uniform random bank goals appended to the batch, labelled negative. We show empirically this *hurts*: MetaWorld workspaces are task-specific, so cross-task negatives are trivially separable from positives, categorical accuracy saturates near 1, gradients vanish, and representations stop improving.
-  - **Principled variant (`hard_weighted`).** (i) Per-anchor hard-negative mining: score a candidate pool of C bank goals against each anchor's φ(s_i, a_i) and keep top-M (via `lax.top_k`). (ii) Down-weight bank logits by w_bank ∈ (0, 1]. Prevents cross-task shortcuts and false-negative leakage.
-  - **Metrics.** bank/logits_mean, bank/logits_max, bank/extended_categorical_accuracy.
-- **Section 5.5 Pool mechanics.** Fixed K_max. When |pool| > K_max, merge the two most cosine-similar vectors. Blending weights α = softmax(β · α_scale) with β_k ~ N(0, 0.01) learnable per-task and α_scale learnable scalar.
-- **Section 5.6 Knowledge decomposition for both actor and critic.** When critic_mode='cka', we mirror the actor decomposition on (φ, ψ): per-task w_k, pool {w_j}, merge by cosine. The critic pool evolves with the actor pool.
-- **Pseudocode box** (reuse `algorithm_pseudocode.md`).
-
-### 6. Experimental Setup (0.75 pg)
-
-- **Benchmark.** 10-task Meta-World manipulation sequence (hammer, push_wall, faucet_close, push_back, stick_pull, handle_press_side, push, shelf_place, window_close, peg_unplug_side). Sawyer robot, 4-DoF action space. Sparse reward: success defined by Meta-World's native `obj_to_target` threshold. 8M env steps per task. Optionally 20-task variant (two passes for forgetting/plasticity stress test).
-- **Baselines.**
-  - *Lower bounds:* **SAC (sparse reward)** — the canonical failure mode of sparse-reward RL. **Sparse SAC + dense SAC** contrast for reward-shaping reference.
-  - *Continual baselines:* **CKA-RL** — actor-pool + reset SAC critic (their default). **Continual Contrastive (reset/reset)** — our method ablated to reset both networks each task (lower bound within our framework).
-  - *Upper bounds / references:* **Single-task SGCRL** on each task independently (per-task ceiling for oracle transfer).
-- **Seeds.** 5 seeds per configuration. Report mean ± std.
-- **Evaluation.** Every 50K env steps, run 10 evaluation episodes with deterministic policy π(a|s,g) = argmax_a φ(s,a)^⊤ψ(g) via K-sample-argmax (K=10, optional) or the mean of the Normal distribution. After each task, evaluate on all previous tasks for retention.
-- **Hyperparameters.** 1024-width ResidualMLP, depth 4, Swish+LayerNorm. target_entropy = -2.0. batch_size = 256. optimizer = Adam 3e-4. logsumexp penalty 0.01 (SGCRL) / 0.1 (scaling-CRL). random_goals = 0.5 for actor loss. Discount 0.99. See Appendix A for full table.
-- **Infrastructure.** JAX/Haiku. NYU Abu Dhabi HPC, NVIDIA A100 GPUs. Batched experiments via SLURM job arrays with JAX memory fraction 0.45 (two runs per GPU). See `batch_experiments.md`.
-
-### 7. Results — Main 9-config grid (1.5 pg)
-
-**Figure 2 (the main plot).** 3 × 3 grid of learning curves, one cell per (actor_mode, critic_mode) combination. Each cell shows average success rate across all tasks seen, versus env steps across the whole 10-task sequence (80 M total). Columns = critic mode, rows = actor mode. Highlight the (CKA actor, persistent critic) cell as the best.
-
-**Expected key findings** (aligned with Yumi's message to Keith):
-- **F1.** Contrastive GCRL substantially outperforms SAC-sparse (which fails to learn on most tasks). This validates the contrastive GCRL choice for sparse-reward continual.
-- **F2.** (CKA actor, persistent critic) > (CKA actor, CKA critic) > (reset actor, reset critic) > CKA-RL (which uses SAC+reset). Thus: (i) knowledge decomposition helps; (ii) persistent critic beats reset; (iii) critic-pool (CKA critic) is *not* necessary — persistent is simpler and works as well or better.
-- **F3.** The critic's mode matters much more than the actor's mode. Compare same-row differences (actor fixed, critic varying) vs same-column differences (critic fixed, actor varying). This confirms Wolczyk et al.'s finding that critic transfer dominates — but in the new setting of contrastive critics.
-- **F4.** Forward transfer, measured as the learning speed on task k vs a from-scratch baseline, is strongest for (CKA actor, persistent critic).
-
-**Figure 3 (cross-task retention heatmap).** Matrix M[i, j] for each mode. Diagonal should be high (task-k performance at end of task k). Sub-diagonal shows forgetting. Compare reset-critic (expect strong forgetting) vs persistent-critic (expect mild forgetting).
-
-**Table 1.** End-of-run summary per configuration: average success, forward transfer score, backward transfer score, wall-clock, parameter count.
-
-### 8. Results — Representation analysis (1 pg)
-
-**Figure 4.** Actor & critic diagnostics over task boundaries. Six small panels, one per metric (weight norm, NRC1, NRC2, Gini, feature rank, dormant ratio), x = env steps across all tasks with vertical lines at task boundaries, separate curves for actor and critic. Compare the best config (CKA+persistent) to the worst (reset+reset) and to CKA-RL.
-
-**Expected findings** (aligned with Yumi's message):
-- **F5.** Critic-side NRC1 and feature rank track success rate monotonically — expected and matches Lyle / Abbas results. Critic representation quality improves across tasks in persistent mode but *oscillates* in reset mode.
-- **F6.** Actor-side metrics tell a different story: sudden drops in **actor feature rank** and spikes in **actor dormant ratio** at task boundaries correlate with performance collapse. The actor loses plasticity faster than the critic degrades.
-- **F7.** In some runs (especially seeds with low initial weight norm) the actor gets trapped: weight norm stays ~50 instead of ~600, dormant ratio exceeds 10%, and success rate never recovers. This motivates our dormancy-triggered reset diagnostic (presented as a safety mechanism for diagnosis, not as a competing method — the user explicitly disabled it by default to preserve ablation integrity).
-- **F8.** Adaptive entropy is essential — with fixed or zero α, the feedback loop between actor expressivity and critic contrast can collapse. α autotuning keeps α high (exploration) until the policy is entropy-rich enough to sustain learning.
-
-### 9. Results — Negative-bank ablation (0.5 pg)
-
-**Figure 5.** 3-way comparison on tasks 1–9 (bank is empty on task 0 by construction):
-- Bank off (baseline)
-- Bank = vanilla (uniform random cross-task goals, no weighting)
-- Bank = hard_weighted (top-M by anchor-score, w_bank = 0.3)
-
-**Expected findings:**
-- **F9.** Vanilla bank *hurts* — categorical_accuracy saturates near 1.0 early, representations stop improving, success rate drops.
-- **F10.** hard_weighted bank slightly improves critic representations on tasks 2+ (better feature rank, lower NRC2), and matches or modestly exceeds the off baseline on task-success rate.
-- **F11.** This validates the offline-to-online intuition: previous replay *is* useful, but only with principled hard mining and down-weighting. A plain concat of old goals is counterproductive.
-
-### 10. Discussion + Limitations (0.5 pg)
-
-- The persistent-critic result generalises Wolczyk et al. (2022) from SAC to contrastive GCRL: in any continual RL, a *shared reachability representation* is the right cross-task object to preserve. Scalar Q-values are task-specific; two-encoder contrastive critics are not.
-- The actor-plasticity bottleneck is novel. We suspect it stems from the combination of (a) contrastive critic's reliance on diverse exploration data and (b) the actor's dependency on critic gradients that themselves collapse when the actor's trajectories become uniform.
-- **Limitations.**
-  - Evaluated on MetaWorld Sawyer only; pixel-based (BuilderBench, robosuite) deferred to follow-up.
-  - 5 seeds per config; a fuller seed budget would tighten confidence intervals.
-  - Negative-bank variant is a first-attempt; further strategies (curriculum mining, diversity-aware sampling) are promising.
-  - Pool merge heuristic is cosine-similarity; other clustering schemes unexplored.
-
-### 11. Conclusion (0.25 pg)
-
-Contrastive goal-conditioned RL is a natural fit for sparse-reward continual learning. When combined with knowledge decomposition and a persistent contrastive critic, it substantially outperforms standard SAC baselines and matches or beats CKA-RL's SAC-based actor decomposition. Cross-task representation sharing is driven by the critic; the actor's primary failure mode in continual RL is plasticity loss. We release code, pipelines, and representation diagnostics to make this setting reproducible.
-
-### Appendices
-
-- **A. Full hyperparameter table.**
-- **B. Per-task learning curves** (Fig 2 expanded).
-- **C. Additional representation analysis** (per-layer NRC decomposition, entropy-coefficient trajectories).
-- **D. 20-task extension** (two passes of the sequence — stress test for forgetting).
-- **E. Single-task sanity check** (verifying CGCRL reduces to SGCRL exactly at task 0 on single-task runs).
-- **F. BuilderBench preliminary results** (different domain — language-conditioned block manipulation; demonstrates generality).
-- **G. Ablations we did not have space for** (target_entropy sweep, K_max sweep, logsumexp_penalty sensitivity).
-- **H. Reproducibility statement** (git hash, exact configs, WandB links).
+We evaluate the framework on a ten-task Meta-World Sawyer manipulation sequence (`hammer, push_wall, faucet_close, push_back, stick_pull, handle_press_side, push, shelf_place, window_close, peg_unplug_side`) with sparse rewards, eight million environment steps per task, and five random seeds per configuration. A full 9-cell grid over `actor ∈ {reset, persistent, decomposed} × critic ∈ {reset, persistent, decomposed}` cleanly separates the contributions of the two mechanisms. The strongest configuration uses a decomposed actor with a persistent contrastive critic. The 1000-layer architectural backbone of [Wang et al., 2025] is retained throughout.
 
 ---
 
-## Experimental checklist (what absolutely needs to run before submission)
+## 4. Related Work
 
-**Critical (must-have for main figures):**
-1. 9-config grid × 5 seeds × 10-task sequence at 8M steps per task. This is the **main contribution**. Batch-runnable via `draft_4.sh` (23 A100 GPU-days × 2 tasks per GPU × 5 seeds ≈ 5 GPU-weeks; 45 configs / 2 per GPU / 5 seeds = 23 array tasks, each running ~80M env steps on 1 GPU).
-2. SAC baselines (sparse + dense) × 5 seeds × 10-task. Needed for Fig 1 lower bound.
-3. CKA-RL baseline × 5 seeds × 10-task (their actor pool + their SAC critic). Needed for Fig 2 ablation.
-4. Representation metrics logging on the best (CKA, persistent) config — already running per-step in the training loop.
+### 4.1 Contrastive and goal-conditioned reinforcement learning
 
-**Important (for secondary figures):**
-5. Negative-bank ablation × 3 variants × 3 seeds × 10-task (Fig 5).
-6. Single-task SGCRL reproduction on task 0 of each MetaWorld task × 3 seeds (sanity check — ideally matches task-0 of 9-config grid).
+The reduction of goal-conditioned value learning to contrastive classification was formalised by [Eysenbach et al., 2022], who showed that an InfoNCE-trained dual-encoder `φ(s,a)^⊤ψ(g)` is consistent with the discounted visitation objective `r_g(s_t,a_t) = (1-γ)·p(s_{t+1}=g|s_t,a_t)`. [Liu et al., 2025] demonstrated that skills and exploration emerge from this formulation when only a single goal is commanded per episode, which is the operating point we adopt. [Wang et al., 2025] pushed contrastive reinforcement learning to very deep residual networks with layer normalisation and Swish activations, establishing the 1000-layer backbone on which our implementation builds. [Bortkiewicz et al., 2025] released the JaxGCRL codebase that makes such experiments tractable, and [Myers et al., 2025] analysed the exploration mechanisms that emerge in this regime. InfoNCE itself traces back to [van den Oord et al., 2018]; the broader practice of maintaining memory banks of negatives appears in the representation-learning literature in [He et al., 2020], and the importance of hard-negative selection has been studied by [Robinson et al., 2021]. Hindsight relabelling ([Andrychowicz et al., 2017]) provides the positive-pair mechanism we inherit.
 
-**Nice-to-have (for appendix):**
-7. 20-task extended run on best config × 3 seeds.
-8. Adaptive-entropy on/off ablation on best config × 3 seeds.
+### 4.2 Continual reinforcement learning
 
-**Total compute budget estimate:**
-- Primary grid: 45 runs × ~24 GPU-hours each = ~1100 GPU-hours.
-- Baselines + ablations + replications: ~400 GPU-hours.
-- Grand total: ~1500 GPU-hours (~60 GPU-days). Fits within NYU-AD HPC allocation if start today and use 2 tasks per GPU.
+A broad survey of CRL is given by [Khetarpal et al., 2022]. On the benchmark side, [Wołczyk et al., 2021] introduced Continual World, a ten-task Meta-World sequence that has become a standard testbed, and [Wołczyk et al., 2022] showed that in soft actor-critic (SAC, [Haarnoja et al., 2018]) transferring the critic gives a larger forward-transfer benefit than transferring the actor. Their analysis is conducted under dense rewards and with a scalar Q-function; we revisit the same question under a contrastive critic and in the sparse-reward regime. Replay-based approaches such as CLEAR ([Rolnick et al., 2019]) and regularisation approaches such as EWC ([Kirkpatrick et al., 2017]) remain orthogonal baselines.
+
+### 4.3 Policy decomposition and knowledge pools
+
+Decomposing the per-task policy as a frozen base plus a set of additive knowledge vectors has recently been proposed in CKA-RL ([Hu et al., 2025]) for SAC-based continual control, where a bounded pool merges the most cosine-similar pair whenever it exceeds a maximum size. We adopt the same mathematical form, `θ′ = θ_base + Σ_j α_j v_j + v_k` with `α = softmax(β·α_scale)` and merge rule `|V| > K_max ⇒ merge arg-max-similarity pair`, because it is simple, parameter-efficient, and composable with the contrastive critic; the present work is not an extension of CKA-RL and we do not inherit its SAC back-end, its reliance on dense rewards, or its critic-reset protocol. The broader literature on modular and compositional policies — including progressive networks, parameter-efficient adapters, and mixture-of-experts policies — provides alternative realisations of the same underlying idea.
+
+### 4.4 Plasticity loss and representation collapse
+
+Neural networks trained on non-stationary data streams lose plasticity ([Dohare et al., 2024]). Relevant diagnostic tools include the primacy bias characterised by [Nikishin et al., 2022] and the dormant-neuron analysis with reset protocol of [Sokar et al., 2023], from which we adopt the `τ = 0.025` threshold used in our actor diagnostics. Representational collapse at the feature level is diagnosed via the neural-collapse statistics (NRC1, NRC2) of [Papyan et al., 2020]. These metrics are used in this paper as analysis instruments; our algorithm does not introduce new plasticity regularisers.
 
 ---
 
-## Risks & mitigations
+## 5. Problem Setting
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| Some seeds hit the plasticity-loss trap and produce flat curves | Appears as huge variance, weakens Fig 2 | (i) We now use adaptive entropy which mitigates; (ii) report median + IQR alongside mean + std |
-| Reviewers ask "why not a single-buffer rehearsal baseline (CLEAR/ER)" | Reviewer might consider this a straightforward baseline we omitted | Add CLEAR as an additional baseline in an appendix if time permits; anyway our method does not use cross-task rehearsal in the standard sense |
-| Reviewers ask "why MetaWorld and not something harder" | Weakens generality claim | Include BuilderBench preliminary results in appendix; discuss generality in Discussion |
-| CKA-RL baseline underperforms badly — reviewers may call it a strawman | Unfair comparison concern | Reproduce CKA-RL's published numbers on a dense-reward setting first, then run them on our sparse setting; acknowledge the sparse setting is harder for SAC |
-| Negative-bank section has weak signal if the hard_weighted gain is modest | Section 9 contribution looks thin | Be clear that the *analysis* (why vanilla fails) is as important as the positive result; reframe as "a principled approach is needed, we propose one." |
-| BuilderBench port has known algorithmic gaps (no adaptive entropy, no neg bank) | Appendix F weaker than hoped | Plan: either skip BuilderBench for this submission or port the adaptive-entropy fix before running (see "BuilderBench audit" section below) |
+### 5.1 Sparse-reward continual goal-conditioned RL
+
+We consider a sequence of tasks `{M^(k)}_{k=0}^{N-1}` sharing a common state space `S`, action space `A`, discount factor `γ`, and robot embodiment. Each task specifies a transition kernel `p^(k)` and a goal distribution `p_g^(k)` over a task-specific goal manifold embedded in `S`. The reward is the self-supervised goal-reaching event
+
+`r_g(s_t, a_t) = (1 − γ) · p(s_{t+1} = g | s_t, a_t)`,
+
+which, up to a constant, is equivalent to the indicator `1[s_{t+1} = g]` discounted by `γ^t`. The agent observes `(s, g)` and selects `a`. No dense reward shaping is available at any point during training.
+
+### 5.2 Learning objective
+
+At task `k`, the agent optimises
+
+`max_π E_{s_0 ~ p_0^{(k)}, g ~ p_g^{(k)}, π} Σ_t γ^t r_g(s_t, a_t)`,
+
+subject to stability constraints on performance on tasks `0, …, k-1`. We measure success with two families of metrics: intra-task learning curves (success rate over environment steps) and cross-task forgetting (success rate on tasks `0, …, k-1` after training on task `k`). No dense-reward proxy is used for evaluation.
+
+### 5.3 Benchmark instantiation
+
+We instantiate this setting on ten Meta-World Sawyer manipulation tasks in the canonical Continual-World ordering (`hammer, push_wall, faucet_close, push_back, stick_pull, handle_press_side, push, shelf_place, window_close, peg_unplug_side`). Goals are extracted from the last three positional coordinates of the Meta-World observation and are interpreted per task (object position, handle position, or nail position). Each task is run for eight million environment steps; each configuration is run with five seeds. All experiments use sparse rewards; dense-reward baselines are run only for the purpose of comparison with previous work and are reported separately.
 
 ---
 
-## BuilderBench audit — current gaps and quick fixes
+## 6. Method
 
-We reviewed the BuilderBench port (`rl/impls/continual_crl.py`) and identified gaps against the reference SGCRL code:
+We describe the three components of the framework in the order in which they appear in the training loop: the contrastive critic (Section 6.1), the policy decomposition and knowledge pool (Section 6.2), and the offline-to-online hard-weighted negative bank (Section 6.3). Algorithm 1 in the appendix gives the full pseudocode; `docs/algorithm_pseudocode.md` is the reference implementation specification.
 
-| Component | SGCRL (ours, fixed) | BuilderBench (current) | Fix effort |
+### 6.1 Contrastive goal-conditioned critic
+
+Following [Eysenbach et al., 2022] and [Liu et al., 2025], we train a dual-encoder critic
+
+`f(s, a, g) = φ(s, a)^⊤ ψ(g)`,
+
+where `φ : S × A → R^d` and `ψ : S → R^d` are realised by residual MLPs (width 1024, depth 4, LayerNorm, Swish activations) following the architecture of [Wang et al., 2025]. Positives are drawn by hindsight relabelling ([Andrychowicz et al., 2017]); negatives are in-batch goals. The critic loss is the InfoNCE objective
+
+`L_InfoNCE = E_D [ −log ( exp f(s,a,g^+) / ( exp f(s,a,g^+) + Σ_j exp f(s,a,g^-_j) ) ) ]`,
+
+implemented as the `contrastive_cpc` variant that also applies a logsumexp regulariser. The actor is trained by maximising the diagonal of the critic score matrix,
+
+`max_θ E_{(s,g)~D} [ φ(s, π_θ(s, g))^⊤ ψ(g) ]`,
+
+with an adaptive entropy coefficient tuned by the SAC dual gradient ([Haarnoja et al., 2018]) with `target_entropy = −2.0`. A `NormalTanh` head, preceded by an additional LayerNorm and Swish layer, outputs stochastic actions.
+
+### 6.2 Policy decomposition and knowledge pool
+
+For task `k > 0`, the policy parameters are expressed as
+
+`θ′ = θ_base + Σ_{j=1}^{k−1} α_j v_j + v_k`,   `α = softmax(β · α_scale)`,
+
+where `θ_base` is the base policy obtained at the end of task 0, `v_j` is the knowledge vector learned on task `j`, `v_k` is the current task's knowledge vector, and `β, α_scale` are learnable blending parameters. By default only the output head (mean and log-std) is decomposed (`adapt_heads_only = true`), while the encoder body is fed gradients (`encoder_from_base = false`) so that representation drift is possible without proliferating knowledge vectors. The pool `V = {v_1, …, v_{k-1}}` is bounded by `K_max = 5`; whenever `|V| > K_max`, the pair with the highest cosine similarity is merged by averaging, following the protocol of [Hu et al., 2025]. The same decomposition form can be applied to the critic encoders, and we expose this as an ablation cell.
+
+### 6.3 Offline-to-online hard-weighted negative bank
+
+During task `k`, the learner has access to the replay buffers of tasks `0, …, k-1`. We form a `NegativeBank` that stores, per task, up to `10,000` HER-relabelled goals, with a FIFO retention over at most `20` tasks. At each critic update, we sample a candidate pool of `1,024` goals from the bank and score them against each anchor `(s_i, a_i)` to form a score matrix `φ(s_i, a_i)^⊤ ψ(g_c)`. Per anchor, we retain the top `M = 256` candidates via `jax.lax.top_k`, and append the resulting logits to the in-batch contrast with a scalar down-weight `w_bank = 0.3`:
+
+`extended_logits = concat( in_batch_logits, w_bank · bank_logits )`.
+
+The categorical cross-entropy is taken over the extended logits, with the positive column unchanged. This design is motivated by a concrete failure mode of the vanilla variant, documented in `docs/negative_bank.md` and revisited in Section 7.4: because Meta-World tasks occupy disjoint workspace regions, unfiltered cross-task goals are trivially separable from current-task goals, so the critic achieves near-perfect categorical accuracy without learning a useful representation. Per-anchor top-K mining selects negatives that lie near the current decision boundary, and logit down-weighting limits damage from residual false negatives.
+
+### 6.4 Training loop
+
+Training proceeds in two phases: a base phase (task 0) that trains the full policy and critic with no decomposition, and a continual phase (tasks 1 to N−1) that applies the decomposition to the actor and one of three evolution modes to the critic. The actor auto-reset mechanism developed in earlier iterations of this work is retained as a diagnostic but is disabled by default. The learner and driver are implemented in JAX/Haiku in the `section3_done` branch; SLURM orchestration uses the frozen `draft_3.sh` environment recipe, and the batch launcher `draft_4.sh` together with `experiment_configs.py` manages the 9 × 5 = 45 full-scale runs.
+
+---
+
+## 7. Experiments
+
+### 7.1 Experimental setup
+
+All experiments are run on the ten-task Meta-World Sawyer sequence described in Section 5.3. Each configuration uses five random seeds and eight million environment steps per task. Reported metrics are mean and standard error across seeds. The full 9-cell ablation grid is
+
+| Actor evolution \\ Critic evolution | reset | persistent | decomposed |
 |---|---|---|---|
-| Entropy coefficient | **Adaptive** (log α autotuned toward target entropy -2.5 = -0.5 × 5) | **Fixed** `entropy_cost=0.1` (old pre-fix version) | 1 day — port the SAC dual-gradient from SGCRL |
-| target_entropy | -0.5 × action_dim (= -2.5 for BuilderBench's 5-D actions) | Not defined | Trivial once adaptive entropy is in |
-| Negative-replay bank | Implemented (vanilla + hard_weighted) | Not implemented | 1 day — port from `contrastive/negative_bank.py` |
-| Automatic actor reset | Implemented, disabled by default | Not implemented | Optional — user explicitly doesn't want resets by default |
-| CKA composition | Head-only + body folded into base | Matches SGCRL logic ✓ | — |
-| Actor/critic decomposition | Actor head (Dense_4, Dense_5) vs body | Matches SGCRL logic ✓ | — |
-| 12-task mixed-cube sequence | N/A (SGCRL uses MetaWorld) | Implemented with padding | — |
+| reset | (a) | (b) | (c) |
+| persistent | (d) | (e) | (f) |
+| decomposed | (g) | (h) | (i) |
 
-**Recommendation for the NeurIPS paper.** Treat BuilderBench as a **secondary / appendix-only** result in this paper. The architectural gap (no adaptive entropy) is the most important fix — without it, seed-dependent plasticity-loss traps will dominate BuilderBench as they did in SGCRL before our fix. If there is time after the main experiments run, do a one-day port of the adaptive-entropy code and rerun the two or three most important BuilderBench configs (CKA actor + persistent critic, reset + reset). If there is not time, the paper stands cleanly on MetaWorld alone.
+Cell (e) corresponds to a naïve full-network carryover without decomposition, and cell (i) corresponds to a fully decomposed actor and critic. Cell (h), decomposed actor with persistent contrastive critic, is our proposed default.
 
----
+### 7.2 Core result: learning curves and forgetting
 
-## Post-submission (camera-ready) roadmap
+Figure 1 (to be produced) shows, for each cell in the 9-grid, the per-task success curves stacked along the task sequence; Figure 2 shows the post-sequence forgetting matrix. The predicted pattern is (a) a substantial gap between any configuration using a contrastive critic and a sparse-SAC baseline, (b) cell (h) as the dominant configuration, (c) decomposed-actor cells dominating reset-actor cells, and (d) persistent-critic cells dominating reset-critic cells, consistent with [Wołczyk et al., 2022] in the dense-reward SAC regime and extending their finding to the contrastive sparse-reward regime.
 
-- Additional seeds (10+) on the main grid for tighter error bars.
-- BuilderBench full port with adaptive entropy + neg bank.
-- Learnable α for pool blending (currently uniform-softmax over β_k).
-- More principled negative-bank strategies (curriculum, diversity-aware sampling).
-- Pixel-based observations (extend to Meta-World v3 / robosuite visual).
-- Theoretical analysis of when persistent critic provably dominates reset critic (information-theoretic argument).
+### 7.3 Forward and backward transfer
 
----
+We report both forward transfer (learning speed on task `k` given the continual-learning state at the end of task `k-1`) and backward transfer (change in performance on tasks `0, …, k-1` after training on task `k`). Forward transfer is expected to be dominated by the critic (persistent > decomposed > reset), consistent with the critic carrying reachability information that is task-agnostic. Backward transfer is expected to be dominated by the actor decomposition, since the knowledge pool and the frozen base provide the only mechanism for protecting prior-task behaviour.
 
-## Operational check-in — what Yumi should do next (week-by-week)
+### 7.4 The negative bank ablation
 
-**Week of Apr 21 (NOW):**
-- Kick off the full 9-config × 5-seed grid on NYU-AD HPC (`sbatch draft_4.sh`).
-- Launch SAC-sparse and SAC-dense baselines in parallel.
-- Start writing Introduction + Related Work (does not depend on results).
+We compare three settings of `neg_bank_mode`: `off`, `vanilla`, and `hard_weighted`. The vanilla variant is expected to slow or reverse learning in the early continual tasks because of the workspace-separability problem described in Section 6.3. The hard-weighted variant is expected to match or improve on `off` uniformly. Metrics reported are `categorical_accuracy` (in-batch), `bank/extended_categorical_accuracy`, `bank/logits_mean`, and `bank/logits_max`. These provide a diagnostic chain from raw negative quality (`bank/logits_mean`) to final effect on the softmax (`extended_categorical_accuracy`) to task-level success.
 
-**Week of Apr 28:**
-- First results come in — inspect learning curves, fix any launch issues, relaunch stragglers.
-- Write Method + Problem Setup sections.
-- Generate Fig 1 / Fig 2 placeholder layouts with synthetic data for layout.
+### 7.5 Plasticity diagnostics
 
-**Week of May 5 (deadline week):**
-- May 3: freeze main figures, polish Introduction.
-- May 4: abstract submission. Polish Results.
-- May 5: polish Discussion + Appendix.
-- May 6: full paper submission.
+We report four actor-side plasticity metrics across the task sequence: dormant-neuron ratio at threshold `τ = 0.025` ([Sokar et al., 2023]), neural-collapse statistics NRC1 and NRC2 ([Papyan et al., 2020]), feature rank, and entropy. The hypothesis is that the reset-actor cells exhibit the smallest dormancy accumulation but forfeit backward transfer, whereas the persistent-actor cells accumulate dormancy most rapidly; the decomposed-actor cells should occupy an intermediate point and should show the clearest correlation between delayed performance jumps on late tasks and shifts in actor-feature rank.
+
+### 7.6 Robustness
+
+We report sensitivity to `K_max ∈ {3, 5, 8}`, `w_bank ∈ {0.1, 0.3, 0.5}`, and `target_entropy ∈ {−1.5, −2.0, −2.5}`, around the default cell (h). Full details of configurations are in `docs/batch_experiments.md` and `experiment_configs.py`.
+
+### 7.7 Comparisons to prior work
+
+We additionally report a sparse-reward SAC baseline (full actor and critic reset each task), a dense-reward SAC baseline (for reference with published Continual-World and CKA-RL numbers), and a sparse-reward CKA-RL re-implementation (decomposed actor, SAC critic, critic reset each task) to isolate the contribution of the contrastive critic under matched decomposition machinery.
 
 ---
 
-## Proposed algorithm name
+## 8. Discussion
 
-Candidates:
-- **CG-CRL** — "Continual Goal-Conditioned Contrastive RL" (literal, clear, matches keywords).
-- **CoCoRL** — "Continual Contrastive RL" (short, pronounceable, phonetically memorable).
-- **KnowCRL** — "Knowledge-decomposed Contrastive RL" (emphasises decomposition).
-- **C²KA-RL** — "Contrastive Continual Knowledge Adaptation RL" (emphasises CKA-RL lineage).
+### 8.1 Why contrastive representations help in continual settings
 
-Recommendation: **CoCoRL** — simple, short, pronounceable, and does not commit to a particular architectural detail.
+The contrastive critic learns a representation of reachability that is invariant to the particular scalar reward of a task. This invariance is what makes critic persistence work: where an SAC critic would have to be reset to avoid inheriting stale Q-values scaled to a previous task's reward, a contrastive critic can, in principle, be fine-tuned across tasks. Our results quantify the size of this effect in sparse-reward, goal-conditioned manipulation.
+
+### 8.2 The role of decomposition
+
+Decomposition, as deployed here, is a parameter-efficient mechanism for protecting past-task behaviour. It is not the reason contrastive continual learning works; rather, it is a compatible mechanism for turning the representation retained by the critic into retained behaviour in the actor. Prior work ([Hu et al., 2025]) has studied decomposition in SAC-based continual RL; our contribution here is not decomposition per se but the demonstration that the technique is useful *on top of* a contrastive critic in the sparse-reward regime.
+
+### 8.3 Limitations
+
+Our benchmark uses a single robot embodiment, a fixed task ordering, and ten tasks; longer sequences and task orderings are explored partially via the 20-task (double-pass) setting but not exhaustively. The framework inherits the dependence of contrastive GCRL on the availability of future states for relabelling, which restricts the method to episodic Markovian settings. We do not study language-conditioned or image-based observations.
+
+---
+
+## 9. Appendices (planned)
+
+- **A. Algorithm pseudocode.** Full version of Algorithm 1, mirroring `docs/algorithm_pseudocode.md`.
+- **B. Hyperparameters.** Complete tables for actor, critic, negative bank, decomposition.
+- **C. Architectural details.** Residual MLP specification, `NormalTanh` head, LayerNorm placement.
+- **D. Extended plasticity metrics.** Full curves for all 9 cells.
+- **E. BuilderBench preliminaries.** Single-task and two-task validation runs; noted as preliminary because adaptive entropy, the negative bank, and actor auto-reset are not yet plumbed into the BuilderBench driver.
+- **F. Compute and reproducibility.** SLURM scripts, seeds, W&B project, checkpoint paths.
+
+---
+
+## 10. Writing schedule
+
+| Deliverable | Owner | Due |
+|---|---|---|
+| Full ablation run (9 × 5, 10 tasks × 8M) launched on NYUAD HPC | Yumi | Apr 22 |
+| First-pass figures (learning curves, forgetting matrix, bank diagnostics) | Yumi | Apr 28 |
+| Introduction + Problem Setting + Method drafts | Yumi | Apr 30 |
+| Experiments + Discussion drafts | Yumi | May 3 |
+| Full internal review with Prof. Ross | Yumi + Keith | May 4 AM |
+| Abstract submission | — | May 4 AOE |
+| Final polish, appendices, final submission | Yumi | May 6 AOE |
+
+---
+
+## 11. Open questions for Prof. Ross
+
+1. Whether the 9-cell ablation should be the headline figure or whether cell (h) alone should carry the narrative with the other cells deferred to an appendix.
+2. Whether the dense-reward SAC and dense-reward CKA-RL numbers should be shown alongside our sparse results in the main paper, or only as an appendix calibration.
+3. Whether the 20-task stress test belongs in the main experiments or as an appendix stress test.
+4. Whether the negative-bank analysis (Section 7.4) merits a standalone narrative slot given how cleanly it isolates a qualitative failure mode of naïve cross-task negatives.
