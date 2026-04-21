@@ -83,6 +83,40 @@ All citation details below have been verified against the primary sources (arXiv
 **Papyan, V., Han, X. Y., Donoho, D. L.** *Prevalence of Neural Collapse During the Terminal Phase of Deep Learning Training.* PNAS, 2020.
 *How we use it.* Provides the NRC1 and NRC2 neural-collapse statistics used as representational diagnostics on the actor encoder.
 
+### [kumar2021implicit]
+**Kumar, A., Agarwal, R., Ghosh, D., Levine, S.** *Implicit Under-Parameterization Inhibits Data-Efficient Deep Reinforcement Learning.* ICLR 2021.
+*How we use it.* Feature-rank collapse diagnostic for value-function representations; grounds our feature-rank tracking on the actor encoder.
+
+### [lyle2022understanding]
+**Lyle, C., Rowland, M., Dabney, W.** *Understanding and Preventing Capacity Loss in Reinforcement Learning.* ICLR 2022.
+*How we use it.* Characterises capacity loss through rank collapse in RL representations; companion reference to Kumar et al. 2021 for actor-plasticity diagnostics.
+
+## 3b. Representation drift and feature forgetting in continual learning
+
+### [zhang2022feature]
+**Zhang, X., Dou, D., Wu, J.** *Feature Forgetting in Continual Representation Learning.* arXiv:2205.13359, 2022.
+*How we use it.* Introduces a representation-level evaluation protocol for continual learning; shows that feature forgetting exists beyond output-level catastrophic forgetting. Cited when we discuss how $\phi, \psi$ evolve across the task sequence.
+
+### [caccia2021new]
+**Caccia, L., Belilovsky, E., Caccia, M., Pineau, J.** *New Insights on Reducing Abrupt Representation Change in Online Continual Learning.* ICLR 2022 (OpenReview 2021).
+*How we use it.* Shows that learned embeddings drift as training proceeds, degrading retrieval and transfer even with replay. Canonical reference for embedding drift in continual representation learning.
+
+### [anthes2024continual]
+**Anthes, C., et al.** *Continual Learning and Representational Drift via Orthogonal Optimization.* 2024.
+*How we use it.* Empirically verifies that under orthogonal-optimisation continual learning, representations of past tasks drift while performance stays stable. Supports the claim that representation drift and stable behaviour can coexist.
+
+### [gu2023backward]
+**Gu, Y., Yang, X., Wei, K., Deng, C.** *Not Just Selection, but Exploration: Online Class-Incremental Continual Learning via Dual View Consistency.* Related line: Backward Feature Projection for continual learning.
+*How we use it.* Allows new features to change up to a learnable linear transformation of old features; relevant prior art when discussing constrained representation drift.
+
+### [telapa2026]
+**Preserving Plasticity in Continual Reinforcement Learning.** arXiv:2604.15414, 2026.
+*How we use it.* Reframes continual RL around latent manifold dynamics and uses anchor sets + replay-based alignment + periodic re-embedding to stabilise encoder drift across non-stationary curricula. Directly adjacent to the "how do $\phi, \psi$ evolve" probe we run.
+
+### [cchain2025]
+**Mitigating Plasticity Loss in Continual Reinforcement Learning by Reducing Churn (C-CHAIN).** ICML 2025.
+*How we use it.* Shows plasticity loss correlates with rank decrease of the Neural Tangent Kernel; proposes a churn-reducing regulariser. Complements our actor-plasticity diagnostics.
+
 ---
 
 ## 4. Contrastive representation learning

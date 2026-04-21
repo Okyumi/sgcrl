@@ -1,13 +1,14 @@
 # Paper Plan — NeurIPS 2026
 
-- We study continual reinforcement learning in a sparse-reward, goal-conditioned setting.
-- In continual RL, an agent faces a sequence of tasks and must learn each new task while retaining competence on earlier ones.
-- In most real-world and simulator settings, we ultimately only care whether the agent reaches a goal or completes a task.
+- We propose a sparse-reward continual goal-conditioned reinforcement learning setting.
+- The agent faces a sequence of tasks $\mathcal{M}^{(1)},\ldots,\mathcal{M}^{(N)}$ that share a state space, action space, and robot embodiment; each task defines its own transition kernel and goal distribution.
+- The only reward signal the agent sees on any task is the goal-reaching event $r_g(s_t,a_t)=(1-\gamma)\,p(s_{t+1}=g\mid s_t,a_t)$, and no dense reward shaping is available at any point during training or evaluation.
+- The agent must learn the current task while retaining competence on earlier tasks, and is evaluated by intra-task success curves, cross-task forgetting, and forward transfer.
+- To the best of our knowledge, no prior continual-RL benchmark operates in this regime: Continual World (Wołczyk et al., NeurIPS 2021) and the CKA-RL benchmark (Hu et al., NeurIPS 2025) both rely on the Meta-World V2 dense rewards, sparse-reward Meta-World variants exist only in the single-task model-based RL literature, and hindsight-relabelling work for sparse reward targets meta-RL rather than continual RL.
+- In most real-world and simulator settings we ultimately only care whether the agent reaches a goal or completes a task.
 - Reward engineering relies heavily on human effort and per-task heuristics, and the resulting dense reward functions largely decide how well a continual RL algorithm appears to perform.
 - It is therefore appealing to minimize manual reward design and instead rely on algorithms that can learn goal-related signals more naturally.
-- In this paper the only reward signal the agent sees is the goal-reaching event $r_g(s_t,a_t)=(1-\gamma)\,p(s_{t+1}=g\mid s_t,a_t)$.
 - We instantiate this setting on a ten-task Meta-World Sawyer manipulation sequence, trained with eight million environment steps per task and five seeds per configuration.
-- We call this setting sparse-reward continual goal-conditioned RL, and the setting itself is a contribution of the paper.
 - A natural solver for this setup is contrastive goal-conditioned RL.
 - The contrastive critic $f(s,a,g)=\phi(s,a)^\top\psi(g)$ is trained with InfoNCE on hindsight-relabeled positives and turns the value-learning problem into a classification problem.
 - What the critic encodes is reachability structure, not a task-specific scalar return, and reachability structure is shared across a sequence of manipulation tasks that use the same robot embodiment.
@@ -15,7 +16,8 @@
 - Standard actor-critic RL has known scalability limitations; contrastive goal-conditioned RL has recently been shown to scale cleanly to very deep residual networks (Wang et al., NeurIPS 2025), which makes it a strong substrate for a continual agent that needs to keep absorbing skills.
 - The continual setup exposes questions about contrastive RL that a single-task setup cannot.
 - How do the encoders $\phi$ and $\psi$ adapt as new tasks arrive, how does the representation space shift and evolve across a task sequence, and does the representation learned on later tasks remain compatible with goals from earlier tasks.
-- A continual sparse-reward setting gives us a concrete environment in which to probe these questions empirically.
+- These questions sit next to an empirical literature on representation-level drift in continual learning (Caccia et al. 2021; Zhang, Dou, Wu, 2022 on feature forgetting; Anthes et al. 2024 on drift under orthogonal optimisation), which has mostly been developed in supervised continual learning and only recently carried into continual RL (TeLAPA, 2026; C-CHAIN, ICML 2025).
+- A continual sparse-reward contrastive setting gives us a concrete environment in which to probe these representation-drift questions on a value function rather than a classifier.
 - It also suggests natural extensions: a fixed goal under changing state spaces, so that only the critic's input distribution shifts; or a multi-armed-bandit-with-state variant in which one route leads to stochastic success and the environment changes which route that is over the task sequence.
 - Our framework combines three ingredients in the sparse-reward continual setting.
 - The first ingredient is the contrastive goal-conditioned RL critic described above.
@@ -43,7 +45,7 @@
 - The answer to the second question is driven by a different mechanism: the decomposition converts critic-side retention into actor-side retention, which is what drives backward transfer.
 - The predicted headline configuration is a decomposed actor with a persistent contrastive critic.
 - A third question concerns actor-side representation quality over long sequences.
-- We measure dormant-neuron ratio (with the $\tau=0.025$ threshold from Sokar et al. 2023), neural-collapse statistics NRC1 and NRC2 (Papyan et al. 2020), and feature rank on the actor encoder.
+- We measure dormant-neuron ratio (with the $\tau=0.025$ threshold from Sokar et al. 2023), neural-collapse statistics NRC1 and NRC2 (Papyan et al. 2020), feature rank (Kumar et al. 2021; Lyle et al. 2022), and entropy on the actor encoder.
 - These degrade over long task sequences, and we expect actor plasticity loss — not critic forgetting — to eventually bottleneck performance.
 - We track these metrics across the full ten-task sequence for all nine cells, and correlate delayed success jumps on late tasks with shifts in actor-feature rank.
 - A fourth question concerns the negative bank: does reusing past-task data as contrastive negatives help, and if so, under what filtering.
@@ -69,6 +71,7 @@
 - Full citation list with annotations and verified references: `docs/citations.md`.
 - Algorithm pseudocode: `docs/algorithm_pseudocode.md`.
 - Negative bank design note: `docs/negative_bank.md`.
+- Progress tracker: `docs/paper_planning_tracking.md`.
 
 ---
 
