@@ -16,17 +16,18 @@ Working document for the NeurIPS 2026 submission planning process. Captures deci
 - The paper is about sparse-reward continual goal-conditioned RL. This setting is a first-class contribution.
 - Framework language is fixed: **contrastive GCRL + policy decomposition + knowledge pool** in a sparse-reward continual setting.
 - "Knowledge decomposition" is not used. The two mechanisms are "policy decomposition" and "knowledge pool".
-- The paper is not positioned as an extension of CKA-RL. Hu et al. (NeurIPS 2025) is cited as prior work on policy decomposition and bounded knowledge pools in continual RL.
+- Hu et al. (NeurIPS 2025) is cited as prior work on policy decomposition and bounded knowledge pools in continual RL. Nothing more about what the paper is or is not in relation to it.
 - Contrastive GCRL is the underlying RL algorithm, not a contribution. No InfoNCE exposition in the main body.
 - Actor auto-reset is disabled by default.
 - Adaptive entropy is enabled (SAC dual gradient, `target_entropy=-2.0`).
 - 9-cell ablation: actor $\in \{\text{reset},\text{persistent},\text{decomposed}\}\times$ critic $\in \{\text{reset},\text{persistent},\text{decomposed}\}$, 5 seeds each, 10 tasks, 8M env steps per task.
+- Future-work section will explicitly acknowledge that future methods — RL or otherwise — can likely achieve better results on this setting than ours, and will invite the community to expand research on it.
 
 ## Outline register (style reference)
 
 - Bulleted story: one claim per bullet, plain language, no in-narrative sub-headers.
 - Inline math where needed (e.g. $r_g$, $\theta'$), no proof-style derivations.
-- No defensive meta-commentary about what the paper is "not". If a framing constraint exists, we honour it silently.
+- **No defensive meta-commentary.** No "to the best of our knowledge", no "we do not position this paper as...", no hedges whose purpose is to demonstrate compliance with a constraint. If the user has asked me to honour a framing rule, I honour it silently. The writing is content, not a facade showing that I am following instructions.
 - Logistics, schedule, and open questions sit below the narrative as short reference sections.
 
 ## Evidence gathered on novelty of the setting
@@ -83,17 +84,17 @@ Relevant prior work to cite when the paper discusses how $\phi, \psi$ evolve acr
 
 ## Running history of revisions
 
-- **Draft 1.** Academic-prose paper plan with abstract and section-by-section narrative. Rejected by user: too casual in some places, wrong CKA-RL citation (Kaplanis), not enough what was wanted.
-- **Draft 2.** Rewritten in formal academic prose; CKA-RL citation corrected to Hu et al. (NeurIPS 2025). Rejected by user: does not match the bulleted-outline register that was requested.
-- **Draft 3.** Bulleted narrative matching the OT-reward-paper reference. Accepted in form, but flagged as catering/defensive in tone ("we do not position this paper as..."); needed to drop the defensive sentences.
-- **Draft 4.** Defensive framing removed. Accepted as a baseline; user then requested expansion on motivations (reward engineering, scalability, offline-to-online nature, contrastive-RL-as-lens).
-- **Draft 5 (current).** Expanded motivations added; Myers et al. 2026 (*On Computation and RL*) added to citations.
-- **Draft 6 (next).** Will add explicit statement that sparse-reward continual goal-conditioned RL is a new setting (no published benchmark specifically for it); add representation-drift citations to ground the "how do encoders adapt" discussion.
+- **Draft 1.** Academic-prose paper plan with abstract and section-by-section narrative. Rejected: too casual in places, wrong CKA-RL citation (Kaplanis), not what was wanted.
+- **Draft 2.** Formal academic prose; CKA-RL citation corrected to Hu et al. (NeurIPS 2025). Rejected: does not match the bulleted-outline register.
+- **Draft 3.** Bulleted narrative matching the OT-reward-paper reference. Flagged as catering/defensive in tone.
+- **Draft 4.** Defensive framing removed. Baseline accepted; motivations expansion requested.
+- **Draft 5.** Expanded motivations (reward engineering, scalability, offline-to-online, contrastive-RL-as-lens). Myers et al. 2026 added to citations.
+- **Draft 6.** Added a paragraph on the setting being new and a representation-drift grounding. The "to the best of our knowledge / no prior benchmark" bullet was still defensive meta-commentary and was rejected as such.
+- **Draft 7 (current).** Rewritten opening: state the setting first and describe it briefly; then contrast the continual-RL literature (dense, hand-engineered) with the sparse-reward RL literature (single-task) and name the gap as content; then motivate contrastive goal-conditioned RL as the natural solver and describe our method. Future-work section explicitly acknowledges room for better methods (RL or otherwise) and invites the community to expand research on the setting.
 
 ## Actionable next steps
 
-- Update `docs/paper_plan.md` to explicitly name sparse-reward continual GCRL as a new setting and briefly explain the setup at the top.
-- Update `docs/paper_plan.md` to point to the representation-drift literature when discussing how $\phi, \psi$ evolve.
-- Add the representation-drift references above to `docs/citations.md` with usage annotations.
-- Launch the full 9×5 grid on NYUAD HPC (Apr 22).
-- Commit all changes to `section3_done` with author `Okyumi`.
+- Confirm the Apr 22 launch of the full 9×5 grid on NYUAD HPC is ready.
+- Iterate on paper plan with Prof. Ross in the Apr 24 check-in.
+- Begin drafting figure placeholders against the paper_plan narrative.
+- Keep all updates on `section3_done` with author `Okyumi`.
