@@ -59,6 +59,7 @@ from contrastive.continual_learning import (
     ContinualContrastiveLearner, ContinualTrainingState,
 )
 from contrastive.knowledge_pool import KnowledgePool, _pytree_zeros_like
+from contrastive.negative_bank import NegativeBank
 from contrastive import rl_metrics
 from default import make_default_logger
 
@@ -129,12 +130,13 @@ flags.DEFINE_string('single_task', '',
                     'If set, train on this single environment only '
                     '(e.g., sawyer_shelf_place). Overrides task sequence.')
 # Automatic actor reset during task 0 (dormancy-triggered)
-flags.DEFINE_bool('actor_auto_reset', True,
+flags.DEFINE_bool('actor_auto_reset', False,
                   'Monitor actor health during task 0 and automatically reset '
                   'if dormant ratio exceeds threshold.  Resets actor weights + '
                   'optimizer; critic is unchanged.  Only active during task 0 '
                   'to preserve continual ablation integrity.  When the actor '
-                  'learns well, no reset ever fires.')
+                  'learns well, no reset ever fires.  DISABLED by default to '
+                  'avoid any reset interfering with ablation experiments.')
 flags.DEFINE_float('actor_reset_dormant_threshold', 0.1,
                    'Dormant ratio threshold that triggers an automatic actor '
                    'reset.  0.1 = reset when >=10%% of trunk neurons are dormant '
@@ -146,6 +148,31 @@ flags.DEFINE_integer('actor_reset_warmup', 200000,
 flags.DEFINE_integer('actor_reset_max', 3,
                      'Maximum number of automatic actor resets per task-0 run. '
                      'Safety cap to prevent infinite reset loops.')
+
+# Previous-replay negative bank (offline-to-online variant)
+flags.DEFINE_string('neg_bank_mode', 'off',
+                    'Previous-replay negative bank mode: '
+                    '"off" (default, no bank), '
+                    '"vanilla" (uniform random bank goals as extra negatives), '
+                    '"hard_weighted" (per-anchor top-M hard negatives, weighted).')
+flags.DEFINE_integer('neg_bank_per_task_capacity', 10000,
+                     'Max goals stored per task in the negative bank.  When a '
+                     'task finishes, up to this many HER-relabeled goals from '
+                     'that task\'s replay buffer are added to the bank.')
+flags.DEFINE_integer('neg_bank_n_per_step', 256,
+                     'Number of bank goals sampled per learner step.  For '
+                     'hard_weighted mode, this is the FINAL number of hard '
+                     'negatives per anchor (not the candidate pool size).')
+flags.DEFINE_integer('neg_bank_candidate_pool', 1024,
+                     'Candidate pool size drawn from the bank each step '
+                     '(hard_weighted mode only).  The top M by score per '
+                     'anchor are kept.  Ignored in vanilla mode.')
+flags.DEFINE_float('neg_bank_weight', 0.3,
+                   'Logit weight for bank negatives (0-1).  Scales the bank '
+                   'logit contribution relative to in-batch negatives, '
+                   'preventing over-reliance on cross-task contrasts.')
+flags.DEFINE_integer('neg_bank_max_tasks', 20,
+                     'Max number of tasks retained in the bank (FIFO).')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -297,6 +324,7 @@ def train_single_task(
     task_sequence: tuple = CONTINUAL_TASK_SEQUENCE,
     q_base: Optional[networks_lib.Params] = None,
     critic_pool: Optional[KnowledgePool] = None,
+    neg_bank=None,
 ):
   """Train on a single task and return (theta_base, learner) for the next task."""
 
@@ -473,6 +501,10 @@ def train_single_task(
       encoder_from_base=encoder_from_base,
       q_base=q_base,
       critic_pool=critic_pool,
+      neg_bank_mode=FLAGS.neg_bank_mode,
+      neg_bank_n_per_step=FLAGS.neg_bank_n_per_step,
+      neg_bank_weight=FLAGS.neg_bank_weight,
+      neg_bank_hard_ratio=(FLAGS.neg_bank_candidate_pool // max(FLAGS.neg_bank_n_per_step, 1)),
   )
 
   # ---- actor (for data collection) ---------------------------------------
@@ -578,11 +610,30 @@ def train_single_task(
   auto_reset_active = (task_id == 0 and FLAGS.actor_auto_reset)
   actor_reset_count = 0
   actor_reset_rng = jax.random.PRNGKey(seed + 9999)  # separate RNG stream
+
+  # Negative-bank sampling (task > 0 only; empty bank at task 0 by design)
+  bank_rng = np.random.default_rng(seed + 77777 + task_id * 31)
+  bank_sample_size = (
+      FLAGS.neg_bank_candidate_pool
+      if FLAGS.neg_bank_mode == 'hard_weighted'
+      else FLAGS.neg_bank_n_per_step)
+  use_bank_this_task = (
+      FLAGS.neg_bank_mode != 'off'
+      and FLAGS.neg_bank_n_per_step > 0
+      and task_id > 0
+      and neg_bank is not None
+      and neg_bank.size() > 0)
+
   print(f'  Training for {train_steps} env steps...', flush=True)
   if auto_reset_active:
     print(f'  Actor auto-reset enabled: warmup={FLAGS.actor_reset_warmup}, '
           f'threshold={FLAGS.actor_reset_dormant_threshold}, '
           f'max_resets={FLAGS.actor_reset_max}.', flush=True)
+  if use_bank_this_task:
+    print(f'  Negative bank enabled: mode={FLAGS.neg_bank_mode}, '
+          f'M={FLAGS.neg_bank_n_per_step}, weight={FLAGS.neg_bank_weight}, '
+          f'bank_size={neg_bank.size()} goals from '
+          f'{neg_bank.num_tasks()} previous tasks.', flush=True)
 
   while env_steps_done < train_steps:
     # Actor step: run one full episode and count actual env steps.
@@ -594,6 +645,13 @@ def train_single_task(
     episode_steps = int(result['episode_length'])
     env_steps_done += episode_steps
     episodes_done += 1
+
+    # Sample bank negatives for this learner step.  Shape must be constant
+    # across calls to avoid JIT recompilation.
+    if use_bank_this_task:
+      bank_sample = neg_bank.sample(n=bank_sample_size, rng=bank_rng)
+      if bank_sample is not None:
+        learner.set_bank_goals(jnp.asarray(bank_sample))
 
     # Learner step (first call triggers JAX JIT compilation, may be slow)
     if episodes_done == 1:
@@ -805,6 +863,32 @@ def train_single_task(
       out_critic_pool.append(learner.w_k_critic)
     out_critic_pool.merge_if_needed()
 
+  # ---- Extract goals for the negative bank (BEFORE stopping the server) -
+  # Draws a batch from the current task's replay buffer via the iterator,
+  # which applies flatten_fn to produce HER-relabeled (obs, goal) pairs.
+  # We keep only the goal portion (last obs_dim columns of observation).
+  task_goals_for_bank = None
+  if FLAGS.neg_bank_mode != 'off' and neg_bank is not None:
+    try:
+      n_target = FLAGS.neg_bank_per_task_capacity
+      batches_needed = max(1, n_target // (config.batch_size
+                                           * config.num_sgd_steps_per_step) + 1)
+      goal_chunks = []
+      for _ in range(batches_needed):
+        s = next(iterator)
+        t = types.Transition(*s.data)
+        # t.observation: [B, obs_dim + goal_dim] -> take last goal_dim cols
+        g = np.asarray(t.observation[:, config.obs_dim:])
+        goal_chunks.append(g)
+        if sum(c.shape[0] for c in goal_chunks) >= n_target:
+          break
+      task_goals_for_bank = np.concatenate(goal_chunks, axis=0)[:n_target]
+      print(f'  [neg_bank] Extracted {task_goals_for_bank.shape[0]} goals '
+            f'from task {task_id} replay buffer.', flush=True)
+    except Exception as e:
+      print(f'  [neg_bank] Warning: goal extraction failed: {e}', flush=True)
+      task_goals_for_bank = None
+
   # Cleanup — release resources to avoid leaking Mujoco contexts
   replay_server.stop()
   try:
@@ -819,7 +903,7 @@ def train_single_task(
 
   return (out_theta_base, out_q_params, out_target_q_params,
           out_q_optimizer_state, pool, composed_policy,
-          out_q_base, out_critic_pool)
+          out_q_base, out_critic_pool, task_goals_for_bank)
 
 
 # ---- main ----------------------------------------------------------------
@@ -901,6 +985,16 @@ def main(_):
   prev_q_opt = None
   q_base = None  # frozen critic base (critic_mode='cka')
   critic_pool = KnowledgePool(k_max=continual_cfg.k_max)
+
+  # Previous-replay negative bank (offline-to-online variant)
+  # goal_dim = config.obs_dim (state and goal have identical dimensionality
+  # after the TaskIDGymWrapper is applied).
+  neg_bank = None
+  if FLAGS.neg_bank_mode != 'off':
+    # Defer goal_dim determination until we know config.obs_dim.
+    # At this point config hasn't been built yet; we'll pass None goal_dim
+    # and create the bank lazily below.
+    pass
 
   # ---- determine starting task (auto-resume) ----------------------------
   # If --start_task is explicitly set (> 0), use that.
@@ -987,7 +1081,13 @@ def main(_):
                   'actor_auto_reset': FLAGS.actor_auto_reset,
                   'actor_reset_dormant_threshold': FLAGS.actor_reset_dormant_threshold,
                   'actor_reset_warmup': FLAGS.actor_reset_warmup,
-                  'actor_reset_max': FLAGS.actor_reset_max},
+                  'actor_reset_max': FLAGS.actor_reset_max,
+                  'neg_bank_mode': FLAGS.neg_bank_mode,
+                  'neg_bank_per_task_capacity': FLAGS.neg_bank_per_task_capacity,
+                  'neg_bank_n_per_step': FLAGS.neg_bank_n_per_step,
+                  'neg_bank_candidate_pool': FLAGS.neg_bank_candidate_pool,
+                  'neg_bank_weight': FLAGS.neg_bank_weight,
+                  'neg_bank_max_tasks': FLAGS.neg_bank_max_tasks},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,
       )
@@ -1007,8 +1107,19 @@ def main(_):
       _theta_base = theta_base
       _pool = pool
 
+    # Lazily create the negative bank once config.obs_dim is known.
+    if FLAGS.neg_bank_mode != 'off' and neg_bank is None:
+      neg_bank = NegativeBank(
+          goal_dim=config.obs_dim,
+          per_task_capacity=FLAGS.neg_bank_per_task_capacity,
+          max_tasks=FLAGS.neg_bank_max_tasks)
+      print(f'  [neg_bank] Created: goal_dim={config.obs_dim}, '
+            f'per_task_capacity={FLAGS.neg_bank_per_task_capacity}, '
+            f'max_tasks={FLAGS.neg_bank_max_tasks}.', flush=True)
+
     (theta_base, prev_q, prev_tgt_q, prev_q_opt, pool,
-     composed_policy, q_base, critic_pool) = train_single_task(
+     composed_policy, q_base, critic_pool,
+     task_goals_for_bank) = train_single_task(
         task_id=task_id,
         env_name=env_name,
         config=config,
@@ -1025,7 +1136,14 @@ def main(_):
         task_sequence=task_sequence,
         q_base=q_base,
         critic_pool=critic_pool,
+        neg_bank=neg_bank,
     )
+
+    # Post-task: add this task's goals to the negative bank.
+    if neg_bank is not None and task_goals_for_bank is not None:
+      neg_bank.add_task(task_id=task_id, goals=task_goals_for_bank)
+      print(f'  [neg_bank] Bank now: {neg_bank.size()} goals across '
+            f'{neg_bank.num_tasks()} tasks.', flush=True)
 
     # Post-task actor state management
     if FLAGS.actor_mode == 'reset':
