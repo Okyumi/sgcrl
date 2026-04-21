@@ -4,12 +4,12 @@
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=96GB
+#SBATCH --mem=32GB
 #SBATCH --partition=nvidia
-#SBATCH --output=/scratch/zd662/sgcrl/logs/continual/%A_%a.out
-#SBATCH --error=/scratch/zd662/sgcrl/logs/continual/%A_%a.err
+#SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%A_%a.out
+#SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
-#SBATCH --array=0-8
+#SBATCH --array=0-22
 
 # ==========================================================================
 # Continual Goal-Conditioned Contrastive RL – Batch SLURM Launcher
@@ -32,9 +32,9 @@
 #   sbatch draft_4.sh                   # run all 45 configs (23 GPUs)
 #   sbatch --array=0-4 draft_4.sh       # run first 10 configs only
 #
-# JAX / TF GPU memory:
-#   No fixed fraction: JAX grows on demand (XLA_PYTHON_CLIENT_PREALLOCATE=false).
-#   TensorFlow also allows growth so Reverb/JAX can share VRAM more flexibly.
+# JAX Memory:
+#   Each process preallocates 45% of GPU memory (total 90%, 10% headroom).
+#   This is set via XLA_PYTHON_CLIENT_MEM_FRACTION=0.45.
 # ==========================================================================
 
 set -euo pipefail
@@ -71,15 +71,21 @@ ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
 ENERGY_FN="${ENERGY_FN:-inner_product}"
 LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
 SINGLE_TASK="${SINGLE_TASK:-}"
-ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-true}"
+ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-false}"
 ACTOR_RESET_DORMANT_THRESHOLD="${ACTOR_RESET_DORMANT_THRESHOLD:-0.1}"
 ACTOR_RESET_WARMUP="${ACTOR_RESET_WARMUP:-200000}"
 ACTOR_RESET_MAX="${ACTOR_RESET_MAX:-3}"
+NEG_BANK_MODE="${NEG_BANK_MODE:-off}"
+NEG_BANK_PER_TASK_CAPACITY="${NEG_BANK_PER_TASK_CAPACITY:-10000}"
+NEG_BANK_N_PER_STEP="${NEG_BANK_N_PER_STEP:-256}"
+NEG_BANK_CANDIDATE_POOL="${NEG_BANK_CANDIDATE_POOL:-1024}"
+NEG_BANK_WEIGHT="${NEG_BANK_WEIGHT:-0.3}"
+NEG_BANK_MAX_TASKS="${NEG_BANK_MAX_TASKS:-20}"
 
 # Directories (all on scratch to avoid home quota issues)
-LOG_DIR="${LOG_DIR:-/scratch/zd662/sgcrl/logs/continual}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/zd662/sgcrl/logs/continual_checkpoints}"
-REPO_DIR="/scratch/zd662/sgcrl"
+LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
+REPO_DIR="/scratch/yd2247/sgcrl"
 
 # ---- environment setup (identical to draft_3.sh — do not modify) ----------
 module purge
@@ -102,9 +108,9 @@ export TF_CPP_MIN_VLOG_LEVEL=3
 export PYTHONUNBUFFERED=1
 
 # Scratch-based caches
-export XDG_CACHE_HOME=/scratch/zd662/.cache
-export PIP_CACHE_DIR=/scratch/zd662/.cache/pip
-export TMPDIR=/scratch/zd662/tmp
+export XDG_CACHE_HOME=/scratch/yd2247/.cache
+export PIP_CACHE_DIR=/scratch/yd2247/.cache/pip
+export TMPDIR=/scratch/yd2247/tmp
 mkdir -p "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
 
 # Conda
@@ -126,10 +132,11 @@ done
 CUDNN_LIB=$(python -c "import nvidia.cudnn, os; print(os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'lib'))" 2>/dev/null) || true
 [ -n "$CUDNN_LIB" ] && [ -d "$CUDNN_LIB" ] && export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDNN_LIB}"
 
-# ---- JAX / TF GPU memory (no upfront lock of a VRAM fraction) --------------
-unset XLA_PYTHON_CLIENT_MEM_FRACTION
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export TF_FORCE_GPU_ALLOW_GROWTH=true
+# ---- JAX GPU memory allocation for multi-process sharing ------------------
+# By default JAX preallocates 75% of GPU memory, which prevents a second
+# process from using the same GPU.  With TASKS_PER_GPU=2 we give each
+# process 45% (total 90%, leaving 10% headroom for CUDA context etc.).
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.45
 
 # ---- create output dirs ---------------------------------------------------
 mkdir -p "$LOG_DIR" "$CHECKPOINT_DIR"
@@ -218,6 +225,12 @@ build_flags() {
   _FLAGS="$_FLAGS --actor_reset_dormant_threshold=$ACTOR_RESET_DORMANT_THRESHOLD"
   _FLAGS="$_FLAGS --actor_reset_warmup=$ACTOR_RESET_WARMUP"
   _FLAGS="$_FLAGS --actor_reset_max=$ACTOR_RESET_MAX"
+  _FLAGS="$_FLAGS --neg_bank_mode=$NEG_BANK_MODE"
+  _FLAGS="$_FLAGS --neg_bank_per_task_capacity=$NEG_BANK_PER_TASK_CAPACITY"
+  _FLAGS="$_FLAGS --neg_bank_n_per_step=$NEG_BANK_N_PER_STEP"
+  _FLAGS="$_FLAGS --neg_bank_candidate_pool=$NEG_BANK_CANDIDATE_POOL"
+  _FLAGS="$_FLAGS --neg_bank_weight=$NEG_BANK_WEIGHT"
+  _FLAGS="$_FLAGS --neg_bank_max_tasks=$NEG_BANK_MAX_TASKS"
 
   echo "$_FLAGS"
 }
@@ -236,8 +249,7 @@ echo "Node               : $(hostname)"
 echo "GPU                : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
 echo "Tasks per GPU      : $TASKS_PER_GPU"
 echo "Total configs      : $TOTAL_CONFIGS"
-echo "JAX preallocate    : ${XLA_PYTHON_CLIENT_PREALLOCATE:-unset}"
-echo "TF GPU growth      : ${TF_FORCE_GPU_ALLOW_GROWTH:-unset}"
+echo "JAX mem fraction   : $XLA_PYTHON_CLIENT_MEM_FRACTION"
 echo "============================================================"
 
 PIDS=()
@@ -309,6 +321,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "LSE penalty    : $LOGSUMEXP_PENALTY"
     echo "Single task    : ${SINGLE_TASK:-none}"
     echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
+    echo "Neg bank       : mode=$NEG_BANK_MODE (M=$NEG_BANK_N_PER_STEP, pool=$NEG_BANK_CANDIDATE_POOL, weight=$NEG_BANK_WEIGHT)"
     echo "Log dir        : $LOG_DIR"
     echo "Checkpoint dir : $CHECKPOINT_DIR"
     echo "============================================================"

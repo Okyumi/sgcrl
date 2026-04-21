@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32GB
 #SBATCH --partition=nvidia
-#SBATCH --output=/scratch/zd662/sgcrl/logs/continual/%j.out
-#SBATCH --error=/scratch/zd662/sgcrl/logs/continual/%j.err
+#SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%j.out
+#SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%j.err
 #SBATCH --mail-user=yd2247@nyu.edu
 
 # ==========================================================================
@@ -56,15 +56,22 @@ ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
 ENERGY_FN="${ENERGY_FN:-inner_product}"
 LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
 SINGLE_TASK="${SINGLE_TASK:-}"
-ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-true}"
+ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-false}"
 ACTOR_RESET_DORMANT_THRESHOLD="${ACTOR_RESET_DORMANT_THRESHOLD:-0.1}"
 ACTOR_RESET_WARMUP="${ACTOR_RESET_WARMUP:-200000}"
 ACTOR_RESET_MAX="${ACTOR_RESET_MAX:-3}"
+# Previous-replay negative bank (off | vanilla | hard_weighted)
+NEG_BANK_MODE="${NEG_BANK_MODE:-off}"
+NEG_BANK_PER_TASK_CAPACITY="${NEG_BANK_PER_TASK_CAPACITY:-10000}"
+NEG_BANK_N_PER_STEP="${NEG_BANK_N_PER_STEP:-256}"
+NEG_BANK_CANDIDATE_POOL="${NEG_BANK_CANDIDATE_POOL:-1024}"
+NEG_BANK_WEIGHT="${NEG_BANK_WEIGHT:-0.3}"
+NEG_BANK_MAX_TASKS="${NEG_BANK_MAX_TASKS:-20}"
 
 # Directories (all on scratch to avoid home quota issues)
-LOG_DIR="${LOG_DIR:-/scratch/zd662/sgcrl/logs/continual}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/zd662/sgcrl/logs/continual_checkpoints}"
-REPO_DIR="/scratch/zd662/sgcrl"
+LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
+REPO_DIR="/scratch/yd2247/sgcrl"
 
 # ---- environment setup (same as draft.sh) ---------------------------------
 module purge
@@ -87,9 +94,9 @@ export TF_CPP_MIN_VLOG_LEVEL=3
 export PYTHONUNBUFFERED=1
 
 # Scratch-based caches
-export XDG_CACHE_HOME=/scratch/zd662/.cache
-export PIP_CACHE_DIR=/scratch/zd662/.cache/pip
-export TMPDIR=/scratch/zd662/tmp
+export XDG_CACHE_HOME=/scratch/yd2247/.cache
+export PIP_CACHE_DIR=/scratch/yd2247/.cache/pip
+export TMPDIR=/scratch/yd2247/tmp
 mkdir -p "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
 
 # Conda
@@ -149,6 +156,7 @@ echo "Energy fn      : $ENERGY_FN"
 echo "LSE penalty    : $LOGSUMEXP_PENALTY"
 echo "Single task    : ${SINGLE_TASK:-none}"
 echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
+echo "Neg bank       : mode=$NEG_BANK_MODE (M=$NEG_BANK_N_PER_STEP, pool=$NEG_BANK_CANDIDATE_POOL, weight=$NEG_BANK_WEIGHT, cap/task=$NEG_BANK_PER_TASK_CAPACITY)"
 echo "Log dir        : $LOG_DIR"
 echo "Checkpoint dir : $CHECKPOINT_DIR"
 echo "============================================================"
@@ -231,6 +239,12 @@ fi
 FLAGS="$FLAGS --actor_reset_dormant_threshold=$ACTOR_RESET_DORMANT_THRESHOLD"
 FLAGS="$FLAGS --actor_reset_warmup=$ACTOR_RESET_WARMUP"
 FLAGS="$FLAGS --actor_reset_max=$ACTOR_RESET_MAX"
+FLAGS="$FLAGS --neg_bank_mode=$NEG_BANK_MODE"
+FLAGS="$FLAGS --neg_bank_per_task_capacity=$NEG_BANK_PER_TASK_CAPACITY"
+FLAGS="$FLAGS --neg_bank_n_per_step=$NEG_BANK_N_PER_STEP"
+FLAGS="$FLAGS --neg_bank_candidate_pool=$NEG_BANK_CANDIDATE_POOL"
+FLAGS="$FLAGS --neg_bank_weight=$NEG_BANK_WEIGHT"
+FLAGS="$FLAGS --neg_bank_max_tasks=$NEG_BANK_MAX_TASKS"
 
 # ---- run -------------------------------------------------------------------
 cd "$REPO_DIR"

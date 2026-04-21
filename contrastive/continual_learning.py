@@ -109,6 +109,11 @@ class ContinualContrastiveLearner(acme.Learner):
       # --- critic CKA state (only used when critic_mode='cka') ---
       q_base: Optional[networks_lib.Params] = None,
       critic_pool: Optional[KnowledgePool] = None,
+      # --- previous-replay negative bank ---
+      neg_bank_mode: str = 'off',       # 'off', 'vanilla', 'hard_weighted'
+      neg_bank_n_per_step: int = 0,     # M bank negatives per anchor
+      neg_bank_weight: float = 1.0,     # logit down-weighting (0-1]
+      neg_bank_hard_ratio: int = 4,     # candidate pool multiplier for hard mining
   ):
     self._task_id = task_id
     self._critic_mode = critic_mode
@@ -118,6 +123,13 @@ class ContinualContrastiveLearner(acme.Learner):
     self._continual_config = continual_config
     self._num_sgd_steps_per_step = config.num_sgd_steps_per_step
     self._obs_dim = config.obs_dim
+    # Negative bank settings (see contrastive/negative_bank.py)
+    self._neg_bank_mode = neg_bank_mode
+    self._neg_bank_n_per_step = neg_bank_n_per_step
+    self._neg_bank_weight = float(neg_bank_weight)
+    self._neg_bank_hard_ratio = int(neg_bank_hard_ratio)
+    assert neg_bank_mode in ('off', 'vanilla', 'hard_weighted'), (
+        f'unknown neg_bank_mode={neg_bank_mode!r}')
 
     adaptive_entropy = config.entropy_coefficient is None
 
@@ -164,6 +176,18 @@ class ContinualContrastiveLearner(acme.Learner):
 
     mask_body_grads = self._mask_body_grads  # close over as Python bool
 
+    # Bank is activated only when mode != 'off', M > 0, AND we're past task 0.
+    # At task 0 there are no previous tasks, so the bank is empty by
+    # construction.  Keeping neg_bank_active=False at task 0 avoids JIT
+    # recompilation at the task 0 → task 1 boundary.
+    neg_bank_active = (self._neg_bank_mode != 'off'
+                       and self._neg_bank_n_per_step > 0
+                       and task_id > 0)
+    neg_bank_mode_local = self._neg_bank_mode
+    neg_bank_M = self._neg_bank_n_per_step
+    neg_bank_weight_local = self._neg_bank_weight
+    neg_bank_hard_ratio_local = self._neg_bank_hard_ratio
+
     def _make_update_step(networks, config, adaptive_entropy, obs_to_goal):
       """Factory that returns a (possibly jitted) update function."""
 
@@ -182,7 +206,14 @@ class ContinualContrastiveLearner(acme.Learner):
 
       # --- critic loss (InfoNCE – same as original) -------------------------
       def critic_loss_fn(q_params, combined_policy_params, target_q_params,
-                         transitions, key):
+                         transitions, key, bank_goals=None):
+        """Critic loss with optional previous-replay negative bank.
+
+        When bank_goals is None (or neg_bank_active is False), this reduces
+        to the standard in-batch InfoNCE loss.  Otherwise, bank goals are
+        appended as extra negatives: the logits matrix grows from [B, B]
+        to [B, B+M'] where M' depends on the bank mode.
+        """
         batch_size = transitions.observation.shape[0]
         I = jnp.eye(batch_size)
 
@@ -198,8 +229,56 @@ class ContinualContrastiveLearner(acme.Learner):
           obs = jnp.concatenate([s, new_g], axis=1)
           transitions = transitions._replace(observation=obs)
 
-        logits, _, _ = networks.q_network.apply(
+        logits, sa_repr, g_repr = networks.q_network.apply(
             q_params, transitions.observation, transitions.action)
+
+        # ---- Negative bank: extra out-of-batch negatives --------------------
+        # Only supported for the non-TD, non-twin CPC path.  When the TD or
+        # twin_q paths are enabled, bank negatives are silently skipped.
+        bank_logits_out = None
+        if (neg_bank_active and bank_goals is not None
+            and not config.use_td and len(logits.shape) == 2):
+          # Encode bank goals via ψ.  We do this by running the g_encoder
+          # portion of q_network.  The q_network's repr_fn takes
+          # (obs=state||goal, action) and returns (sa_repr, g_repr).  We
+          # pass dummy state/action and only use the g_repr on the BANK
+          # portion of the observation.
+          # Simpler: directly build fake observations [state_dummy, bank_goal]
+          # and use the repr_fn's g-path.  But the cleanest approach is to
+          # construct a dummy batch with the bank goals and extract g_repr.
+          dummy_state = jnp.zeros((bank_goals.shape[0], config.obs_dim))
+          bank_obs = jnp.concatenate([dummy_state, bank_goals], axis=1)
+          dummy_action = jnp.zeros((bank_goals.shape[0],
+                                    transitions.action.shape[-1]))
+          _, _, bank_g_repr = networks.q_network.apply(
+              q_params, bank_obs, dummy_action)
+          # bank_g_repr shape: [bank_goals.shape[0], repr_dim]
+          # stop gradient through bank g_repr? No — we want the critic to
+          # learn from these negatives.  Keep gradient flowing.
+
+          # Compute [B, bank_goals.shape[0]] bank-logits using same energy
+          # as the main critic (inner_product or l2).
+          if config.energy_fn == 'l2':
+            bank_logits = -jnp.sqrt(
+                jnp.sum((sa_repr[:, None, :] - bank_g_repr[None, :, :]) ** 2,
+                        axis=-1) + 1e-6)
+          else:
+            bank_logits = jnp.einsum('ik,jk->ij', sa_repr, bank_g_repr)
+
+          if neg_bank_mode_local == 'hard_weighted':
+            # Per-anchor top-M by score (hard negatives)
+            _, topk_idx = jax.lax.top_k(bank_logits, neg_bank_M)  # [B, M]
+            # Gather per-anchor logits: [B, M]
+            batch_idx = jnp.arange(batch_size)[:, None]
+            bank_logits_selected = bank_logits[batch_idx, topk_idx]
+            # Down-weight via a scalar multiplier on the logits.  Scaling
+            # logits by w<1 reduces how "confident" the softmax is about
+            # these negatives, limiting their gradient contribution.
+            bank_logits_out = bank_logits_selected * neg_bank_weight_local
+          else:  # 'vanilla'
+            # Use all bank candidates as shared negatives (no per-anchor
+            # selection).  Shape: [B, bank_goals.shape[0]]
+            bank_logits_out = bank_logits * neg_bank_weight_local
 
         if config.use_td:
           assert len(logits.shape) == 3
@@ -232,18 +311,31 @@ class ContinualContrastiveLearner(acme.Learner):
             loss = (1 - config.discount) * loss_pos + config.discount * loss_neg1 + loss_neg2
           logits = jnp.mean(logits, axis=-1)
         else:
-          def loss_fn(_logits):
+          # Build extended logits and labels if bank negatives are active.
+          # Extended labels: [I_B, zeros(B, M)] — positives only at diagonal,
+          # bank negatives are all labelled negative.
+          if bank_logits_out is not None:
+            extended_logits = jnp.concatenate([logits, bank_logits_out], axis=1)
+            extended_I = jnp.concatenate([I, jnp.zeros_like(bank_logits_out)],
+                                         axis=1)
+          else:
+            extended_logits = logits
+            extended_I = I
+
+          def loss_fn(_logits, _labels):
             if config.use_cpc:
-              return (optax.softmax_cross_entropy(logits=_logits, labels=I)
+              return (optax.softmax_cross_entropy(logits=_logits, labels=_labels)
                       + config.logsumexp_penalty * jax.nn.logsumexp(_logits, axis=1)**2)
             else:
-              return optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I)
+              return optax.sigmoid_binary_cross_entropy(logits=_logits, labels=_labels)
           if len(logits.shape) == 3:
-            loss = jax.vmap(loss_fn, in_axes=2, out_axes=-1)(logits)
+            # Twin-Q path: bank negatives not supported; use original logits.
+            loss = jax.vmap(lambda _l: loss_fn(_l, I), in_axes=2,
+                            out_axes=-1)(logits)
             loss = jnp.mean(loss, axis=-1)
             logits = jnp.mean(logits, axis=-1)
           else:
-            loss = loss_fn(logits)
+            loss = loss_fn(extended_logits, extended_I)
 
         loss = jnp.mean(loss)
         correct = (jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1))
@@ -261,6 +353,16 @@ class ContinualContrastiveLearner(acme.Learner):
             'logits_neg': logits_neg,
             'logsumexp': lse.mean(),
         }
+        if bank_logits_out is not None:
+          # Mean bank-negative logit (pre-weight division to recover raw score).
+          bank_raw = (bank_logits_out / jnp.maximum(neg_bank_weight_local, 1e-8))
+          metrics['bank/logits_mean'] = jnp.mean(bank_raw)
+          metrics['bank/logits_max'] = jnp.mean(jnp.max(bank_raw, axis=1))
+          # Extended-set categorical accuracy: how often does the true
+          # positive beat ALL negatives (in-batch + bank)?
+          ext_correct = (jnp.argmax(extended_logits, axis=1)
+                         == jnp.argmax(I, axis=1))
+          metrics['bank/extended_categorical_accuracy'] = jnp.mean(ext_correct)
         return loss, metrics
 
       # --- actor loss -------------------------------------------------------
@@ -305,12 +407,19 @@ class ContinualContrastiveLearner(acme.Learner):
 
         Args:
           state: ContinualTrainingState
-          data: tuple of (transitions, pool_contribution)
+          data: tuple of (transitions, pool_contribution[, bank_goals])
             transitions: batch of transitions
             pool_contribution: pytree – pre-computed Σ α_j v_j (using current
               α derived from state.beta_k outside JIT).
+            bank_goals (optional): [M_pool, goal_dim] negative goals from
+              previous tasks' replay buffers.  Only present when
+              neg_bank_active is True.
         """
-        transitions, pool_contribution = data
+        if neg_bank_active:
+          transitions, pool_contribution, bank_goals = data
+        else:
+          transitions, pool_contribution = data
+          bank_goals = None
         key, key_alpha, key_critic, key_actor = jax.random.split(state.key, 4)
 
         # -- compose effective policy params --------------------------------
@@ -333,7 +442,7 @@ class ContinualContrastiveLearner(acme.Learner):
         # -- critic update --------------------------------------------------
         (c_loss, c_metrics), c_grads = critic_grad(
             state.q_params, combined_policy, state.target_q_params,
-            transitions, key_critic)
+            transitions, key_critic, bank_goals)
         c_updates, q_opt_state = q_optimizer.update(c_grads, state.q_optimizer_state)
         q_params = optax.apply_updates(state.q_params, c_updates)
         new_target = jax.tree_map(
@@ -429,18 +538,28 @@ class ContinualContrastiveLearner(acme.Learner):
     def _scan_update(state, data):
       """Run num_sgd_steps_per_step updates via lax.scan.
 
-      data = (transitions, pool_contribution)
+      data = (transitions, pool_contribution[, bank_goals])
         transitions: leaves have shape [batch_size * num_sgd, ...]
         pool_contribution: param-shaped pytree (no batch dim)
+        bank_goals (optional): [M_pool, goal_dim] — shared across all SGD
+          steps in this scan (the bank doesn't change within one learner
+          step, so we reuse the same sample).
       """
-      transitions, pool_c = data
+      if neg_bank_active:
+        transitions, pool_c, bank_goals = data
+      else:
+        transitions, pool_c = data
+        bank_goals = None
       # Reshape transitions: [B*N, ...] -> [N, B, ...]
       batched_transitions = jax.tree_map(
           lambda a: jnp.reshape(a, (num_sgd, -1, *a.shape[1:])),
           transitions)
 
       def scan_body(carry, mini_batch):
-        # mini_batch is transitions for one SGD step; pool_c is closed over.
+        # mini_batch is transitions for one SGD step; pool_c and bank_goals
+        # are closed over (same across SGD steps).
+        if neg_bank_active:
+          return update_step(carry, (mini_batch, pool_c, bank_goals))
         return update_step(carry, (mini_batch, pool_c))
 
       state, metrics = jax.lax.scan(
@@ -690,6 +809,24 @@ class ContinualContrastiveLearner(acme.Learner):
 
   # ---- main step ----------------------------------------------------------
 
+  def set_bank_goals(self, bank_goals):
+    """Set bank goals for subsequent step() calls.
+
+    Args:
+      bank_goals: jnp.ndarray of shape [M_pool, goal_dim].  Must have the
+        same shape for all calls (JIT recompiles otherwise).  Only used
+        when the learner's neg_bank_active is True (task > 0 and mode !=
+        'off').  At task 0 this is a no-op.
+    """
+    self._current_bank_goals = bank_goals
+
+  @property
+  def neg_bank_active(self) -> bool:
+    """True when this learner uses bank negatives in its update step."""
+    return (self._neg_bank_mode != 'off'
+            and self._neg_bank_n_per_step > 0
+            and self._task_id > 0)
+
   def step(self):
     with jax.profiler.StepTraceAnnotation('step', step_num=self._counter):
       sample = next(self._iterator)
@@ -702,8 +839,16 @@ class ContinualContrastiveLearner(acme.Learner):
       pool_c = self._compute_pool_contribution()
 
       # Single call: lax.scan handles the num_sgd_steps_per_step inner loop
-      self._state, metrics = self._update_step(
-          self._state, (transitions, pool_c))
+      if self.neg_bank_active:
+        bank_goals = getattr(self, '_current_bank_goals', None)
+        assert bank_goals is not None, (
+            'neg_bank_active=True but no bank_goals set. '
+            'Call learner.set_bank_goals(goals) before step().')
+        self._state, metrics = self._update_step(
+            self._state, (transitions, pool_c, bank_goals))
+      else:
+        self._state, metrics = self._update_step(
+            self._state, (transitions, pool_c))
 
       # Update β_k and α_scale (outside JIT, once per learner step)
       if self._task_id > 0 and len(self._pool) > 0:
