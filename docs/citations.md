@@ -34,6 +34,11 @@ All citation details below have been verified against the primary sources (arXiv
 **Myers, V., et al.** *Demystifying the Mechanisms Behind Emergent Exploration in Goal-Conditioned RL.* arXiv:2510.14129.
 *How we use it.* Analyses exploration mechanisms in single-goal contrastive RL; referenced in related work and in the discussion of why contrastive critics expose useful gradients during the early exploration phase.
 
+### [myers2026computation]
+**Myers, V., et al.** *On Computation and Reinforcement Learning.* arXiv:2602.05999, 2026.
+*What it contributes.* Formalises compute-bounded policies and proves that policies with more compute can solve problems and generalise to longer-horizon tasks beyond the reach of lower-compute policies; proposes a minimal recurrent architecture that uses a variable amount of compute, and empirically shows stronger performance and longer-horizon generalisation across 31 online and offline RL tasks.
+*How we use it.* Motivates the scalability requirement in the introduction: a continual agent that must absorb new skills indefinitely needs a policy class with enough expressivity and effective computation to support them, and contrastive goal-conditioned RL has been shown to scale to very deep residual networks (Wang et al., 2025), which makes it a natural substrate for continual skill acquisition.
+
 ---
 
 ## 2. Continual reinforcement learning
