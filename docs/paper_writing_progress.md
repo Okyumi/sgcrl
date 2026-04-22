@@ -36,14 +36,18 @@ upstream source of truth for narrative, citations, and decisions.
 - [x] `neurips_2026.tex` wired for a modular appendix (`\input{appendix}`)
   and a BibTeX bibliography (`\bibliography{references}`); `amsmath`,
   `multirow` added for equations and tables.
-- [x] `problem_setup.tex` drafted as Section 2 (commit `a13c2c2` on
-  paper `main`). Introduces sparse-reward continual goal-conditioned
-  RL through a single linear chain of ideas: task MDP tuple, continual
-  protocol, per-task expected discounted return, goal-conditioned
-  specialisation, sparse reward
-  $r(s,a) = (1 - \gamma) p(s' = g \mid s, a)$ with the
-  discounted-indicator equivalence and the reduced goal-reaching
-  objective, and the ten-task Continual World benchmark instantiation.
+- [x] `problem_setup.tex` drafted as Section 2 (current at commit
+  `f63ba4a` on paper `main`). Tight problem-only statement: sequence
+  of $N$ episodic MDPs on shared state and action spaces, each with a
+  goal $g^{(k)}$ and a success predicate; terminal sparse reward
+  $r^{(k)}_{T} = \mathbf{1}_{\mathrm{success}}^{(k)}(s_{T})$, zero at
+  every $t < T$; fixed-order continual protocol with per-task
+  transition budget and no re-interaction with earlier MDPs;
+  instantiation on the ten-task Continual World Sawyer sequence
+  ($T = 500$, $T_k = 8\!\times\!10^6$, $\gamma = 0.99$).
+- [x] Goal-conditioned policy and expected-return objective
+  deliberately moved out of Section 2 and reserved for the
+  solver/method section.
 - [x] `appendix.tex` with full sections for
   - **Environments and Tasks**: Meta-World / Continual World V2 ten-task
     Sawyer sequence, sparse goal-reaching reward, observations, actions,
@@ -94,6 +98,7 @@ upstream source of truth for narrative, citations, and decisions.
 |------|--------|-------|------|
 | 2026-04-22 | `f388c66` | `neurips_2026.tex`, `appendix.tex`, `references.bib` | Initial appendix and BibTeX draft. Merged directly into `main` as user `Okyumi`. Feature branch removed. |
 | 2026-04-22 | `a13c2c2` | `problem_setup.tex`, `neurips_2026.tex` | Draft of Section 2 (Problem Setup). Linear narrative from MDP tuple $\to$ continual protocol $\to$ return $\to$ goal-conditioning $\to$ sparse reward $\to$ benchmark instantiation. One idea per sentence. |
+| 2026-04-22 | `f63ba4a` | `problem_setup.tex` | Rewrite of Section 2. Tightened to three short paragraphs + one equation. Reward is the **terminal 0/1 success indicator** at episode end (no dense shaping anywhere). Goal-conditioned policy and per-task expected-return objective removed from this section and reserved for the solver discussion. |
 
 ## Conventions
 
