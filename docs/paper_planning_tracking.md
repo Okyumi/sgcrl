@@ -14,9 +14,8 @@ Working document for the NeurIPS 2026 submission planning process. Captures deci
 ## Decisions locked in
 
 - The paper is about sparse-reward continual goal-conditioned RL. This setting is a first-class contribution.
-- Framework language is fixed: **contrastive GCRL + policy decomposition + knowledge pool** in a sparse-reward continual setting.
-- "Knowledge decomposition" is not used. The two mechanisms are "policy decomposition" and "knowledge pool".
-- Hu et al. (NeurIPS 2025) is cited as prior work on policy decomposition and bounded knowledge pools in continual RL. Nothing more about what the paper is or is not in relation to it.
+- Framework language: **contrastive GCRL + knowledge decomposition (policy decomposition + knowledge pool)** in a sparse-reward continual setting.
+- "CKA-RL" is treated as a convenient shorthand for policy decomposition and a knowledge pool applied to the actor network, and is cited as prior work studying those ideas (Hu et al., NeurIPS 2025). Any statement about the paper's relation to CKA-RL stays out of the writing; this is an internal working note only.
 - Contrastive GCRL is the underlying RL algorithm, not a contribution. No InfoNCE exposition in the main body.
 - Actor auto-reset is disabled by default.
 - Adaptive entropy is enabled (SAC dual gradient, `target_entropy=-2.0`).
@@ -27,7 +26,12 @@ Working document for the NeurIPS 2026 submission planning process. Captures deci
 
 - Bulleted story: one claim per bullet, plain language, no in-narrative sub-headers.
 - Inline math where needed (e.g. $r_g$, $\theta'$), no proof-style derivations.
-- **No defensive meta-commentary.** No "to the best of our knowledge", no "we do not position this paper as...", no hedges whose purpose is to demonstrate compliance with a constraint. If the user has asked me to honour a framing rule, I honour it silently. The writing is content, not a facade showing that I am following instructions.
+- **No defensive meta-commentary. Rule number one.**
+  - Whenever a sentence is tempted to begin "this is not X" or "we do not frame this as X", drop that clause entirely and write only what the subject *is*.
+  - Beginning with "this is not" either presumes something about the reader or exposes a bias, and in either case reinforces the "what it is not" image more strongly than the "what it is" image.
+  - When the user rejects a framing, I silently drop it and write the most natural positive framing for the narrative flow. The rejected framing is never mentioned in the text, not even as a negation.
+  - Avoid hedges whose only purpose is to demonstrate compliance with a constraint ("to the best of our knowledge", "we do not position this paper as\ldots").
+  - This rule applies to every artifact: planning docs, bullet points, paper prose, code comments, commit messages.
 - Logistics, schedule, and open questions sit below the narrative as short reference sections.
 
 ## Evidence gathered on novelty of the setting

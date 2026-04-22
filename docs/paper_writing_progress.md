@@ -89,8 +89,7 @@ upstream source of truth for narrative, citations, and decisions.
   `booktitle` / `journal`. Keys match those used in `docs/citations.md`.
 - Citation commands: `\citep{...}` for parenthetical, `\citet{...}` for
   textual. `natbib` is loaded by the NeurIPS 2026 style file by default.
-- No defensive meta-commentary in the prose (see
-  `docs/paper_planning_tracking.md`).
+- No defensive meta-commentary in the prose. When a framing is rejected, the rejected framing is silently dropped; only the positive claim survives. See the full rule in `docs/paper_planning_tracking.md`.
 - Appendix-only content: anything that is "how we did it" rather than
   "what we found". Claims that are load-bearing for the headline results
   stay in the main body.

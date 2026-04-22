@@ -53,7 +53,7 @@
 - Sparse reward is what forces this discipline: under dense reward, a well-engineered reward function can carry an algorithm to a respectable number, and the representational question does not have to be answered.
 - Many design choices in our framework are intentionally simple, and we expect future work to obtain stronger results on this setting than we report here.
 - Methodological improvements are likely on every axis we touch: the contrastive objective itself, the form of the policy decomposition, the way the knowledge pool is maintained, the way past-task data is reused, and the way plasticity is managed on the actor.
-- The setting is also not tied to reinforcement learning as the only algorithm class: approaches from imitation learning, self-supervised representation learning, world-modelling, and offline-to-online learning all plausibly apply, and results from such directions would be welcome.
+- The setting admits a wide range of algorithmic approaches: imitation learning, self-supervised representation learning, world-modelling, and offline-to-online learning all plausibly apply, and results from such directions would be welcome.
 - We introduce the sparse-reward continual goal-conditioned setting as a target for the community and invite work that extends, rethinks, or replaces the framework we propose here.
 - Natural directions include a fixed-goal variant under changing state spaces, so that only the critic's input distribution shifts; a multi-armed-bandit-with-state variant in which one route leads to stochastic success and the environment changes which route that is across the task sequence; and larger and longer task sequences that stress representation retention further.
 
