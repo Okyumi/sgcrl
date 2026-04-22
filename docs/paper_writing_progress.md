@@ -17,7 +17,10 @@ upstream source of truth for narrative, citations, and decisions.
 | `references.bib`   | BibTeX file for all citations. Mirrors `docs/citations.md`. |
 | `checklist.tex`    | NeurIPS submission checklist (unchanged template). |
 | `neurips_2026.sty` | NeurIPS 2026 style file (unchanged). |
-| `problem_setup.tex` | Section 2 (Problem Setup). Wired in from `neurips_2026.tex`. |
+| `main.tex`          | Overleaf build root. Replaces `neurips_2026.tex` as the entry point; `\input{}`s introduction, problem_setup, discussion, references, and appendix. |
+| `introduction.tex`  | Section 1 (Introduction). Motivational paragraph on the continual-RL / sparse-reward gap. Method preview and contributions pending. |
+| `problem_setup.tex` | Section 2 (Problem Setup). |
+| `discussion.tex`    | Discussion and Future Directions (closing paragraph + bulleted future directions). Empirical take-aways pending. |
 
 ## Branch policy (paper repo)
 
@@ -78,10 +81,13 @@ upstream source of truth for narrative, citations, and decisions.
 
 ### Not yet done
 
-- [ ] Introduction (Section 1).
-- [ ] Related Work (likely Section 3).
+- [ ] Introduction: method preview paragraph and contributions list
+  (waiting for experiment results to inform the wording).
+- [ ] Related Work (likely Section 3, still pending).
 - [ ] Method (likely Section 4).
-- [ ] Experiments + Discussion (likely Sections 5--6).
+- [ ] Experiments (likely Section 5).
+- [ ] Discussion: empirical take-aways paragraph, to be written
+  against the final numbers.
 - [ ] Training Details subsection (explicit training-loop pseudocode,
   optimiser schedule, replay and target-update details, continual
   protocol transitions).
@@ -100,6 +106,8 @@ upstream source of truth for narrative, citations, and decisions.
 | 2026-04-22 | `a13c2c2` | `problem_setup.tex`, `neurips_2026.tex` | Draft of Section 2 (Problem Setup). Linear narrative from MDP tuple $\to$ continual protocol $\to$ return $\to$ goal-conditioning $\to$ sparse reward $\to$ benchmark instantiation. One idea per sentence. |
 | 2026-04-22 | `f63ba4a` | `problem_setup.tex` | Rewrite of Section 2. Tightened to three short paragraphs + one equation. Reward is the **terminal 0/1 success indicator** at episode end (no dense shaping anywhere). Goal-conditioned policy and per-task expected-return objective removed from this section and reserved for the solver discussion. |
 | 2026-04-22 | `0e73bd0` | `problem_setup.tex` | Refine Section 2: drop the sparse-reward prose sentence (equation is the definition), remove the benchmark-instantiation paragraph (belongs elsewhere), split into four short paragraphs with display equations for the MDP tuple, success predicate, and terminal reward so the page breathes. |
+| 2026-04-22 | `c41c139`, `457af2e` | `main.tex` (new) | Overleaf-side edits: build root renamed to `main.tex`, placeholder template sections removed, small grammar fixes. Pushed by user directly from Overleaf. |
+| 2026-04-22 | `e758796`, `1191077` | `introduction.tex`, `discussion.tex`, `main.tex` | Draft Introduction motivational paragraph (continual RL is almost always dense, sparse-reward RL is almost always single-task, the combination is what matches deployment) and Discussion + Future Directions (testbed framing, limitations, bulleted list of future directions: representation drift, scalability, offline-to-online reuse, longer sequences, fixed-goal and state-conditioned-bandit variants, extensions beyond RL). Wired into `main.tex` after the rebase against the Overleaf edits. |
 
 ## Conventions
 
