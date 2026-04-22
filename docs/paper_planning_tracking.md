@@ -27,10 +27,10 @@ Working document for the NeurIPS 2026 submission planning process. Captures deci
 - Bulleted story: one claim per bullet, plain language, no in-narrative sub-headers.
 - Inline math where needed (e.g. $r_g$, $\theta'$), no proof-style derivations.
 - **No defensive meta-commentary. Rule number one.**
-  - Whenever a sentence is tempted to begin "this is not X" or "we do not frame this as X", drop that clause entirely and write only what the subject *is*.
-  - Beginning with "this is not" either presumes something about the reader or exposes a bias, and in either case reinforces the "what it is not" image more strongly than the "what it is" image.
-  - When the user rejects a framing, I silently drop it and write the most natural positive framing for the narrative flow. The rejected framing is never mentioned in the text, not even as a negation.
-  - Avoid hedges whose only purpose is to demonstrate compliance with a constraint ("to the best of our knowledge", "we do not position this paper as\ldots").
+  - The rule is narrow: once the user has told me to drop a framing, I must not then produce a sentence in the writing that explicitly rejects that framing (e.g., "we do not frame this as an extension of CKA-RL" after being told not to frame as CKA-RL). Such a sentence is a facade that demonstrates compliance while naming the rejected framing, and it reinforces the rejected image more strongly than the intended one.
+  - The correct response is to silently drop the rejected framing and write the most natural positive claim for the narrative flow, without mentioning the rejected framing at all.
+  - Sentences that begin with "this is not X" for legitimate contrastive reasons — where no prior instruction has ruled out X and the negation genuinely serves the reader — remain acceptable. The rule is *not* a blanket ban on "this is not X" phrasing.
+  - Avoid hedges whose only purpose is to demonstrate compliance with a constraint, such as "to the best of our knowledge".
   - This rule applies to every artifact: planning docs, bullet points, paper prose, code comments, commit messages.
 - Logistics, schedule, and open questions sit below the narrative as short reference sections.
 
