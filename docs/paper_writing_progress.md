@@ -18,12 +18,13 @@ upstream source of truth for narrative, citations, and decisions.
 | `checklist.tex`    | NeurIPS submission checklist (unchanged template). |
 | `neurips_2026.sty` | NeurIPS 2026 style file (unchanged). |
 
-## Branch policy
+## Branch policy (paper repo)
 
-- `main` on the paper repo is the live version synced with Overleaf.
-- Work goes on a feature branch (`appendix-bibliography`,
-  `experiments-draft`, ...), is reviewed, and is merged into `main`.
-- This file lives on `section3_done` of the sgcrl repo, as requested.
+- **All writing commits go directly to `main` as user `Okyumi`.**
+- No feature branches, no pull requests. Overleaf is synced with `main`
+  and expects changes there.
+- This file (the progress tracker) lives on `section3_done` of the
+  sgcrl repo, per the user's instruction.
 
 ## Current status (2026-04-22)
 
@@ -74,11 +75,11 @@ upstream source of truth for narrative, citations, and decisions.
   experiments, discussion.
 - [ ] Figures and tables for results.
 
-## Files changed per push (running log)
+## Commit log (paper repo `main`)
 
-| Date | Branch | Files | Note |
+| Date | Commit | Files | Note |
 |------|--------|-------|------|
-| 2026-04-22 | `appendix-bibliography` | `neurips_2026.tex`, `appendix.tex`, `references.bib` | Initial appendix and BibTeX draft. Pushed for review; not yet merged into `main`. |
+| 2026-04-22 | `f388c66` | `neurips_2026.tex`, `appendix.tex`, `references.bib` | Initial appendix and BibTeX draft. Merged directly into `main` as user `Okyumi`. Feature branch removed. |
 
 ## Conventions
 
@@ -96,11 +97,9 @@ upstream source of truth for narrative, citations, and decisions.
 
 ## Next actions
 
-1. Open a pull request on the paper repo merging
-   `appendix-bibliography` into `main` once the user reviews the draft.
-2. Draft Training Details and Baselines subsections once experiments are
+1. Draft Training Details and Baselines subsections once experiments are
    launched (these benefit from being written against actually-running
-   configurations).
-3. Begin drafting the Introduction and Problem Setting sections in a new
-   branch on the paper repo, mirroring the bulleted narrative in
-   `docs/paper_plan.md`.
+   configurations). Commit directly to `main`.
+2. Begin drafting the Introduction and Problem Setting sections,
+   mirroring the bulleted narrative in `docs/paper_plan.md`. Commit
+   directly to `main`.
