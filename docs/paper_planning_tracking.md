@@ -26,6 +26,10 @@ Working document for the NeurIPS 2026 submission planning process. Captures deci
 
 - Bulleted story: one claim per bullet, plain language, no in-narrative sub-headers.
 - Inline math where needed (e.g. $r_g$, $\theta'$), no proof-style derivations.
+- **No padding. Rule of thumb.**
+  - When asked to write part of the paper, do not add unnecessary sentences just to make the piece look long. Two sentences can beat a paragraph. Length is never the target; narrative fit is.
+  - Before writing any paper piece, recall the golden rules above: one clear idea per sentence, remove anything that does not serve the reader, clarity before cleverness, sentences must flow organically.
+  - The user's own preliminary drafts tend to be short, direct, and organic. My writing should read the same way.
 - **No defensive meta-commentary. Rule number one.**
   - The rule is narrow: once the user has told me to drop a framing, I must not then produce a sentence in the writing that explicitly rejects that framing (e.g., "we do not frame this as an extension of CKA-RL" after being told not to frame as CKA-RL). Such a sentence is a facade that demonstrates compliance while naming the rejected framing, and it reinforces the rejected image more strongly than the intended one.
   - The correct response is to silently drop the rejected framing and write the most natural positive claim for the narrative flow, without mentioning the rejected framing at all.
