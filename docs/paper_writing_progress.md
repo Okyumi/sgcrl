@@ -17,6 +17,7 @@ upstream source of truth for narrative, citations, and decisions.
 | `references.bib`   | BibTeX file for all citations. Mirrors `docs/citations.md`. |
 | `checklist.tex`    | NeurIPS submission checklist (unchanged template). |
 | `neurips_2026.sty` | NeurIPS 2026 style file (unchanged). |
+| `problem_setup.tex` | Section 2 (Problem Setup). Wired in from `neurips_2026.tex`. |
 
 ## Branch policy (paper repo)
 
@@ -35,6 +36,14 @@ upstream source of truth for narrative, citations, and decisions.
 - [x] `neurips_2026.tex` wired for a modular appendix (`\input{appendix}`)
   and a BibTeX bibliography (`\bibliography{references}`); `amsmath`,
   `multirow` added for equations and tables.
+- [x] `problem_setup.tex` drafted as Section 2 (commit `a13c2c2` on
+  paper `main`). Introduces sparse-reward continual goal-conditioned
+  RL through a single linear chain of ideas: task MDP tuple, continual
+  protocol, per-task expected discounted return, goal-conditioned
+  specialisation, sparse reward
+  $r(s,a) = (1 - \gamma) p(s' = g \mid s, a)$ with the
+  discounted-indicator equivalence and the reduced goal-reaching
+  objective, and the ten-task Continual World benchmark instantiation.
 - [x] `appendix.tex` with full sections for
   - **Environments and Tasks**: Meta-World / Continual World V2 ten-task
     Sawyer sequence, sparse goal-reaching reward, observations, actions,
@@ -65,6 +74,10 @@ upstream source of truth for narrative, citations, and decisions.
 
 ### Not yet done
 
+- [ ] Introduction (Section 1).
+- [ ] Related Work (likely Section 3).
+- [ ] Method (likely Section 4).
+- [ ] Experiments + Discussion (likely Sections 5--6).
 - [ ] Training Details subsection (explicit training-loop pseudocode,
   optimiser schedule, replay and target-update details, continual
   protocol transitions).
@@ -80,6 +93,7 @@ upstream source of truth for narrative, citations, and decisions.
 | Date | Commit | Files | Note |
 |------|--------|-------|------|
 | 2026-04-22 | `f388c66` | `neurips_2026.tex`, `appendix.tex`, `references.bib` | Initial appendix and BibTeX draft. Merged directly into `main` as user `Okyumi`. Feature branch removed. |
+| 2026-04-22 | `a13c2c2` | `problem_setup.tex`, `neurips_2026.tex` | Draft of Section 2 (Problem Setup). Linear narrative from MDP tuple $\to$ continual protocol $\to$ return $\to$ goal-conditioning $\to$ sparse reward $\to$ benchmark instantiation. One idea per sentence. |
 
 ## Conventions
 
@@ -89,7 +103,8 @@ upstream source of truth for narrative, citations, and decisions.
   `booktitle` / `journal`. Keys match those used in `docs/citations.md`.
 - Citation commands: `\citep{...}` for parenthetical, `\citet{...}` for
   textual. `natbib` is loaded by the NeurIPS 2026 style file by default.
-- No defensive meta-commentary in the prose. When a framing is rejected, the rejected framing is silently dropped; only the positive claim survives. See the full rule in `docs/paper_planning_tracking.md`.
+- No defensive meta-commentary in the prose. When a framing is rejected, the rejected framing is silently dropped; only the positive claim survives. Full rule in `docs/paper_planning_tracking.md`.
+- Golden rules for research writing (stored to agent memory on 2026-04-22): one clear idea per sentence; define terms precisely; remove anything that does not help the reader understand question, method, result, or claim; clarity before cleverness. One sharp idea per method; minimal but meaningful novelty; isolate the effect with strong ablations and fair, matched baselines; robustness across seeds, settings, and failure cases; insight into what property matters, when it helps, when it fails, what it teaches.
 - Appendix-only content: anything that is "how we did it" rather than
   "what we found". Claims that are load-bearing for the headline results
   stay in the main body.
