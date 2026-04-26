@@ -210,7 +210,7 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
                      adapt_heads_only, actor_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
-  data_np = jax.tree_map(
+  data_np = jax.tree.map(
       lambda x: np.array(x) if isinstance(x, jnp.ndarray) else x,
       data)
   with open(path, 'wb') as f:
@@ -231,7 +231,7 @@ def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
   with open(path, 'rb') as f:
     data = pickle.load(f)
   # Convert back to JAX arrays
-  data_jax = jax.tree_map(
+  data_jax = jax.tree.map(
       lambda x: jnp.array(x) if isinstance(x, np.ndarray) else x,
       data)
   print(f'  [ckpt] Loaded ← {path}', flush=True)
@@ -319,6 +319,7 @@ def train_single_task(
     prev_target_q_params: Optional[networks_lib.Params],
     prev_q_optimizer_state,
     critic_mode: str = 'persistent',
+    actor_mode: str = 'cka',
     adapt_heads_only: bool = True,
     encoder_from_base: bool = False,
     task_sequence: tuple = CONTINUAL_TASK_SEQUENCE,
@@ -497,6 +498,7 @@ def train_single_task(
       prev_target_q_params=prev_target_q_params,
       prev_q_optimizer_state=prev_q_optimizer_state,
       critic_mode=critic_mode,
+      actor_mode=actor_mode,
       adapt_heads_only=adapt_heads_only,
       encoder_from_base=encoder_from_base,
       q_base=q_base,
@@ -802,22 +804,27 @@ def train_single_task(
     # After base phase: θ_base = initial_params + v_0 (fully trained policy).
     # v_0 captures the training delta.  Fold it into θ_base so that the base
     # is the *trained* policy, matching the pseudocode.
-    out_theta_base = jax.tree_map(
+    out_theta_base = jax.tree.map(
         lambda b, v: b + v, learner.theta_base, v_k)
-    # Per pseudocode, initialise the pool with a zero vector (not v_0).
-    pool.append(_pytree_zeros_like(out_theta_base))
+    # Fix C: do NOT seed the pool with a zero vector. The CKA pool is
+    # genuinely empty at task 0 (the base IS the task-0 knowledge).
+    # The new CKAPool's masked-softmax handles the empty case correctly
+    # without any placeholder; a zero placeholder would permanently
+    # dilute alpha contributions for all subsequent tasks (Bug 4 in the
+    # audit).
   elif adapt_heads_only:
     # CKA-RL style: body is fine-tuned but NOT decomposed.
     # - Fold body portion of v_k into theta_base (encoder evolves)
     # - Store only head portion of v_k in the pool (CKA decomposition)
+    from contrastive.networks import is_actor_head_path
+
     def _split_head_body(base_val, vk_val, path):
       path_str = '/'.join(str(p) for p in path)
       # Haiku flattens module paths into top-level keys like
       # 'Normal/linear'. DictKey('Normal/linear') stringifies as
-      # "['Normal/linear']". We check if 'Normal' appears anywhere
-      # in the path string (case-insensitive).
-      is_head = 'Normal' in path_str or 'normal' in path_str.lower()
-      if is_head:
+      # "['Normal/linear']". Head detection is centralised in
+      # contrastive.networks.is_actor_head_path (Fix E).
+      if is_actor_head_path(path_str):
         return base_val, vk_val  # head: base unchanged, v_k goes to pool
       else:
         return base_val + vk_val, jnp.zeros_like(vk_val)  # body: fold into base
@@ -854,14 +861,15 @@ def train_single_task(
       k_max=continual_cfg.k_max)
   if critic_mode == 'cka':
     if task_id == 0:
-      # After base phase: q_base is the trained critic
+      # After base phase: q_base is the trained critic. Fix C: do NOT
+      # seed the critic pool with a zero vector — the empty pool is the
+      # correct task-0 state and the masked-softmax in the new CKA path
+      # handles it without a placeholder (see Bug 4 in the audit).
       out_q_base = out_q_params
-      # Initialise critic pool with a zero vector (like actor pool)
-      out_critic_pool.append(_pytree_zeros_like(out_q_base))
     else:
-      # Extract w_k_critic = q_params - q_base - pool_c
+      # Extract w_k_critic from the post-training CKA state.
       out_critic_pool.append(learner.w_k_critic)
-    out_critic_pool.merge_if_needed()
+      out_critic_pool.merge_if_needed()
 
   # ---- Extract goals for the negative bank (BEFORE stopping the server) -
   # Draws a batch from the current task's replay buffer via the iterator,
@@ -1131,6 +1139,7 @@ def main(_):
         prev_target_q_params=prev_tgt_q,
         prev_q_optimizer_state=prev_q_opt,
         critic_mode=FLAGS.critic_mode,
+        actor_mode=FLAGS.actor_mode,
         adapt_heads_only=FLAGS.adapt_heads_only,
         encoder_from_base=FLAGS.encoder_from_base,
         task_sequence=task_sequence,

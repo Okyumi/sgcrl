@@ -17,6 +17,29 @@ from itertools import product
 # modified Tanh mean to be mapped to tanh(mean) to keep within [-1, 1]
 from distributional import NormalTanhDistribution
 
+# ===========================================================================
+# Head identification (Fix E in docs/audit_apr26_cka_sgcrl.md)
+# ===========================================================================
+#
+# The CKA path masks gradients on the body (encoder) of v_k, retaining
+# gradients only for the actor head. Detection used to be a brittle
+# substring match against the literal string ``'Normal'`` scattered across
+# the codebase. We centralise the tag here so that any future renames
+# (e.g. swapping in a different head type) only need to touch this list.
+#
+# A leaf is part of the actor head iff its Haiku path string contains any
+# of ``ACTOR_HEAD_PATH_TAGS``. The current head module is
+# ``NormalTanhDistribution`` whose submodule name is ``'Normal'``.
+# Adding a new head module: register its name (or a unique substring of
+# its submodule path) here.
+ACTOR_HEAD_PATH_TAGS: Tuple[str, ...] = ('Normal',)
+
+
+def is_actor_head_path(path_str: str) -> bool:
+  """Return True if a Haiku path string belongs to the policy head."""
+  return any(tag in path_str for tag in ACTOR_HEAD_PATH_TAGS)
+
+
 @dataclasses.dataclass
 class ContrastiveNetworks:
   """Network and pure functions for the Contrastive RL agent."""
