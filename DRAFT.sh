@@ -10,7 +10,7 @@
 #SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%A_%a.out
 #SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
-#SBATCH --array=0-8
+#SBATCH --array=0-2
 #
 # ==========================================================================
 # Continual Goal-Conditioned Contrastive RL – Torch Batch SLURM Launcher
@@ -70,7 +70,7 @@ ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
 ENERGY_FN="${ENERGY_FN:-inner_product}"
 LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
 SINGLE_TASK="${SINGLE_TASK:-}"
-ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-true}"
+ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-false}"
 ACTOR_RESET_DORMANT_THRESHOLD="${ACTOR_RESET_DORMANT_THRESHOLD:-0.1}"
 ACTOR_RESET_WARMUP="${ACTOR_RESET_WARMUP:-200000}"
 ACTOR_RESET_MAX="${ACTOR_RESET_MAX:-3}"

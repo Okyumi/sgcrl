@@ -27,7 +27,7 @@ import sys
 # Grid definition – edit these to change the experiment sweep
 # =====================================================================
 
-ACTOR_MODES  = ['reset', 'persistent', 'cka']
+ACTOR_MODES  = ['cka']
 CRITIC_MODES = ['reset', 'persistent', 'cka']
 SEEDS        = [99, 98, 97]
 
