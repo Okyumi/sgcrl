@@ -106,11 +106,26 @@ The submodule name `'Normal'` is unchanged so existing checkpoints
 still match. To add a new head module type, register a unique
 substring of its Haiku name in `ACTOR_HEAD_PATH_TAGS`.
 
-### Fix F — `jax.tree_map → jax.tree.map` (Bug 5)
+### Fix F — portable tree map (Bug 5)
 
-`jax.tree_map` was removed in JAX 0.6. Replaced all 14 call sites
-across `knowledge_pool.py`, `continual_learning.py`, and
-`run_continual_contrastive.py`.
+The original code used the top-level alias `jax.tree_map`, which was
+removed in JAX 0.6. The first pass of this refactor replaced it with
+`jax.tree.map`, but that namespace only appeared in JAX 0.4.25; the
+actual training environment runs **JAX 0.4.10**, where neither alias
+exists in the form we used. The portable answer is
+`jax.tree_util.tree_map`, which has been the stable public API since
+JAX 0.2 and is still present in JAX 0.6+.
+
+Replaced all 32 call sites (across `knowledge_pool.py`,
+`continual_learning.py`, and `run_continual_contrastive.py`) with
+`jax.tree_util.tree_map`. The crash that surfaced this:
+
+```
+File ".../contrastive/knowledge_pool.py", line 289,
+  in _pytree_zeros_like
+    return jax.tree.map(jnp.zeros_like, tree)
+AttributeError: module 'jax' has no attribute 'tree'
+```
 
 ## Verification
 
