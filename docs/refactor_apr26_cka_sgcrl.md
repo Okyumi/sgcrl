@@ -168,6 +168,26 @@ These are validated by running the 9-cell ablation; the smoke test
 above only verifies the API correctness, not the end-to-end training
 behaviour.
 
+## Followup: Flax-free pytree state
+
+The initial implementation registered `CKAPool` and `CKAState` with
+`@flax.struct.dataclass`. The training conda env (Python 3.9 +
+JAX 0.4.10) has a Flax that imports `jax.extend`, a module added in
+JAX 0.4.18. Result: ``import flax`` raised
+``ModuleNotFoundError: No module named 'jax.extend'`` and the learner
+never loaded.
+
+We replaced the Flax dependency with a tiny in-file decorator,
+`_pytree_dataclass`, that wraps a stdlib frozen `dataclass` with
+`jax.tree_util.register_pytree_node` plus a Flax-compatible
+`.replace(**kwargs)` method. The five existing call sites
+(`cka.replace(...)` in `knowledge_pool.py` and four sites in
+`continual_learning.py`) are unchanged. JIT round-trip, masked-softmax
+gradient flow, and full optimiser composition over
+`{v_k, alpha_logits, alpha_scale}` all verified.
+
+No Flax import remains anywhere in the active codebase.
+
 ## Pending
 
 - Run the 9-cell ablation on `section3_done` to validate criteria 1–3.
