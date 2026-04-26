@@ -27,9 +27,9 @@ import sys
 # Grid definition – edit these to change the experiment sweep
 # =====================================================================
 
-ACTOR_MODES  = ['reset', 'persistent', 'cka']
-CRITIC_MODES = ['reset', 'persistent', 'cka']
-SEEDS        = [3, 4]
+ACTOR_MODES  = ['cka']
+CRITIC_MODES = ['cka','reset', 'persistent']
+SEEDS        = [100, 101]
 
 # All other parameters use the defaults from draft_3.sh / draft_4.sh.
 # Override here only if a parameter DIFFERS from the shared defaults.

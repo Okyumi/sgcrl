@@ -103,7 +103,7 @@ flags.DEFINE_bool('log_rl_metrics', True,
                   'NRC, dormant ratio, intrinsic dimension). Enabled by default.')
 flags.DEFINE_integer('k_sample_k', 0,
                      'K for K-sample-argmax evaluation (0 = deterministic mean).')
-flags.DEFINE_bool('adapt_heads_only', True,
+flags.DEFINE_bool('adapt_heads_only', False,
                   'Only adapt actor output head layers (CKA-RL default).')
 flags.DEFINE_bool('encoder_from_base', False,
                   'Freeze shared encoder from base task.')
@@ -320,7 +320,7 @@ def train_single_task(
     prev_q_optimizer_state,
     critic_mode: str = 'persistent',
     actor_mode: str = 'cka',
-    adapt_heads_only: bool = True,
+    adapt_heads_only: bool = False,
     encoder_from_base: bool = False,
     task_sequence: tuple = CONTINUAL_TASK_SEQUENCE,
     q_base: Optional[networks_lib.Params] = None,
@@ -1073,7 +1073,7 @@ def main(_):
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
           project='continual_gcrl_paper',
-          group="test",
+          group='real_use_full_policy_v1',
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,
