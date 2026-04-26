@@ -33,19 +33,57 @@ This module exports:
 """
 from __future__ import annotations
 
-from typing import List, Optional
+import dataclasses
+from typing import Any, List, Optional
 
-import flax
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 
 # ===========================================================================
+# Pytree dataclass shim
+# ===========================================================================
+#
+# We register tiny stdlib dataclasses as JAX pytrees so the CKA state can
+# pass through ``jit``, ``scan``, ``grad`` etc. without any Flax
+# dependency. Flax's ``flax.struct.dataclass`` was the original choice but
+# pulled in a hard ``jax.extend`` requirement (Flax ≥ 0.7), which is
+# absent on JAX 0.4.10. Doing it ourselves keeps the file dependency-free
+# beyond JAX itself.
+#
+# The decorator returns a frozen dataclass with:
+#   - ``replace(**kwargs)``: same behaviour as Flax's ``replace`` /
+#     ``dataclasses.replace``.
+#   - JAX pytree registration: children are the field values in field
+#     declaration order, aux data is empty.
+
+
+def _pytree_dataclass(cls):
+  """Frozen dataclass + JAX pytree registration + ``.replace`` method."""
+  cls = dataclasses.dataclass(cls, frozen=True)
+  field_names = tuple(f.name for f in dataclasses.fields(cls))
+
+  def _replace(self, **kwargs):
+    return dataclasses.replace(self, **kwargs)
+  cls.replace = _replace
+
+  def _flatten(obj):
+    children = tuple(getattr(obj, n) for n in field_names)
+    return children, None
+
+  def _unflatten(_aux, children):
+    return cls(**dict(zip(field_names, children)))
+
+  jax.tree_util.register_pytree_node(cls, _flatten, _unflatten)
+  return cls
+
+
+# ===========================================================================
 # Public new API
 # ===========================================================================
 
-@flax.struct.dataclass
+@_pytree_dataclass
 class CKAPool:
   """Fixed-capacity knowledge pool that lives inside a JAX pytree.
 
@@ -53,7 +91,7 @@ class CKAPool:
     vectors: pytree of arrays with leading dim ``capacity``.
     mask: bool array of shape ``(capacity,)`` marking active slots.
   """
-  vectors: 'jax.tree_util.PyTreeDef'  # type: ignore[type-arg]
+  vectors: Any
   mask: jnp.ndarray
 
 
@@ -102,7 +140,7 @@ def compute_contribution(
   return jax.tree_util.tree_map(_blend, pool.vectors)
 
 
-@flax.struct.dataclass
+@_pytree_dataclass
 class CKAState:
   """All state needed to drive one CKA-decomposed component.
 
@@ -119,8 +157,8 @@ class CKAState:
   ``pool`` are constants from the optimiser's perspective and are
   rewritten only at task boundaries.
   """
-  base_params: 'jax.tree_util.PyTreeDef'  # type: ignore[type-arg]
-  v_k: 'jax.tree_util.PyTreeDef'          # type: ignore[type-arg]
+  base_params: Any
+  v_k: Any
   pool: CKAPool
   alpha_logits: jnp.ndarray
   alpha_scale: jnp.ndarray
