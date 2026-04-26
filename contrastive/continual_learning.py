@@ -19,11 +19,19 @@ from acme.utils import counting
 from acme.utils import loggers
 from contrastive import config as contrastive_config
 from contrastive import networks as contrastive_networks
+from contrastive.networks import is_actor_head_path
 from contrastive.knowledge_pool import (
     KnowledgePool,
     compose_policy_params,
     _pytree_zeros_like,
     _flatten_pytree,
+    # New CKA pool API (Fix A + B).
+    CKAState,
+    init_cka_state,
+    reinit_for_new_task as cka_reinit_for_new_task,
+    compute_contribution as cka_compute_contribution,
+    compose_from_trainable as cka_compose_from_trainable,
+    append_vector_host as cka_append_vector_host,
 )
 import jax
 import jax.numpy as jnp
@@ -39,24 +47,42 @@ from default import make_default_logger
 # ---------------------------------------------------------------------------
 
 class ContinualTrainingState(NamedTuple):
-  """Training state for the continual contrastive RL learner."""
-  # Critic (persistent across tasks)
+  """Training state for the continual contrastive RL learner.
+
+  Two parallel state shapes are supported:
+
+  * **Non-CKA modes** (``actor_mode in {'reset','persistent'}``):
+    ``policy_base_params + v_k`` is the effective policy, ``beta_k``
+    and ``alpha_scale`` are unused, ``actor_cka_state`` is ``None``.
+    The pool is empty and the inner loop's pool-contribution is zero.
+  * **CKA mode** (``actor_mode='cka'``):
+    ``actor_cka_state`` carries the frozen ``base_params``, the pool of
+    past-task knowledge vectors, and the per-task learnable
+    ``alpha_logits`` and ``alpha_scale``. The inner loop's actor
+    optimiser tracks the trainable bundle
+    ``{'v_k', 'alpha_logits', 'alpha_scale'}`` jointly via
+    ``actor_cka_opt_state``. The legacy ``policy_base_params``,
+    ``v_k``, ``beta_k``, ``alpha_scale`` fields are unused in this mode
+    (kept zero-shaped for pytree compatibility).
+
+  The same logic applies on the critic side via ``critic_cka_state`` /
+  ``critic_cka_opt_state``.
+  """
+  # Critic (persistent across tasks; used for non-CKA critic modes)
   q_params: networks_lib.Params
   target_q_params: networks_lib.Params
   q_optimizer_state: optax.OptState
 
-  # Actor – base (frozen after task 1)
+  # Actor – base (frozen after task 1, non-CKA path)
   policy_base_params: networks_lib.Params
 
-  # Actor – current task vector v_k (optimised)
+  # Actor – current task vector v_k (optimised, non-CKA path)
   v_k: networks_lib.Params
   v_k_optimizer_state: optax.OptState
 
-  # Actor – CKA blending weights β_k (optimised); α_k = softmax(β_k)
+  # Legacy slots retained for state-shape compatibility; unused in CKA mode.
   beta_k: jnp.ndarray
   beta_k_optimizer_state: optax.OptState
-
-  # Optional α_scale (learnable scalar)
   alpha_scale: jnp.ndarray
   alpha_scale_optimizer_state: optax.OptState
 
@@ -67,10 +93,12 @@ class ContinualTrainingState(NamedTuple):
   # RNG key
   key: networks_lib.PRNGKey
 
-  # Frozen pool vectors (as a list serialised to a tuple of pytrees)
-  # NOTE: we keep pool_vectors outside this NamedTuple because NamedTuples
-  # must hold fixed-structure elements and the pool length changes.  We store
-  # a placeholder here; the learner class holds the actual pool.
+  # New CKA slots (Fix A + B). When set, the inner loop sources all
+  # CKA-related state from here and ignores the legacy fields above.
+  actor_cka_state: Optional[CKAState] = None
+  actor_cka_opt_state: Optional[optax.OptState] = None
+  critic_cka_state: Optional[CKAState] = None
+  critic_cka_opt_state: Optional[optax.OptState] = None
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +132,7 @@ class ContinualContrastiveLearner(acme.Learner):
       prev_target_q_params: Optional[networks_lib.Params] = None,
       prev_q_optimizer_state: Optional[optax.OptState] = None,
       critic_mode: str = 'persistent',
+      actor_mode: str = 'cka',
       adapt_heads_only: bool = True,
       encoder_from_base: bool = True,
       # --- critic CKA state (only used when critic_mode='cka') ---
@@ -116,9 +145,16 @@ class ContinualContrastiveLearner(acme.Learner):
       neg_bank_hard_ratio: int = 4,     # candidate pool multiplier for hard mining
   ):
     self._task_id = task_id
+    self._actor_mode = actor_mode
     self._critic_mode = critic_mode
     self._adapt_heads_only = adapt_heads_only
     self._encoder_from_base = encoder_from_base
+    # Whether the inner JIT loop should differentiate the actor/critic
+    # losses through the CKA pool blend. Triggered at task >= 1 in CKA
+    # modes; at task 0 we always run the plain non-CKA path because the
+    # pool is empty and the base is being trained from scratch.
+    self._actor_cka_path = (actor_mode == 'cka' and task_id > 0)
+    self._critic_cka_path = (critic_mode == 'cka' and task_id > 0)
     self._config = config
     self._continual_config = continual_config
     self._num_sgd_steps_per_step = config.num_sgd_steps_per_step
@@ -187,6 +223,9 @@ class ContinualContrastiveLearner(acme.Learner):
     neg_bank_M = self._neg_bank_n_per_step
     neg_bank_weight_local = self._neg_bank_weight
     neg_bank_hard_ratio_local = self._neg_bank_hard_ratio
+
+    actor_cka_path = self._actor_cka_path
+    critic_cka_path = self._critic_cka_path
 
     def _make_update_step(networks, config, adaptive_entropy, obs_to_goal):
       """Factory that returns a (possibly jitted) update function."""
@@ -407,28 +446,50 @@ class ContinualContrastiveLearner(acme.Learner):
 
         Args:
           state: ContinualTrainingState
-          data: tuple of (transitions, pool_contribution[, bank_goals])
-            transitions: batch of transitions
-            pool_contribution: pytree – pre-computed Σ α_j v_j (using current
-              α derived from state.beta_k outside JIT).
-            bank_goals (optional): [M_pool, goal_dim] negative goals from
-              previous tasks' replay buffers.  Only present when
-              neg_bank_active is True.
+          data: tuple of (transitions[, bank_goals]). The pool blend is
+            sourced entirely from ``state.actor_cka_state`` /
+            ``state.critic_cka_state`` when the corresponding CKA path is
+            active, so it is no longer passed in as data.
         """
         if neg_bank_active:
-          transitions, pool_contribution, bank_goals = data
+          transitions, bank_goals = data
         else:
-          transitions, pool_contribution = data
+          transitions = data
           bank_goals = None
         key, key_alpha, key_critic, key_actor = jax.random.split(state.key, 4)
 
         # -- compose effective policy params --------------------------------
-        combined_policy = jax.tree_map(
-            lambda base, pool_c, vk: base + pool_c + vk,
-            state.policy_base_params,
-            pool_contribution,
-            state.v_k,
-        )
+        # In CKA mode we differentiate through the pool blend; in non-CKA
+        # modes we use the legacy policy_base_params + v_k path.
+        if actor_cka_path:
+          actor_trainable = {
+              'v_k': state.actor_cka_state.v_k,
+              'alpha_logits': state.actor_cka_state.alpha_logits,
+              'alpha_scale': state.actor_cka_state.alpha_scale,
+          }
+          combined_policy = cka_compose_from_trainable(
+              state.actor_cka_state, actor_trainable)
+        else:
+          combined_policy = jax.tree.map(
+              lambda base, vk: base + vk,
+              state.policy_base_params, state.v_k,
+          )
+
+        # In CKA mode for the critic, the effective q_params come from
+        # composing q_base + sum_j alpha_j w_j + w_k. Otherwise q_params
+        # are used directly.
+        if critic_cka_path:
+          critic_trainable = {
+              'v_k': state.critic_cka_state.v_k,
+              'alpha_logits': state.critic_cka_state.alpha_logits,
+              'alpha_scale': state.critic_cka_state.alpha_scale,
+          }
+          composed_q_params = cka_compose_from_trainable(
+              state.critic_cka_state, critic_trainable)
+          composed_target_q_params = state.target_q_params  # follows q
+        else:
+          composed_q_params = state.q_params
+          composed_target_q_params = state.target_q_params
 
         # -- entropy coefficient --------------------------------------------
         if adaptive_entropy:
@@ -440,47 +501,112 @@ class ContinualContrastiveLearner(acme.Learner):
           _alpha_loss = 0.0
 
         # -- critic update --------------------------------------------------
-        (c_loss, c_metrics), c_grads = critic_grad(
-            state.q_params, combined_policy, state.target_q_params,
-            transitions, key_critic, bank_goals)
-        c_updates, q_opt_state = q_optimizer.update(c_grads, state.q_optimizer_state)
-        q_params = optax.apply_updates(state.q_params, c_updates)
-        new_target = jax.tree_map(
-            lambda x, y: x * (1 - config.tau) + y * config.tau,
-            state.target_q_params, q_params)
+        # In non-CKA critic mode, we differentiate critic_loss w.r.t.
+        # q_params directly.
+        # In CKA critic mode, we differentiate w.r.t. the trainable bundle
+        # (v_k, alpha_logits, alpha_scale) via cka_compose_from_trainable.
+        if critic_cka_path:
+          def critic_loss_cka(critic_trainable, transitions, key,
+                              bank_goals):
+            composed = cka_compose_from_trainable(
+                state.critic_cka_state, critic_trainable)
+            return critic_loss_fn(composed, combined_policy,
+                                  state.target_q_params,
+                                  transitions, key, bank_goals)
+          critic_grad_cka = jax.value_and_grad(critic_loss_cka,
+                                               has_aux=True)
+          (c_loss, c_metrics), c_bundle_grads = critic_grad_cka(
+              critic_trainable, transitions, key_critic, bank_goals)
+          c_updates, c_cka_opt = q_optimizer.update(
+              c_bundle_grads, state.critic_cka_opt_state)
+          new_critic_trainable = optax.apply_updates(
+              critic_trainable, c_updates)
+          new_critic_cka_state = state.critic_cka_state.replace(
+              v_k=new_critic_trainable['v_k'],
+              alpha_logits=new_critic_trainable['alpha_logits'],
+              alpha_scale=new_critic_trainable['alpha_scale'],
+          )
+          # Effective q for target update.
+          new_composed_q = cka_compose_from_trainable(
+              new_critic_cka_state, new_critic_trainable)
+          new_target = jax.tree.map(
+              lambda x, y: x * (1 - config.tau) + y * config.tau,
+              state.target_q_params, new_composed_q)
+          q_params = state.q_params  # legacy; unused in CKA path
+          q_opt_state = state.q_optimizer_state  # legacy; unused
+        else:
+          (c_loss, c_metrics), c_grads = critic_grad(
+              state.q_params, combined_policy, state.target_q_params,
+              transitions, key_critic, bank_goals)
+          c_updates, q_opt_state = q_optimizer.update(
+              c_grads, state.q_optimizer_state)
+          q_params = optax.apply_updates(state.q_params, c_updates)
+          new_target = jax.tree.map(
+              lambda x, y: x * (1 - config.tau) + y * config.tau,
+              state.target_q_params, q_params)
+          new_critic_cka_state = state.critic_cka_state
+          c_cka_opt = state.critic_cka_opt_state
 
-        # -- actor update (gradients w.r.t. v_k) ----------------------------
-        # We need grad of actor_loss w.r.t. combined_policy, then chain-rule
-        # to v_k.  Since combined_policy = base + pool_c + v_k, the grad
-        # w.r.t. v_k equals the grad w.r.t. combined_policy (base and pool_c
-        # are treated as constants).
-        actor_loss_and_grad = jax.value_and_grad(actor_loss_fn, has_aux=True)
-        (a_loss, a_metrics), a_grads_combined = actor_loss_and_grad(
-            combined_policy, state.q_params, alpha, transitions, key_actor)
-        # a_grads_combined has the same pytree structure as combined_policy
-        # and equals ∂L/∂v_k because v_k enters additively.
-        #
-        # Head-only adaptation: zero out body gradients so v_k only modifies
-        # the actor output head (NormalTanhDistribution layers).
-        if mask_body_grads:
-          def _mask_leaf(path, g):
-            # Haiku key path is a tuple of DictKey / GetAttrKey objects.
-            # Head leaves have 'Normal' in their Haiku path.
-            # Haiku flattens keys as 'Normal/linear', 'Normal/linear_1'.
-            path_str = '/'.join(str(p) for p in path)
-            is_head = 'Normal' in path_str
-            return g if is_head else jnp.zeros_like(g)
-          a_grads_combined = jax.tree_util.tree_map_with_path(
-              _mask_leaf, a_grads_combined)
-        vk_updates, vk_opt_state = vk_optimizer.update(
-            a_grads_combined, state.v_k_optimizer_state)
-        v_k_new = optax.apply_updates(state.v_k, vk_updates)
+        # -- actor update --------------------------------------------------
+        # In non-CKA actor mode: differentiate actor_loss w.r.t. v_k
+        # (through combined_policy = base + v_k). Body grads optionally
+        # masked.
+        # In CKA actor mode: differentiate actor_loss w.r.t. the trainable
+        # bundle (v_k, alpha_logits, alpha_scale). The actor optimiser
+        # updates all three jointly.
+        if actor_cka_path:
+          def actor_loss_cka(actor_trainable, q_params_for_actor, alpha,
+                             transitions, key):
+            composed = cka_compose_from_trainable(
+                state.actor_cka_state, actor_trainable)
+            return actor_loss_fn(composed, q_params_for_actor, alpha,
+                                 transitions, key)
+          actor_grad_cka = jax.value_and_grad(actor_loss_cka,
+                                              has_aux=True)
+          q_for_actor = composed_q_params if critic_cka_path else state.q_params
+          (a_loss, a_metrics), a_bundle_grads = actor_grad_cka(
+              actor_trainable, q_for_actor, alpha, transitions, key_actor)
+          # Body-grad masking on the v_k portion only (alpha_logits and
+          # alpha_scale are unaffected).
+          if mask_body_grads:
+            def _mask_leaf(path, g):
+              path_str = '/'.join(str(p) for p in path)
+              return g if is_actor_head_path(path_str) else jnp.zeros_like(g)
+            a_bundle_grads = {
+                **a_bundle_grads,
+                'v_k': jax.tree_util.tree_map_with_path(
+                    _mask_leaf, a_bundle_grads['v_k']),
+            }
+          a_updates, a_cka_opt = vk_optimizer.update(
+              a_bundle_grads, state.actor_cka_opt_state)
+          new_actor_trainable = optax.apply_updates(
+              actor_trainable, a_updates)
+          new_actor_cka_state = state.actor_cka_state.replace(
+              v_k=new_actor_trainable['v_k'],
+              alpha_logits=new_actor_trainable['alpha_logits'],
+              alpha_scale=new_actor_trainable['alpha_scale'],
+          )
+          v_k_new = state.v_k          # legacy slot, unchanged
+          vk_opt_state = state.v_k_optimizer_state
+        else:
+          actor_loss_and_grad = jax.value_and_grad(actor_loss_fn,
+                                                   has_aux=True)
+          (a_loss, a_metrics), a_grads_combined = actor_loss_and_grad(
+              combined_policy, state.q_params, alpha,
+              transitions, key_actor)
+          if mask_body_grads:
+            def _mask_leaf(path, g):
+              path_str = '/'.join(str(p) for p in path)
+              return g if is_actor_head_path(path_str) else jnp.zeros_like(g)
+            a_grads_combined = jax.tree_util.tree_map_with_path(
+                _mask_leaf, a_grads_combined)
+          vk_updates, vk_opt_state = vk_optimizer.update(
+              a_grads_combined, state.v_k_optimizer_state)
+          v_k_new = optax.apply_updates(state.v_k, vk_updates)
+          new_actor_cka_state = state.actor_cka_state
+          a_cka_opt = state.actor_cka_opt_state
 
-        # -- β_k update (not needed for task 0 / base phase) ----------------
-        # β_k affects α = softmax(β_k * α_scale) which modulates pool_contribution.
-        # Since pool_contribution is pre-computed outside JIT (for variable-length
-        # pool), β_k gradients are computed by the orchestrator's outer loop.
-        # Here we just pass through.
+        # -- legacy beta_k / alpha_scale: untouched by inner loop ------------
         beta_k_new = state.beta_k
         beta_opt_state = state.beta_k_optimizer_state
         alpha_scale_new = state.alpha_scale
@@ -492,6 +618,42 @@ class ContinualContrastiveLearner(acme.Learner):
             'actor_loss': a_loss,
         })
         metrics.update(a_metrics)
+
+        # CKA diagnostics: visible alpha distribution + scale.
+        if actor_cka_path:
+          a_logits = new_actor_cka_state.alpha_logits
+          a_scale = new_actor_cka_state.alpha_scale
+          a_pool_mask = new_actor_cka_state.pool.mask
+          a_logits_masked = jnp.where(a_pool_mask,
+                                      a_logits * a_scale, -jnp.inf)
+          any_active = jnp.any(a_pool_mask)
+          a_softmax = jax.nn.softmax(
+              jnp.where(any_active, a_logits_masked,
+                        jnp.zeros_like(a_logits_masked)),
+              axis=0)
+          a_softmax = jnp.where(any_active, a_softmax,
+                                jnp.zeros_like(a_softmax))
+          metrics['actor_alpha_max'] = jnp.max(a_softmax)
+          metrics['actor_alpha_entropy'] = -jnp.sum(
+              a_softmax * jnp.log(a_softmax + 1e-12))
+          metrics['actor_alpha_scale'] = a_scale
+        if critic_cka_path:
+          c_logits = new_critic_cka_state.alpha_logits
+          c_scale = new_critic_cka_state.alpha_scale
+          c_pool_mask = new_critic_cka_state.pool.mask
+          c_logits_masked = jnp.where(c_pool_mask,
+                                      c_logits * c_scale, -jnp.inf)
+          any_active_c = jnp.any(c_pool_mask)
+          c_softmax = jax.nn.softmax(
+              jnp.where(any_active_c, c_logits_masked,
+                        jnp.zeros_like(c_logits_masked)),
+              axis=0)
+          c_softmax = jnp.where(any_active_c, c_softmax,
+                                jnp.zeros_like(c_softmax))
+          metrics['critic_alpha_max'] = jnp.max(c_softmax)
+          metrics['critic_alpha_entropy'] = -jnp.sum(
+              c_softmax * jnp.log(c_softmax + 1e-12))
+          metrics['critic_alpha_scale'] = c_scale
 
         new_state = ContinualTrainingState(
             q_params=q_params,
@@ -507,6 +669,10 @@ class ContinualContrastiveLearner(acme.Learner):
             alpha_params=state.alpha_params,
             alpha_optimizer_state=state.alpha_optimizer_state,
             key=key,
+            actor_cka_state=new_actor_cka_state,
+            actor_cka_opt_state=a_cka_opt,
+            critic_cka_state=new_critic_cka_state,
+            critic_cka_opt_state=c_cka_opt,
         )
 
         if adaptive_entropy:
@@ -538,34 +704,36 @@ class ContinualContrastiveLearner(acme.Learner):
     def _scan_update(state, data):
       """Run num_sgd_steps_per_step updates via lax.scan.
 
-      data = (transitions, pool_contribution[, bank_goals])
+      data = transitions [or (transitions, bank_goals)]
         transitions: leaves have shape [batch_size * num_sgd, ...]
-        pool_contribution: param-shaped pytree (no batch dim)
         bank_goals (optional): [M_pool, goal_dim] — shared across all SGD
           steps in this scan (the bank doesn't change within one learner
           step, so we reuse the same sample).
+
+      Pool contribution is no longer passed in; it is recomputed inside
+      every JIT step from ``state.actor_cka_state`` /
+      ``state.critic_cka_state`` so that ``alpha_logits`` and
+      ``alpha_scale`` receive in-loop gradient updates.
       """
       if neg_bank_active:
-        transitions, pool_c, bank_goals = data
+        transitions, bank_goals = data
       else:
-        transitions, pool_c = data
+        transitions = data
         bank_goals = None
       # Reshape transitions: [B*N, ...] -> [N, B, ...]
-      batched_transitions = jax.tree_map(
+      batched_transitions = jax.tree.map(
           lambda a: jnp.reshape(a, (num_sgd, -1, *a.shape[1:])),
           transitions)
 
       def scan_body(carry, mini_batch):
-        # mini_batch is transitions for one SGD step; pool_c and bank_goals
-        # are closed over (same across SGD steps).
         if neg_bank_active:
-          return update_step(carry, (mini_batch, pool_c, bank_goals))
-        return update_step(carry, (mini_batch, pool_c))
+          return update_step(carry, (mini_batch, bank_goals))
+        return update_step(carry, mini_batch)
 
       state, metrics = jax.lax.scan(
           scan_body, state, batched_transitions, length=num_sgd)
-      # Average metrics across SGD steps (same as process_multiple_batches)
-      metrics = jax.tree_map(jnp.mean, metrics)
+      # Average metrics across SGD steps.
+      metrics = jax.tree.map(jnp.mean, metrics)
       return state, metrics
 
     if config.jit:
@@ -576,6 +744,9 @@ class ContinualContrastiveLearner(acme.Learner):
     # ---- initialise state -------------------------------------------------
     key_policy, key_q, rng = jax.random.split(rng, 3)
 
+    # Pool capacity for CKA states (fixed, JIT-stable shape).
+    capacity = continual_config.k_max + 1
+
     if theta_base is None:
       # Fresh init (base task, actor_mode='reset', or actor_mode='persistent'
       # on task 0).  The actor is initialised from scratch.
@@ -585,19 +756,17 @@ class ContinualContrastiveLearner(acme.Learner):
       # Critic init: respect critic_mode even when actor is fresh.
       if prev_q_params is not None and critic_mode == 'persistent':
         q_params = prev_q_params
-      elif critic_mode == 'cka' and self._q_base is not None:
-        # Actor is reset but critic uses CKA decomposition:
-        # compose q_params = q_base + pool_c (w_k starts at zero)
-        critic_pool_c = self._compute_critic_pool_contribution()
-        q_params = jax.tree_map(
-            lambda b, pc: b + pc,
-            self._q_base, critic_pool_c)
-        self._critic_pool_c_at_init = critic_pool_c
+      elif critic_mode == 'cka' and self._q_base is not None and task_id > 0:
+        # Actor is reset but critic uses CKA decomposition. We compose the
+        # *initial* q_params from the new CKAState (handled below); for
+        # bookkeeping we set q_params = q_base here and let the CKA
+        # composition take over inside the inner loop.
+        q_params = self._q_base
       else:
         q_params = networks.q_network.init(key_q)
     else:
-      # Continual phase (CKA actor decomposition active)
-      policy_params = theta_base  # not used directly; composed via v_k
+      # Continual phase: actor_mode in {'persistent','cka'} with task_id > 0.
+      policy_params = theta_base  # not used directly; composed via v_k / CKA
 
       if critic_mode == 'persistent':
         # Carry forward critic from previous task (never reset)
@@ -607,44 +776,76 @@ class ContinualContrastiveLearner(acme.Learner):
         # Reinitialize critic from scratch each task
         q_params = networks.q_network.init(key_q)
       elif critic_mode == 'cka':
-        # CKA-style critic: q' = q_base + Σ α_j w_j + w_k
-        # q_base is frozen from task 0.  We compose the initial q_params
-        # by adding the pool contribution and a fresh w_k (zeros).
-        # The inner loop trains q_params normally; after training we
-        # extract w_k = q_params - q_base - pool_c.
+        # CKA-style critic: q' = q_base + Σ α_j w_j + w_k. q_base is
+        # frozen from task 0. The composed q_params are sourced from
+        # ``critic_cka_state`` inside the inner loop; the legacy
+        # ``q_params`` slot just carries q_base for reference.
         assert self._q_base is not None, (
             'critic_mode=cka requires q_base (frozen from task 0)')
-        # Compute pool contribution for critic
-        critic_pool_c = self._compute_critic_pool_contribution()
-        # w_k starts at zero → composed q_params = q_base + pool_c + 0
-        q_params = jax.tree_map(
-            lambda b, pc: b + pc,
-            self._q_base, critic_pool_c)
-        # Store pool_c for w_k extraction after training
-        self._critic_pool_c_at_init = critic_pool_c
+        q_params = self._q_base
       else:
         raise ValueError(f'Unknown critic_mode: {critic_mode}')
 
-    # v_k: initialised to zeros (same structure as policy params)
+    # ---- legacy non-CKA actor slots (kept for non-CKA modes) ---------------
     v_k = _pytree_zeros_like(theta_base)
-
-    # β_k: for task 0, empty; for task k, length = |pool|
-    n_pool = len(self._pool)
-    if n_pool > 0:
-      key_beta, rng = jax.random.split(rng)
-      beta_k = jax.random.normal(key_beta, (n_pool,)) * continual_config.beta_init_std
-    else:
-      beta_k = jnp.zeros(0)
-
+    beta_k = jnp.zeros(0)
     alpha_scale = jnp.ones(1)
-
-    # Optimisers
     vk_opt_state = vk_optimizer.init(v_k)
     beta_opt_state = beta_optimizer.init(beta_k)
     alpha_scale_opt_state = alpha_scale_optimizer.init(alpha_scale)
 
+    # ---- new CKA actor state (Fix A + B) ----------------------------------
+    actor_cka_state = None
+    actor_cka_opt_state = None
+    if self._actor_cka_path:
+      key_logits, rng = jax.random.split(rng)
+      # Build empty pool, then append each legacy pool vector via the
+      # host-side append (vectors are already shaped like theta_base since
+      # they were extracted from prior-task v_k).
+      actor_cka_state = init_cka_state(theta_base, capacity=capacity)
+      for v_j in self._pool.get_vectors():
+        actor_cka_state = actor_cka_state.replace(
+            pool=cka_append_vector_host(
+                actor_cka_state.pool, v_j, k_max=continual_config.k_max))
+      actor_cka_state = cka_reinit_for_new_task(
+          actor_cka_state, theta_base, key_logits,
+          alpha_logits_init_std=continual_config.beta_init_std,
+          alpha_scale_init=1.0,
+      )
+      actor_bundle = {
+          'v_k': actor_cka_state.v_k,
+          'alpha_logits': actor_cka_state.alpha_logits,
+          'alpha_scale': actor_cka_state.alpha_scale,
+      }
+      actor_cka_opt_state = vk_optimizer.init(actor_bundle)
+
+    # ---- new CKA critic state (Fix A + B) ---------------------------------
+    critic_cka_state = None
+    critic_cka_opt_state = None
+    if self._critic_cka_path:
+      assert self._q_base is not None, (
+          'critic_mode=cka requires q_base from task 0')
+      key_clogits, rng = jax.random.split(rng)
+      critic_cka_state = init_cka_state(self._q_base, capacity=capacity)
+      for w_j in self._critic_pool.get_vectors():
+        critic_cka_state = critic_cka_state.replace(
+            pool=cka_append_vector_host(
+                critic_cka_state.pool, w_j, k_max=continual_config.k_max))
+      critic_cka_state = cka_reinit_for_new_task(
+          critic_cka_state, self._q_base, key_clogits,
+          alpha_logits_init_std=continual_config.beta_init_std,
+          alpha_scale_init=1.0,
+      )
+      critic_bundle = {
+          'v_k': critic_cka_state.v_k,
+          'alpha_logits': critic_cka_state.alpha_logits,
+          'alpha_scale': critic_cka_state.alpha_scale,
+      }
+      critic_cka_opt_state = q_optimizer.init(critic_bundle)
+
+    # ---- legacy critic optimizer / target ---------------------------------
     # Track whether critic was freshly initialised / recomposed.
-    # When True, optimizer state and target Q must be reinitialised.
+    # When True, legacy optimizer state and target Q must be reinitialised.
     critic_was_freshly_init = (
         task_id == 0
         or critic_mode in ('reset', 'cka')
@@ -660,6 +861,14 @@ class ContinualContrastiveLearner(acme.Learner):
       target_q = q_params
     else:
       target_q = prev_target_q_params if prev_target_q_params is not None else q_params
+
+    # In critic CKA path, the legacy ``q_params`` slot carries q_base; the
+    # target Q is a separate (mutable across tasks) snapshot that the inner
+    # JIT loop polyak-updates against the *composed* critic. We initialise
+    # it to q_base (which equals the composed value when alpha is masked
+    # and v_k = 0).
+    if self._critic_cka_path:
+      target_q = q_params
 
     # Entropy
     if adaptive_entropy:
@@ -683,6 +892,10 @@ class ContinualContrastiveLearner(acme.Learner):
         alpha_params=alpha_params_init,
         alpha_optimizer_state=alpha_opt_state_init,
         key=rng,
+        actor_cka_state=actor_cka_state,
+        actor_cka_opt_state=actor_cka_opt_state,
+        critic_cka_state=critic_cka_state,
+        critic_cka_opt_state=critic_cka_opt_state,
     )
 
     self._networks = networks
@@ -699,115 +912,15 @@ class ContinualContrastiveLearner(acme.Learner):
     self._iterator = iterator
     self._timestamp = None
 
-  # ---- pool-contribution helper (outside JIT for variable-length pool) ----
-
-  def _compute_pool_contribution(self):
-    """Compute Σ α_j v_j using current β_k and pool vectors."""
-    pool_vecs = self._pool.get_vectors()
-    if not pool_vecs:
-      return _pytree_zeros_like(self._state.policy_base_params)
-
-    beta = self._state.beta_k
-    alpha_scale = self._state.alpha_scale
-    alpha = jax.nn.softmax(beta * alpha_scale[0])
-
-    contribution = _pytree_zeros_like(pool_vecs[0])
-    for j, v_j in enumerate(pool_vecs):
-      contribution = jax.tree_map(
-          lambda c, v: c + float(alpha[j]) * v,
-          contribution, v_j)
-    return contribution
-
-  # ---- critic pool contribution (outside JIT) ------------------------------
-
-  def _compute_critic_pool_contribution(self):
-    """Compute Σ α_j w_j for critic pool using uniform weights.
-
-    For the critic CKA, we use uniform blending (no learnable β for critic)
-    to keep the implementation simple: pool_c = mean(w_j) if pool non-empty.
-    """
-    critic_vecs = self._critic_pool.get_vectors()
-    if not critic_vecs:
-      # Need a zeros-like for critic params.  Use q_base if available,
-      # otherwise fall back to current q_params.
-      ref = self._q_base if self._q_base is not None else self._state.q_params
-      return _pytree_zeros_like(ref)
-    # Uniform average of critic knowledge vectors
-    n = len(critic_vecs)
-    result = _pytree_zeros_like(critic_vecs[0])
-    for w_j in critic_vecs:
-      result = jax.tree_map(lambda r, w: r + w / n, result, w_j)
-    return result
-
-  # ---- β_k gradient step (outside JIT) ------------------------------------
-
-  def _update_beta_and_alpha_scale(self, transitions):
-    """Compute and apply gradients for β_k and α_scale.
-
-    Because the pool length varies, we compute these gradients outside JAX JIT
-    using a small helper that evaluates the actor loss as a function of β_k.
-    For simplicity in the initial implementation, we use finite differences
-    or a non-JIT grad.  A more efficient approach would fix the pool size with
-    padding, but this is cleaner for correctness.
-    """
-    pool_vecs = self._pool.get_vectors()
-    if not pool_vecs or len(self._state.beta_k) == 0:
-      return  # nothing to update for base task or empty pool
-
-    # Define actor loss as function of beta_k (and alpha_scale)
-    def beta_loss_fn(beta_k, alpha_scale_val):
-      alpha = jax.nn.softmax(beta_k * alpha_scale_val)
-      # Compose pool contribution
-      contribution = _pytree_zeros_like(pool_vecs[0])
-      for j, v_j in enumerate(pool_vecs):
-        contribution = jax.tree_map(
-            lambda c, v: c + alpha[j] * v,
-            contribution, v_j)
-      # Compose policy
-      combined = jax.tree_map(
-          lambda base, pc, vk: base + pc + vk,
-          self._state.policy_base_params,
-          contribution,
-          self._state.v_k,
-      )
-      # Evaluate actor loss using inner product (matching SGCRL)
-      obs = transitions.observation
-      state = obs[:, :self._config.obs_dim]
-      goal = obs[:, self._config.obs_dim:]
-      new_obs = jnp.concatenate([state, goal], axis=1)
-      key = jax.random.PRNGKey(0)  # deterministic for gradient
-      dist_params = self._networks.policy_network.apply(combined, new_obs)
-      action = self._networks.sample(dist_params, key)
-      q_action, _, _ = self._networks.q_network.apply(
-          self._state.q_params, new_obs, action)
-      if len(q_action.shape) == 3:
-        q_action = jnp.min(q_action, axis=-1)
-      return -jnp.mean(jnp.diag(q_action))  # minimize neg Q = maximize Q
-
-    # Compute gradients
-    grad_fn = jax.grad(beta_loss_fn, argnums=(0, 1))
-    beta_grad, alpha_scale_grad_scalar = grad_fn(
-        self._state.beta_k, self._state.alpha_scale[0])
-
-    # Apply updates for beta_k
-    beta_updates, beta_opt = self._beta_optimizer.update(
-        beta_grad, self._state.beta_k_optimizer_state)
-    new_beta = optax.apply_updates(self._state.beta_k, beta_updates)
-
-    # alpha_scale is shape (1,) but grad is scalar – reshape to match
-    alpha_scale_grad = jnp.reshape(alpha_scale_grad_scalar, (1,))
-    as_updates, as_opt = self._alpha_scale_optimizer.update(
-        alpha_scale_grad, self._state.alpha_scale_optimizer_state)
-    new_alpha_scale = optax.apply_updates(self._state.alpha_scale, as_updates)
-
-    self._state = self._state._replace(
-        beta_k=new_beta,
-        beta_k_optimizer_state=beta_opt,
-        alpha_scale=new_alpha_scale,
-        alpha_scale_optimizer_state=as_opt,
-    )
-
   # ---- main step ----------------------------------------------------------
+  #
+  # Note: prior versions of this learner ran a host-side
+  # ``_compute_pool_contribution`` per learner step plus a separate non-JIT
+  # ``_update_beta_and_alpha_scale`` pass that updated ``beta_k`` /
+  # ``alpha_scale`` once per learner step (cadence imbalance ~64x vs the
+  # inner JIT loop, see Bugs 1–2 in docs/audit_apr26_cka_sgcrl.md). Both are
+  # gone now: in CKA mode the trainable bundle is jointly optimised inside
+  # the JIT body via ``cka_compose_from_trainable``.
 
   def set_bank_goals(self, bank_goals):
     """Set bank goals for subsequent step() calls.
@@ -835,30 +948,19 @@ class ContinualContrastiveLearner(acme.Learner):
       # Cache the last batch for external use (e.g., rl_metrics)
       self._last_transitions = transitions
 
-      # Compute pool contribution (outside JIT for variable-length pool)
-      pool_c = self._compute_pool_contribution()
-
-      # Single call: lax.scan handles the num_sgd_steps_per_step inner loop
+      # Single call: lax.scan handles the num_sgd_steps_per_step inner loop.
+      # Pool contribution is sourced from state.actor_cka_state /
+      # state.critic_cka_state inside the JIT body, so it is no longer
+      # passed in.
       if self.neg_bank_active:
         bank_goals = getattr(self, '_current_bank_goals', None)
         assert bank_goals is not None, (
             'neg_bank_active=True but no bank_goals set. '
             'Call learner.set_bank_goals(goals) before step().')
         self._state, metrics = self._update_step(
-            self._state, (transitions, pool_c, bank_goals))
+            self._state, (transitions, bank_goals))
       else:
-        self._state, metrics = self._update_step(
-            self._state, (transitions, pool_c))
-
-      # Update β_k and α_scale (outside JIT, once per learner step)
-      if self._task_id > 0 and len(self._pool) > 0:
-        # Use last mini-batch for β gradient
-        batch_size = self._config.batch_size
-        n_steps = self._config.num_sgd_steps_per_step
-        last_start = (n_steps - 1) * batch_size
-        last_transitions = jax.tree_map(
-            lambda t: t[last_start:last_start + batch_size], transitions)
-        self._update_beta_and_alpha_scale(last_transitions)
+        self._state, metrics = self._update_step(self._state, transitions)
 
     # Timing
     timestamp = time.time()
@@ -870,13 +972,6 @@ class ContinualContrastiveLearner(acme.Learner):
       metrics['steps_per_second'] = self._num_sgd_steps_per_step / elapsed
     else:
       metrics['steps_per_second'] = 0.0
-
-    # Add continual-specific metrics
-    if len(self._state.beta_k) > 0:
-      alpha = jax.nn.softmax(
-          self._state.beta_k * self._state.alpha_scale[0])
-      metrics['alpha_weights'] = float(jnp.max(alpha))
-      metrics['alpha_scale'] = float(self._state.alpha_scale[0])
 
     # Cache last metrics for external logging (e.g., W&B with global step)
     self._last_metrics = {**metrics, **counts}
@@ -928,17 +1023,24 @@ class ContinualContrastiveLearner(acme.Learner):
   # ---- variable source (for actors) ---------------------------------------
 
   def get_variables(self, names):
-    """Return the combined policy θ' for the actor."""
-    pool_c = self._compute_pool_contribution()
-    combined = jax.tree_map(
-        lambda base, pc, vk: base + pc + vk,
-        self._state.policy_base_params,
-        pool_c,
-        self._state.v_k,
-    )
+    """Return the combined policy θ' (and current critic) for the actor."""
+    if self._actor_cka_path and self._state.actor_cka_state is not None:
+      from contrastive.knowledge_pool import compose as cka_compose
+      combined = cka_compose(self._state.actor_cka_state)
+    else:
+      combined = jax.tree.map(
+          lambda base, vk: base + vk,
+          self._state.policy_base_params,
+          self._state.v_k,
+      )
+    if self._critic_cka_path and self._state.critic_cka_state is not None:
+      from contrastive.knowledge_pool import compose as cka_compose
+      composed_q = cka_compose(self._state.critic_cka_state)
+    else:
+      composed_q = self._state.q_params
     variables = {
         'policy': combined,
-        'critic': self._state.q_params,
+        'critic': composed_q,
     }
     return [variables[name] for name in names]
 
@@ -954,10 +1056,26 @@ class ContinualContrastiveLearner(acme.Learner):
 
   @property
   def theta_base(self):
+    """Frozen base parameters of the actor.
+
+    In CKA mode this is sourced from ``actor_cka_state.base_params``;
+    otherwise from the legacy ``policy_base_params`` slot.
+    """
+    if self._actor_cka_path and self._state.actor_cka_state is not None:
+      return self._state.actor_cka_state.base_params
     return self._state.policy_base_params
 
   @property
   def q_params(self):
+    """Effective critic parameters.
+
+    In critic CKA mode the inner loop trains a trainable bundle and the
+    composed q params are obtained on the fly. We cache the most recent
+    composition lazily so that the orchestrator can checkpoint it.
+    """
+    if self._critic_cka_path and self._state.critic_cka_state is not None:
+      from contrastive.knowledge_pool import compose as cka_compose
+      return cka_compose(self._state.critic_cka_state)
     return self._state.q_params
 
   @property
@@ -966,10 +1084,25 @@ class ContinualContrastiveLearner(acme.Learner):
 
   @property
   def q_optimizer_state(self):
+    """Optimizer state for the critic.
+
+    In critic CKA mode the relevant optimizer is
+    ``critic_cka_opt_state`` (which trains the bundle
+    ``{v_k, alpha_logits, alpha_scale}``); we return that so checkpoints
+    capture it.
+    """
+    if self._critic_cka_path and self._state.critic_cka_opt_state is not None:
+      return self._state.critic_cka_opt_state
     return self._state.q_optimizer_state
 
   @property
   def v_k(self):
+    """Per-task knowledge vector for the actor.
+
+    Sourced from ``actor_cka_state.v_k`` in CKA mode.
+    """
+    if self._actor_cka_path and self._state.actor_cka_state is not None:
+      return self._state.actor_cka_state.v_k
     return self._state.v_k
 
   @property
@@ -982,14 +1115,16 @@ class ContinualContrastiveLearner(acme.Learner):
 
   @property
   def w_k_critic(self):
-    """Extract critic knowledge vector: w_k = q_params - q_base - pool_c.
+    """Per-task critic knowledge vector w_k.
 
-    Only valid after training when critic_mode='cka'.
+    Only valid after training when ``critic_mode='cka'``. Sourced from
+    ``critic_cka_state.v_k`` post-training.
     """
     assert self._critic_mode == 'cka' and self._q_base is not None, (
         'w_k_critic only available for critic_mode=cka')
-    pool_c = getattr(self, '_critic_pool_c_at_init',
-                     self._compute_critic_pool_contribution())
-    return jax.tree_map(
-        lambda q, b, pc: q - b - pc,
-        self._state.q_params, self._q_base, pool_c)
+    if self._critic_cka_path and self._state.critic_cka_state is not None:
+      return self._state.critic_cka_state.v_k
+    # Fallback: legacy decomposition q - q_base - 0
+    return jax.tree.map(
+        lambda q, b: q - b,
+        self._state.q_params, self._q_base)
