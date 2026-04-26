@@ -863,12 +863,16 @@ class ContinualContrastiveLearner(acme.Learner):
       target_q = prev_target_q_params if prev_target_q_params is not None else q_params
 
     # In critic CKA path, the legacy ``q_params`` slot carries q_base; the
-    # target Q is a separate (mutable across tasks) snapshot that the inner
-    # JIT loop polyak-updates against the *composed* critic. We initialise
-    # it to q_base (which equals the composed value when alpha is masked
-    # and v_k = 0).
+    # inner JIT loop polyak-updates the target against the *composed*
+    # critic. We initialise the target to the composed value at task
+    # boundary so that the TD path (when enabled) sees a target that
+    # matches the live critic at step 0. With v_k = 0 this is
+    # q_base + Sigma alpha_j w_j; with an empty pool this reduces to
+    # q_base, matching the prior behaviour but generalised to non-empty
+    # pool.
     if self._critic_cka_path:
-      target_q = q_params
+      from contrastive.knowledge_pool import compose as _cka_compose
+      target_q = _cka_compose(critic_cka_state)
 
     # Entropy
     if adaptive_entropy:
