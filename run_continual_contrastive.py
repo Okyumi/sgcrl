@@ -210,7 +210,7 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
                      adapt_heads_only, actor_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
-  data_np = jax.tree.map(
+  data_np = jax.tree_util.tree_map(
       lambda x: np.array(x) if isinstance(x, jnp.ndarray) else x,
       data)
   with open(path, 'wb') as f:
@@ -231,7 +231,7 @@ def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
   with open(path, 'rb') as f:
     data = pickle.load(f)
   # Convert back to JAX arrays
-  data_jax = jax.tree.map(
+  data_jax = jax.tree_util.tree_map(
       lambda x: jnp.array(x) if isinstance(x, np.ndarray) else x,
       data)
   print(f'  [ckpt] Loaded ← {path}', flush=True)
@@ -804,7 +804,7 @@ def train_single_task(
     # After base phase: θ_base = initial_params + v_0 (fully trained policy).
     # v_0 captures the training delta.  Fold it into θ_base so that the base
     # is the *trained* policy, matching the pseudocode.
-    out_theta_base = jax.tree.map(
+    out_theta_base = jax.tree_util.tree_map(
         lambda b, v: b + v, learner.theta_base, v_k)
     # Fix C: do NOT seed the pool with a zero vector. The CKA pool is
     # genuinely empty at task 0 (the base IS the task-0 knowledge).

@@ -59,7 +59,7 @@ class CKAPool:
 
 def empty_pool_like(template, capacity: int) -> CKAPool:
   """Create an empty CKAPool whose slots match ``template``'s structure."""
-  vectors = jax.tree.map(
+  vectors = jax.tree_util.tree_map(
       lambda x: jnp.zeros((capacity,) + x.shape, dtype=x.dtype),
       template,
   )
@@ -99,7 +99,7 @@ def compute_contribution(
     broadcast_shape = (alphas.shape[0],) + (1,) * (v_stack.ndim - 1)
     return jnp.sum(alphas.reshape(broadcast_shape) * v_stack, axis=0)
 
-  return jax.tree.map(_blend, pool.vectors)
+  return jax.tree_util.tree_map(_blend, pool.vectors)
 
 
 @flax.struct.dataclass
@@ -135,7 +135,7 @@ def init_cka_state(base_params, capacity: int,
   zero-initialised so the composed policy at the first inner-loop step
   equals ``base_params``.
   """
-  v_k = jax.tree.map(jnp.zeros_like, base_params)
+  v_k = jax.tree_util.tree_map(jnp.zeros_like, base_params)
   pool = empty_pool_like(base_params, capacity)
   alpha_logits = jnp.zeros((capacity,), dtype=jnp.float32)
   alpha_scale = jnp.array(alpha_scale_init, dtype=jnp.float32)
@@ -160,7 +160,7 @@ def reinit_for_new_task(
   Pool and base_params are taken from the caller (typically the pool
   inherited from the prior task and a possibly-updated base).
   """
-  v_k = jax.tree.map(jnp.zeros_like, new_base_params)
+  v_k = jax.tree_util.tree_map(jnp.zeros_like, new_base_params)
   capacity = cka.pool.mask.shape[0]
   alpha_logits = (
       jax.random.normal(rng_key, (capacity,)) * alpha_logits_init_std
@@ -181,7 +181,7 @@ def compose(cka: CKAState):
   """theta' = theta_base + Sigma alpha_j v_j + v_k."""
   contribution = compute_contribution(
       cka.pool, cka.alpha_logits, cka.alpha_scale)
-  return jax.tree.map(lambda b, p, v: b + p + v,
+  return jax.tree_util.tree_map(lambda b, p, v: b + p + v,
                       cka.base_params, contribution, cka.v_k)
 
 
@@ -194,7 +194,7 @@ def compose_from_trainable(cka: CKAState, trainable: dict):
   """
   contribution = compute_contribution(
       cka.pool, trainable['alpha_logits'], trainable['alpha_scale'])
-  return jax.tree.map(lambda b, p, v: b + p + v,
+  return jax.tree_util.tree_map(lambda b, p, v: b + p + v,
                       cka.base_params, contribution, trainable['v_k'])
 
 
@@ -215,7 +215,7 @@ def append_vector_host(pool: CKAPool, new_vector, k_max: int) -> CKAPool:
     pool = _merge_most_similar_pair_host(pool)
     n_active = int(jnp.sum(pool.mask))
   insert_idx = n_active
-  new_vectors = jax.tree.map(
+  new_vectors = jax.tree_util.tree_map(
       lambda stack, leaf: stack.at[insert_idx].set(leaf),
       pool.vectors, new_vector,
   )
@@ -235,7 +235,7 @@ def _merge_most_similar_pair_host(pool: CKAPool) -> CKAPool:
   actives = []
   for idx in active_indices:
     leaves = jax.tree_util.tree_leaves(
-        jax.tree.map(lambda stack: stack[idx], pool.vectors))
+        jax.tree_util.tree_map(lambda stack: stack[idx], pool.vectors))
     actives.append(jnp.concatenate([l.reshape(-1) for l in leaves]))
   flat = jnp.stack(actives, axis=0)
   norms = jnp.linalg.norm(flat, axis=1) + 1e-8
@@ -248,11 +248,11 @@ def _merge_most_similar_pair_host(pool: CKAPool) -> CKAPool:
   i, j = divmod(flat_argmax, n)
   src_a = active_indices[i]
   src_b = active_indices[j]
-  avg_vectors = jax.tree.map(
+  avg_vectors = jax.tree_util.tree_map(
       lambda stack: stack.at[src_a].set((stack[src_a] + stack[src_b]) / 2.0),
       pool.vectors,
   )
-  avg_vectors = jax.tree.map(
+  avg_vectors = jax.tree_util.tree_map(
       lambda stack: stack.at[src_b].set(jnp.zeros_like(stack[src_b])),
       avg_vectors,
   )
@@ -267,10 +267,10 @@ def _compact_pool(pool: CKAPool) -> CKAPool:
   inactive_indices = [i for i in range(capacity)
                       if not bool(pool.mask[i])]
   perm = jnp.array(active_indices + inactive_indices, dtype=jnp.int32)
-  permuted_vectors = jax.tree.map(lambda stack: stack[perm], pool.vectors)
+  permuted_vectors = jax.tree_util.tree_map(lambda stack: stack[perm], pool.vectors)
   new_mask = jnp.zeros_like(pool.mask)
   new_mask = new_mask.at[:len(active_indices)].set(True)
-  permuted_vectors = jax.tree.map(
+  permuted_vectors = jax.tree_util.tree_map(
       lambda stack: jnp.where(
           new_mask.reshape((-1,) + (1,) * (stack.ndim - 1)),
           stack,
@@ -286,7 +286,7 @@ def _compact_pool(pool: CKAPool) -> CKAPool:
 # ===========================================================================
 
 def _pytree_zeros_like(tree):
-  return jax.tree.map(jnp.zeros_like, tree)
+  return jax.tree_util.tree_map(jnp.zeros_like, tree)
 
 
 def _flatten_pytree(tree):
@@ -295,11 +295,11 @@ def _flatten_pytree(tree):
 
 
 def _pytree_add(a, b):
-  return jax.tree.map(lambda x, y: x + y, a, b)
+  return jax.tree_util.tree_map(lambda x, y: x + y, a, b)
 
 
 def _pytree_scalar_mul(alpha, tree):
-  return jax.tree.map(lambda x: alpha * x, tree)
+  return jax.tree_util.tree_map(lambda x: alpha * x, tree)
 
 
 def compose_policy_params(theta_base, pool_vectors, alpha, v_k):
@@ -326,7 +326,9 @@ def compose_policy_params(theta_base, pool_vectors, alpha, v_k):
 #   1. external scripts that import it continue to work; and
 #   2. ``run_continual_contrastive``'s checkpoint shape stays loadable
 #      while we migrate.
-# Internally it now uses ``jax.tree.map`` (JAX 0.6 compatible).
+# Uses ``jax.tree_util.tree_map`` so the file works on both legacy JAX
+# (0.4.x, where ``jax.tree.map`` does not exist) and modern JAX (0.6+,
+# where ``jax.tree_util.tree_map`` is still available).
 # ===========================================================================
 
 class KnowledgePool:
@@ -340,7 +342,7 @@ class KnowledgePool:
     return len(self.vectors)
 
   def append(self, v_k):
-    v_copy = jax.tree.map(lambda x: jnp.array(x), v_k)
+    v_copy = jax.tree_util.tree_map(lambda x: jnp.array(x), v_k)
     self.vectors.append(v_copy)
 
   def merge_if_needed(self):
@@ -361,7 +363,7 @@ class KnowledgePool:
     sims = jnp.where(inf_mask, -jnp.inf, sims)
     flat_argmax = int(jnp.argmax(sims))
     best_i, best_j = divmod(flat_argmax, n)
-    v_merge = jax.tree.map(
+    v_merge = jax.tree_util.tree_map(
         lambda a, b: (a + b) / 2.0,
         self.vectors[best_i], self.vectors[best_j],
     )
@@ -370,7 +372,7 @@ class KnowledgePool:
     self.vectors.append(v_merge)
 
   def state_dict(self):
-    return [jax.tree.map(lambda x: np.array(x), v) for v in self.vectors]
+    return [jax.tree_util.tree_map(lambda x: np.array(x), v) for v in self.vectors]
 
   def load_state_dict(self, vec_list):
-    self.vectors = [jax.tree.map(jnp.array, v) for v in vec_list]
+    self.vectors = [jax.tree_util.tree_map(jnp.array, v) for v in vec_list]
