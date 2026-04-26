@@ -470,7 +470,7 @@ class ContinualContrastiveLearner(acme.Learner):
           combined_policy = cka_compose_from_trainable(
               state.actor_cka_state, actor_trainable)
         else:
-          combined_policy = jax.tree.map(
+          combined_policy = jax.tree_util.tree_map(
               lambda base, vk: base + vk,
               state.policy_base_params, state.v_k,
           )
@@ -529,7 +529,7 @@ class ContinualContrastiveLearner(acme.Learner):
           # Effective q for target update.
           new_composed_q = cka_compose_from_trainable(
               new_critic_cka_state, new_critic_trainable)
-          new_target = jax.tree.map(
+          new_target = jax.tree_util.tree_map(
               lambda x, y: x * (1 - config.tau) + y * config.tau,
               state.target_q_params, new_composed_q)
           q_params = state.q_params  # legacy; unused in CKA path
@@ -541,7 +541,7 @@ class ContinualContrastiveLearner(acme.Learner):
           c_updates, q_opt_state = q_optimizer.update(
               c_grads, state.q_optimizer_state)
           q_params = optax.apply_updates(state.q_params, c_updates)
-          new_target = jax.tree.map(
+          new_target = jax.tree_util.tree_map(
               lambda x, y: x * (1 - config.tau) + y * config.tau,
               state.target_q_params, q_params)
           new_critic_cka_state = state.critic_cka_state
@@ -721,7 +721,7 @@ class ContinualContrastiveLearner(acme.Learner):
         transitions = data
         bank_goals = None
       # Reshape transitions: [B*N, ...] -> [N, B, ...]
-      batched_transitions = jax.tree.map(
+      batched_transitions = jax.tree_util.tree_map(
           lambda a: jnp.reshape(a, (num_sgd, -1, *a.shape[1:])),
           transitions)
 
@@ -733,7 +733,7 @@ class ContinualContrastiveLearner(acme.Learner):
       state, metrics = jax.lax.scan(
           scan_body, state, batched_transitions, length=num_sgd)
       # Average metrics across SGD steps.
-      metrics = jax.tree.map(jnp.mean, metrics)
+      metrics = jax.tree_util.tree_map(jnp.mean, metrics)
       return state, metrics
 
     if config.jit:
@@ -1028,7 +1028,7 @@ class ContinualContrastiveLearner(acme.Learner):
       from contrastive.knowledge_pool import compose as cka_compose
       combined = cka_compose(self._state.actor_cka_state)
     else:
-      combined = jax.tree.map(
+      combined = jax.tree_util.tree_map(
           lambda base, vk: base + vk,
           self._state.policy_base_params,
           self._state.v_k,
@@ -1125,6 +1125,6 @@ class ContinualContrastiveLearner(acme.Learner):
     if self._critic_cka_path and self._state.critic_cka_state is not None:
       return self._state.critic_cka_state.v_k
     # Fallback: legacy decomposition q - q_base - 0
-    return jax.tree.map(
+    return jax.tree_util.tree_map(
         lambda q, b: q - b,
         self._state.q_params, self._q_base)
