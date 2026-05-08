@@ -76,6 +76,13 @@ class ContinualConfig:
   # active CKA path when on. See docs/2026-05-08_d5_mixture_norm.md.
   log_mixture_norm: bool = False
 
+  # Per-task (obs, action) sample dumped at end of each task for the
+  # linear-probe task-classifier diagnostic (plan section 3.4). Off by
+  # default. When True, writes config.batch_size transitions per task to
+  # `probe_data_task{k}_seed{s}.npz` next to the checkpoint. Consumed by
+  # eval_linear_probe.py. See docs/2026-05-08_d6_linear_probe.md.
+  log_probe_data: bool = False
+
   # -- Misc -------------------------------------------------------------------
   clear_replay_per_task: bool = True    # clear replay buffer when switching task
   seed: int = 42
