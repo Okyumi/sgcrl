@@ -5,7 +5,7 @@ observation space so that state_dim and goal_dim are the same across tasks.
 Smaller envs are padded with zeros to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED.
 Goal has the exact same semantic meaning as state: goal[i] is the desired
 value for the quantity at state[i] (same index = same quantity). See
-docs/STATE_AND_GOAL_INDEX_SEMANTICS.md for index semantics and padding.
+docs/2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md for index semantics and padding.
 """
 from __future__ import absolute_import
 from __future__ import division
@@ -231,7 +231,7 @@ class SawyerBin(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), block_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), block_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
@@ -305,7 +305,7 @@ class SawyerBox(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:11]: hand(0-2), gripper(3), lid_pos(4-6), lid_quat(7-10). Goal [11:22]: same layout.
     # Box already has state_dim=11, goal_dim=11; padding is no-op (unified dims match).
     pos_hand = self.get_endeff_pos()
@@ -374,7 +374,7 @@ class SawyerPeg(
     return self._get_obs(), r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), peg_head_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), peg_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
@@ -440,7 +440,7 @@ class SawyerPushBack(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), object_pos(4-6).
     # Goal  [7:14]: hand_above_target(7-9), gripper(10), object_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
@@ -514,7 +514,7 @@ class SawyerHammer(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:10]: hand(0-2), gripper(3), hammer_pos(4-6), nail_pos(7-9).
     # Goal [0:10]: desired_hand(0-2), desired_gripper(3), desired_hammer_pos(4-6), desired_nail_pos(7-9); then padded to GOAL_DIM_UNIFIED.
     # _get_pos_objects() returns hammer (3) + nail (3); both included so state is not truncated.
@@ -581,7 +581,7 @@ class SawyerPushWall(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), object_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), object_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
@@ -647,7 +647,7 @@ class SawyerFaucetClose(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), handle_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), handle_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
@@ -716,7 +716,7 @@ class SawyerStickPull(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:10]: hand(0-2), gripper(3), stick_pos(4-6), handle_pos(7-9).
     # Goal [0:10]: desired_hand(0-2), desired_gripper(3), desired_stick_pos(4-6), desired_handle_pos(7-9); then padded to GOAL_DIM_UNIFIED.
     pos_hand = self.get_endeff_pos()
@@ -782,7 +782,7 @@ class SawyerHandlePressSide(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), handle_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), handle_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
@@ -848,7 +848,7 @@ class SawyerPush(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), object_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), object_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
@@ -914,7 +914,7 @@ class SawyerShelfPlace(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), object_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), object_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
@@ -981,7 +981,7 @@ class SawyerWindowClose(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), handle_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), handle_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()
@@ -1048,7 +1048,7 @@ class SawyerPegUnplugSide(
     return obs, r, done, info
 
   def _get_obs(self):
-    # State and goal use the same index semantics (see STATE_AND_GOAL_INDEX_SEMANTICS.md).
+    # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
     # State [0:7]: hand(0-2), gripper(3), peg_pos(4-6). Goal [7:14]: hand_above(7-9), gripper(10), peg_target(11-13).
     # Padding: state and goal padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED for continual RL.
     pos_hand = self.get_endeff_pos()

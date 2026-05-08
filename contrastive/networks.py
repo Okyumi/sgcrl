@@ -18,7 +18,7 @@ from itertools import product
 from distributional import NormalTanhDistribution
 
 # ===========================================================================
-# Head identification (Fix E in docs/audit_apr26_cka_sgcrl.md)
+# Head identification (Fix E in docs/2026-04-26_audit_apr26_cka_sgcrl.md)
 # ===========================================================================
 #
 # The CKA path masks gradients on the body (encoder) of v_k, retaining

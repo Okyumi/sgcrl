@@ -54,10 +54,10 @@ class ContinualConfig:
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.
   # Off by default so existing runs are bit-for-bit identical. Turn on for
-  # CKA-failure diagnostic experiments (see docs/plan_proposal1_dyn_aux.md
+  # CKA-failure diagnostic experiments (see docs/2026-05-08_plan_proposal1_dyn_aux.md
   # section 3.1 and section 9). Logged at every task boundary; cost is one
   # host-side matmul per pool, negligible relative to the 8M-step task.
-  log_pool_cosine: bool = False
+  log_pool_cosine: bool = True
 
   # -- Misc -------------------------------------------------------------------
   clear_replay_per_task: bool = True    # clear replay buffer when switching task

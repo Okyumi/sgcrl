@@ -922,7 +922,7 @@ class ContinualContrastiveLearner(acme.Learner):
   # ``_compute_pool_contribution`` per learner step plus a separate non-JIT
   # ``_update_beta_and_alpha_scale`` pass that updated ``beta_k`` /
   # ``alpha_scale`` once per learner step (cadence imbalance ~64x vs the
-  # inner JIT loop, see Bugs 1–2 in docs/audit_apr26_cka_sgcrl.md). Both are
+  # inner JIT loop, see Bugs 1–2 in docs/2026-04-26_audit_apr26_cka_sgcrl.md). Both are
   # gone now: in CKA mode the trainable bundle is jointly optimised inside
   # the JIT body via ``cka_compose_from_trainable``.
 
