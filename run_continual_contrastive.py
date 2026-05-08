@@ -58,6 +58,10 @@ from contrastive.continual_config import (
 from contrastive.continual_learning import (
     ContinualContrastiveLearner, ContinualTrainingState,
 )
+from contrastive.continual_learning_decomposed import (
+    ContinualDecomposedLearner, DecomposedTrainingState,
+)
+from contrastive.decomposed_networks import make_decomposed_networks
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
     cosine_matrix_from_vectors,
@@ -329,8 +333,25 @@ def train_single_task(
     q_base: Optional[networks_lib.Params] = None,
     critic_pool: Optional[KnowledgePool] = None,
     neg_bank=None,
+    # ---- decomposed-critic carry (only used when critic_mode='decomposed') ---
+    prev_b_shared_params: Optional[networks_lib.Params] = None,
+    prev_b_shared_opt_state=None,
+    prev_h_phi_params: Optional[networks_lib.Params] = None,
+    prev_h_phi_opt_state=None,
+    prev_h_dyn_params: Optional[networks_lib.Params] = None,
+    prev_h_dyn_opt_state=None,
+    prev_psi_params: Optional[networks_lib.Params] = None,
+    prev_psi_opt_state=None,
 ):
-  """Train on a single task and return (theta_base, learner) for the next task."""
+  """Train on a single task and return (theta_base, learner) for the next task.
+
+  When ``critic_mode == 'decomposed'``, the actor / pool plumbing is
+  bypassed and the decomposed critic state is carried through the
+  ``prev_b_shared_*`` / ``prev_h_phi_*`` / ``prev_h_dyn_*`` /
+  ``prev_psi_*`` arguments instead. The returned tuple's actor/pool
+  fields are placeholders in that case (see the bottom of this
+  function).
+  """
 
   np.random.seed(seed + task_id)
 

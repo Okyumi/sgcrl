@@ -51,6 +51,16 @@ class ContinualConfig:
   eval_every_steps: int = 50_000        # evaluate within each task every N steps
   eval_all_tasks_at_end: bool = True    # evaluate on all previous tasks at end
 
+  # -- Decomposed critic (proposal 1) -----------------------------------------
+  # When critic_mode='decomposed' the critic factors into a shared body
+  # b_shared with two heads (contrastive h_phi + dynamics h_dyn) and a
+  # task-specific encoder phi_task that is reset every task. The dynamics
+  # auxiliary regresses the masked next state; mu controls its weight.
+  # See docs/2026-05-08_plan_proposal1_dyn_aux.md for the full design.
+  dyn_aux_weight: float = 1.0           # mu in the algorithm
+  phi_task_width: int = 256             # smaller than the shared body
+  phi_task_depth: int = 2               # smaller than the shared body
+
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.
   # Off by default so existing runs are bit-for-bit identical. Turn on for
