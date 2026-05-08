@@ -37,6 +37,12 @@ the eight new optional kwargs (`prev_b_shared_params`,
 `prev_h_phi_params`, etc.) and imports the new modules at the top.
 What is left:
 
+**Update 2026-05-08 (N4b shipped):** the three blocks below are now
+live in `run_continual_contrastive.py`. The runner dispatches the
+decomposed path automatically when `--critic_mode=decomposed` is
+passed. The original block-by-block patch is retained below for
+reviewers.
+
 1. **Around line 362 (network construction)**, before the existing
    `networks = contrastive.make_networks(...)` call, add:
 

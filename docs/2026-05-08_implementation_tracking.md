@@ -47,9 +47,9 @@ decomposed column is added, not substituted.
 | N2b| Verify decomposed implementation matches SGCRL conventions (score, hyperparameters, actor loss) | B | shipped (2026-05-08) | see `2026-05-08_decomposed_critic_verification.md`; fixed 4 bugs (score=neg-L2, adaptive_entropy field, InfoNCE form, actor goal-rolling+entropy gate) |
 | N3 | `critic_mode='decomposed'` config option + new flags | B | partial | new fields `dyn_aux_weight`, `phi_task_width`, `phi_task_depth` shipped; `critic_mode='decomposed'` accepted at the runner edge but not yet dispatched |
 | N4 | Decomposed-critic learner path in `continual_learning.py` | B | shipped as sibling | new file `continual_learning_decomposed.py` with `ContinualDecomposedLearner` |
-| N4b| Runner glue in `train_single_task` (network branch + learner branch + post-task extraction) | B | not started | three blocks documented in `2026-05-08_how_to_run_decomposed.md` Step 0 |
-| N5 | Smoke test: one-task run with `critic_mode='decomposed'` and `dyn_aux_weight=0` (regression check) | B | blocked on N4b | |
-| N6 | Single-cell sanity experiment with `dyn_aux_weight=1.0` | B | blocked on N4b | section 8 of plan |
+| N4b| Runner glue in `train_single_task` (network branch + learner branch + post-task extraction) | B | shipped (2026-05-08) | three blocks landed: (1) `make_decomposed_networks` build under `critic_mode=='decomposed'`; (2) learner branch constructs `ContinualDecomposedLearner` with all 8 prev_* carry kwargs; (3) early actor-pool / critic-q skip with new 17-tuple return + checkpoint extension. Early FLAG-side guards reject use_td / twin_q / use_image_obs / neg_bank / actor_mode='cka' / k_sample_k>0. Smoke at obs_dim=21 (10-task shape) passes. |
+| N5 | Smoke test: one-task run with `critic_mode='decomposed'` and `dyn_aux_weight=0` (regression check) | B | unblocked (N4b shipped) | run on cluster |
+| N6 | Single-cell sanity experiment with `dyn_aux_weight=1.0` | B | blocked on N5 | section 8 of plan |
 | N7 | Full ablation grid (5 cells × 5 seeds × 10 tasks) | B | blocked on N6 | section 8 of plan |
 | N8 | Mixed-task dynamics buffer (option B) — only if N6 fails the linear probe | B | held | section 7 of plan |
 
@@ -102,12 +102,18 @@ These feed the negative-result figure in the paper's analysis section.
    reshaped the critic loss to use sigmoid-BCE / softmax-CE branches
    under `use_cpc`, added goal rolling and `use_action_entropy` gating
    to the actor loss. Smoke test re-run; gradient isolation preserved.
-4. (next) **N4b**: apply the three-block runner patch documented in
-   `2026-05-08_how_to_run_decomposed.md` Step 0. Estimated ~1 hour
-   of editing.
-5. (after N4b) **N5** regression check: persistent cell still matches
-   the existing baseline. **N5b** decomposed cell with
-   `dyn_aux_weight=0.0` should also match baseline within seed noise.
+4. ~~N4b: apply the three-block runner patch.~~ shipped 2026-05-08. The
+   network-construction, learner-construction, and post-task-extraction
+   blocks are all in `train_single_task`; the main loop threads the
+   eight decomposed `prev_*` kwargs across tasks and persists them in
+   the per-task checkpoint under `decomposed_*` keys. Early FLAG-side
+   guards reject incompatible flags before the replay server boots.
+5. (next) **N5** regression check: persistent cell still matches the
+   existing baseline. **N5b** decomposed cell with `dyn_aux_weight=0.0`
+   should also match the baseline within seed noise (the shared body +
+   h_phi + psi reduce to the existing critic structure when the dyn
+   gradient is zeroed; phi_task adds a per-task additive head, so the
+   match will be close but not exact — expect a small offset).
 6. (after N5 passes) **N6** single-cell sanity experiment with
    `dyn_aux_weight=1.0`.
 7. (parallel with N6) **D5, D6** diagnostics.
