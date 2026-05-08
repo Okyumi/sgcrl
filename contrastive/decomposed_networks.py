@@ -5,7 +5,8 @@ a single ``q_network``:
 
     sa_repr = h_phi(b_shared([s; a])) + phi_task([s; a])
     g_repr  = psi(g)
-    score   = - || sa_repr - g_repr ||_2          # current sgcrl form
+    score   = sa_repr @ g_repr.T              # SGCRL inner-product (default)
+            or -|| sa_repr - g_repr ||_2     # if config.energy_fn == 'l2'
 
 with a separate dynamics head trained on a masked next-state target:
 
@@ -104,6 +105,8 @@ def make_decomposed_networks(
     critic_depth: int = 4,
     phi_task_width: int = 256,
     phi_task_depth: int = 2,
+    energy_fn: str = 'inner_product',
+    repr_norm: bool = False,
 ) -> DecomposedCriticNetworks:
   """Build the decomposed critic networks for the given spec.
 
@@ -134,6 +137,10 @@ def make_decomposed_networks(
         a multiple of 4 when ``use_residual=True``.
     phi_task_width: width of the task-specific encoder.
     phi_task_depth: depth of the task-specific encoder.
+    energy_fn: 'inner_product' (SGCRL default) or 'l2'. Must match
+        ``config.energy_fn``.
+    repr_norm: if True, L2-normalise sa and g embeddings before scoring,
+        matching ``contrastive.networks.make_networks(repr_norm=...)``.
 
   Returns:
     A ``DecomposedCriticNetworks`` instance with all init / apply
@@ -240,14 +247,23 @@ def make_decomposed_networks(
 
   def apply_score(params_b_shared, params_h_phi, params_phi_task, params_psi,
                   obs, action):
-    """Full critic score matrix ``-|| phi(s,a) - psi(g) ||_2`` (B, B)."""
+    """Full (B, B) critic score matrix.
+
+    Mirrors ``_combine_repr`` in ``contrastive.networks``: inner product
+    when ``energy_fn='inner_product'`` (the SGCRL default), negative L2
+    when ``energy_fn='l2'`` (1000-layer paper).
+    """
     sa = apply_sa_repr(params_b_shared, params_h_phi, params_phi_task,
                        obs, action)
     g = psi.apply(params_psi, obs)
-    # Pairwise negative L2; matches the energy_fn='l2' branch in
-    # contrastive.networks.
-    return -jnp.sqrt(
-        jnp.sum((sa[:, None, :] - g[None, :, :]) ** 2, axis=-1) + 1e-6)
+    if repr_norm:
+      sa = sa / jnp.linalg.norm(sa, axis=1, keepdims=True)
+      g = g / jnp.linalg.norm(g, axis=1, keepdims=True)
+    if energy_fn == 'l2':
+      return -jnp.sqrt(
+          jnp.sum((sa[:, None, :] - g[None, :, :]) ** 2, axis=-1) + 1e-6)
+    # inner_product (SGCRL default)
+    return jnp.einsum('ik,jk->ij', sa, g)
 
   return DecomposedCriticNetworks(
       init_b_shared=init_b_shared, apply_b_shared=b_shared.apply,
