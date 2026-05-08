@@ -5,7 +5,7 @@ Overleaf-synced GitHub repo
 [Okyumi/NeurIPS-2026---RL](https://github.com/Okyumi/NeurIPS-2026---RL);
 this file tracks what has been drafted, what has been pushed, and what
 remains. The planning documents in this directory
-(`paper_plan.md`, `paper_planning_tracking.md`, `citations.md`) are the
+(`2026-04-21_paper_plan.md`, `2026-04-21_paper_planning_tracking.md`, `2026-04-21_citations.md`) are the
 upstream source of truth for narrative, citations, and decisions.
 
 ## Repository layout (paper)

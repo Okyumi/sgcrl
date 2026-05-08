@@ -72,7 +72,7 @@ Unchanged: inner product `φ(s,a)ᵀψ(g)` via `jax.numpy.einsum('ik,jk->ij', sa
 
 ## Motivation
 
-Single-task scaling ablation on `shelf_place` (experiment B1 in `scaling_study.md`) showed that `ResidualMLP` with depth=4 and inner-product energy outperformed the plain MLP baseline. The key architectural ingredients are LayerNorm, Swish activation, and skip connections — even at the shallowest depth (1 block), these provide a meaningful improvement.
+Single-task scaling ablation on `shelf_place` (experiment B1 in `2026-04-06_scaling_study.md`) showed that `ResidualMLP` with depth=4 and inner-product energy outperformed the plain MLP baseline. The key architectural ingredients are LayerNorm, Swish activation, and skip connections — even at the shallowest depth (1 block), these provide a meaningful improvement.
 
 ## How to Revert
 

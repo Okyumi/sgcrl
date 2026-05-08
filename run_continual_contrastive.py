@@ -856,7 +856,7 @@ def train_single_task(
 
   # ---- CKA diagnostics: actor-pool cosine similarity --------------------
   # Cheap host-side metric (one matmul per pool). Off by default; enable
-  # via continual_cfg.log_pool_cosine. See docs/plan_proposal1_dyn_aux.md
+  # via continual_cfg.log_pool_cosine. See docs/2026-05-08_plan_proposal1_dyn_aux.md
   # section 3.1 / section 9 for the diagnostic experiment that consumes
   # this metric.
   if getattr(continual_cfg, 'log_pool_cosine', False):
