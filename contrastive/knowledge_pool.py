@@ -34,7 +34,7 @@ This module exports:
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -264,18 +264,122 @@ def append_vector_host(pool: CKAPool, new_vector, k_max: int) -> CKAPool:
   return pool
 
 
-def _merge_most_similar_pair_host(pool: CKAPool) -> CKAPool:
-  """Merge the two most cosine-similar active slots into one (host)."""
+def _flatten_active_slots(pool: CKAPool) -> Tuple[jnp.ndarray, List[int]]:
+  """Stack the active slots of a pool into a 2D array.
+
+  Returns ``(flat, active_indices)`` where ``flat`` has shape
+  ``(n_active, total_dim)`` with each row being one slot flattened
+  across all leaves of the ``vectors`` pytree, and ``active_indices``
+  is the list of slot indices in the original capacity ordering.
+  Used by the merge rule and by ``pool_cosine_matrix``.
+  """
   capacity = pool.mask.shape[0]
   active_indices = [i for i in range(capacity) if bool(pool.mask[i])]
-  if len(active_indices) < 2:
-    return pool
+  if len(active_indices) == 0:
+    return jnp.zeros((0, 0)), active_indices
   actives = []
   for idx in active_indices:
     leaves = jax.tree_util.tree_leaves(
         jax.tree_util.tree_map(lambda stack: stack[idx], pool.vectors))
     actives.append(jnp.concatenate([l.reshape(-1) for l in leaves]))
   flat = jnp.stack(actives, axis=0)
+  return flat, active_indices
+
+
+def pool_cosine_matrix(pool: CKAPool) -> jnp.ndarray:
+  """Pairwise cosine-similarity matrix of the active pool slots.
+
+  Returns a symmetric matrix of shape ``(n_active, n_active)`` where
+  ``n_active = int(jnp.sum(pool.mask))``. Each slot is flattened across
+  all leaves of the ``vectors`` pytree; cosine similarity is computed
+  on the flattened vectors. The diagonal is one. Inactive slots are
+  excluded entirely (the matrix shape depends on ``n_active``).
+
+  Returns an empty ``(0, 0)`` array when the pool is empty. Safe under
+  zero-norm vectors via an additive ``1e-8`` regulariser.
+
+  Use ``pool_cosine_summary`` for scalar-friendly logging.
+  """
+  flat, active_indices = _flatten_active_slots(pool)
+  if len(active_indices) == 0:
+    return flat  # shape (0, 0)
+  norms = jnp.linalg.norm(flat, axis=1) + 1e-8
+  return (flat @ flat.T) / (norms[:, None] * norms[None, :])
+
+
+def cosine_matrix_from_vectors(vectors: List) -> jnp.ndarray:
+  """Pairwise cosine matrix for a Python list of pytree vectors.
+
+  Companion to ``pool_cosine_matrix`` for callers that hold a legacy
+  ``KnowledgePool`` (a list of pytrees). Each list entry is flattened
+  the same way as a single active slot of a ``CKAPool``. Returns an
+  ``(n, n)`` symmetric matrix or an empty ``(0, 0)`` array.
+  """
+  if not vectors:
+    return jnp.zeros((0, 0))
+  flats = []
+  for v in vectors:
+    leaves = jax.tree_util.tree_leaves(v)
+    flats.append(jnp.concatenate([l.reshape(-1) for l in leaves]))
+  flat = jnp.stack(flats, axis=0)
+  norms = jnp.linalg.norm(flat, axis=1) + 1e-8
+  return (flat @ flat.T) / (norms[:, None] * norms[None, :])
+
+
+def cosine_summary_from_vectors(vectors: List) -> Dict[str, float]:
+  """Scalar summary for a Python list of pytree vectors.
+
+  Convenience wrapper. Mirrors ``pool_cosine_summary`` in output keys.
+  """
+  n = len(vectors)
+  out = {'n_active': float(n)}
+  if n < 2:
+    out['mean_offdiag'] = float('nan')
+    out['max_offdiag'] = float('nan')
+    out['min_offdiag'] = float('nan')
+    return out
+  sims = cosine_matrix_from_vectors(vectors)
+  triu_mask = jnp.triu(jnp.ones((n, n), dtype=jnp.bool_), k=1)
+  off = sims[triu_mask]
+  out['mean_offdiag'] = float(jnp.mean(off))
+  out['max_offdiag'] = float(jnp.max(off))
+  out['min_offdiag'] = float(jnp.min(off))
+  return out
+
+
+def pool_cosine_summary(pool: CKAPool) -> Dict[str, float]:
+  """Scalar summary of pool pairwise cosine similarities.
+
+  Returns a dict with keys ``mean_offdiag``, ``max_offdiag``,
+  ``min_offdiag``, ``n_active``. All values are Python floats so they
+  can be logged directly to W&B. The off-diagonal statistics are over
+  the unique upper-triangle entries (excluding the diagonal). With
+  fewer than two active slots the off-diagonal statistics return
+  ``nan`` (no pairs to compare).
+  """
+  flat, active_indices = _flatten_active_slots(pool)
+  n = len(active_indices)
+  out = {'n_active': float(n)}
+  if n < 2:
+    out['mean_offdiag'] = float('nan')
+    out['max_offdiag'] = float('nan')
+    out['min_offdiag'] = float('nan')
+    return out
+  norms = jnp.linalg.norm(flat, axis=1) + 1e-8
+  sims = (flat @ flat.T) / (norms[:, None] * norms[None, :])
+  triu_mask = jnp.triu(jnp.ones((n, n), dtype=jnp.bool_), k=1)
+  off = sims[triu_mask]
+  out['mean_offdiag'] = float(jnp.mean(off))
+  out['max_offdiag'] = float(jnp.max(off))
+  out['min_offdiag'] = float(jnp.min(off))
+  return out
+
+
+def _merge_most_similar_pair_host(pool: CKAPool) -> CKAPool:
+  """Merge the two most cosine-similar active slots into one (host)."""
+  flat, active_indices = _flatten_active_slots(pool)
+  if len(active_indices) < 2:
+    return pool
   norms = jnp.linalg.norm(flat, axis=1) + 1e-8
   sims = (flat @ flat.T) / (norms[:, None] * norms[None, :])
   n = flat.shape[0]
