@@ -57,6 +57,14 @@ decomposed column is added, not substituted.
 
 ## What can run now
 
+The runbook **`2026-05-08_runbook_what_to_launch_next.md`** is the
+single source of truth for cluster experiments and gates between
+cells. It maps every remaining row in this table (C0=D7, C1=N5,
+C2=N6, C3=N7, plus the C4 paper-figure assembly) to a submit command,
+a pass criterion, and a paper-figure target.
+
+---
+
 Item D7 is unblocked. To launch:
 
 ```
