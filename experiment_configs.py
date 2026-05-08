@@ -1,100 +1,230 @@
 #!/usr/bin/env python3
 """Enumerate all experiment configurations for the continual CRL grid.
 
-The 9-configuration ablation grid:
-  actor_mode  ∈ {reset, persistent, cka}
-  critic_mode ∈ {reset, persistent, cka}
+Two sources are concatenated to produce the final list of runs:
 
-Each configuration is run across multiple seeds.
+1. **Cartesian grid** (`ACTOR_MODES` × `CRITIC_MODES` × `SEEDS`) — the
+   classic 9-cell ablation table. All non-grid fields fall back to
+   `EXTRA_OVERRIDES` and the `run_continual_contrastive.py` flag
+   defaults.
+2. **Explicit CELLS list** — one dict per run, used for diagnostic and
+   decomposed-critic cells from the runbook
+   (`docs/2026-05-08_runbook_what_to_launch_next.md`). Each dict can
+   set any subset of:
+       actor_mode, critic_mode, seed,
+       dyn_aux_weight, phi_task_width, phi_task_depth,
+       log_pool_cosine, log_mixture_norm, log_probe_data,
+       (and any other future field that submit scripts know how to
+       forward).
+
+Cell dicts win over EXTRA_OVERRIDES; EXTRA_OVERRIDES wins over
+script-level shell defaults.
 
 Usage:
-  # Print a specific configuration (for the shell launcher):
-  python experiment_configs.py --setting 0
-
-  # Print total number of configurations:
+  # Total number of configs (used by submit scripts to size the SLURM array):
   python experiment_configs.py --total
 
-  # Print all configurations:
+  # Print a specific configuration as KEY=VALUE pairs (sourced by the
+  # submit scripts via `eval`):
+  python experiment_configs.py --setting 0
+
+  # Print all configs as a human-readable table:
   python experiment_configs.py --list
 """
 import argparse
 import itertools
-import json
 import sys
 
 
 # =====================================================================
-# Grid definition – edit these to change the experiment sweep
+# Cartesian grid — edit ACTOR_MODES / CRITIC_MODES / SEEDS to change
+# the 9-cell ablation sweep.
 # =====================================================================
 
-ACTOR_MODES  = ['cka']
-CRITIC_MODES = ['cka','reset', 'persistent']
-SEEDS        = [100, 101]
+ACTOR_MODES = ['cka']
+CRITIC_MODES = ['cka', 'reset', 'persistent']
+SEEDS = [100, 101]
 
-# All other parameters use the defaults from draft_3.sh / draft_4.sh.
-# Override here only if a parameter DIFFERS from the shared defaults.
-# Each entry is a dict of {flag_name: value} merged on top of the
-# shell-script defaults.
-EXTRA_OVERRIDES = {}  # e.g., {'steps_per_task': 4000000} to shorten runs
+# Overrides applied to every Cartesian-grid cell. The CELLS list below
+# can additionally override these on a per-cell basis.
+# Example: {'steps_per_task': 4_000_000, 'k_max': 5}
+EXTRA_OVERRIDES: dict = {}
 
 
 # =====================================================================
-# Grid enumeration
+# Explicit cells — one dict per run.
+#
+# Each dict's keys correspond to env-var names that the submit scripts
+# (draft_3.sh / draft_4.sh / DRAFT.sh / submit_continual_torch.sh)
+# already understand. Use SNAKE_lowercase here; submit scripts
+# uppercase them.
+#
+# Empty by default. Uncomment / append rows for the runbook cells:
+#   - C0 (D7 CKA-failure diagnostic): actor_mode=cka, critic_mode=cka,
+#     log_mixture_norm=True, log_pool_cosine=True, three seeds.
+#   - C1 (N5 regression check): actor_mode=reset, critic_mode=decomposed,
+#     dyn_aux_weight=0.0, log_probe_data=True, three seeds; plus the
+#     persistent baseline at the same seeds.
+#   - C2 (N6 sanity): actor_mode=reset, critic_mode=decomposed,
+#     dyn_aux_weight=1.0, log_probe_data=True, three seeds.
+#   - C3 (N7 ablation grid): five cells x five seeds (G1..G5; G5
+#     deferred until the 'decomposed body + reset carry' plumbing
+#     lands).
+# =====================================================================
+
+CELLS: list = [
+    # ---- C0: CKA-failure diagnostic (D7) ----------------------------
+    # {'actor_mode': 'cka', 'critic_mode': 'cka', 'seed': 5,
+    #  'log_mixture_norm': True, 'log_pool_cosine': True},
+    # {'actor_mode': 'cka', 'critic_mode': 'cka', 'seed': 6,
+    #  'log_mixture_norm': True, 'log_pool_cosine': True},
+    # {'actor_mode': 'cka', 'critic_mode': 'cka', 'seed': 7,
+    #  'log_mixture_norm': True, 'log_pool_cosine': True},
+
+    # ---- C1: decomposed regression check, dyn_aux_weight=0 (N5) -----
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+    #  'dyn_aux_weight': 0.0, 'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 6,
+    #  'dyn_aux_weight': 0.0, 'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
+    #  'dyn_aux_weight': 0.0, 'log_probe_data': True},
+    # ---- C1 baseline: persistent at the same seeds ------------------
+    # {'actor_mode': 'reset', 'critic_mode': 'persistent', 'seed': 5,
+    #  'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'persistent', 'seed': 6,
+    #  'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'persistent', 'seed': 7,
+    #  'log_probe_data': True},
+
+    # ---- C2: decomposed single-cell sanity, dyn_aux_weight=1 (N6) --
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+    #  'dyn_aux_weight': 1.0, 'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 6,
+    #  'dyn_aux_weight': 1.0, 'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
+    #  'dyn_aux_weight': 1.0, 'log_probe_data': True},
+
+    # ---- C3: full ablation grid (N7) --------------------------------
+    # G1 baseline (actor_mode=reset, critic_mode=persistent), 5 seeds
+    # G2 dyn-aux off  (dyn_aux_weight=0.0, decomposed), 5 seeds
+    # G3 dyn-aux weak (dyn_aux_weight=0.1, decomposed), 5 seeds
+    # G4 dyn-aux full (dyn_aux_weight=1.0, decomposed), 5 seeds
+    # G5 (decomposed body + reset carry) — deferred (N7b plumbing)
+]
+
+
+# =====================================================================
+# Required keys
+# =====================================================================
+
+# Every emitted config must carry at least these three keys. Submit
+# scripts assume their presence.
+_REQUIRED_KEYS = ('actor_mode', 'critic_mode', 'seed')
+
+
+# =====================================================================
+# Build
 # =====================================================================
 
 def build_configs():
-    """Return a list of dicts, one per experiment run."""
-    configs = []
-    for actor_mode, critic_mode in itertools.product(ACTOR_MODES, CRITIC_MODES):
-        for seed in SEEDS:
-            cfg = {
-                'actor_mode':  actor_mode,
-                'critic_mode': critic_mode,
-                'seed':        seed,
-            }
-            cfg.update(EXTRA_OVERRIDES)
-            configs.append(cfg)
-    return configs
+  """Return a list of dicts, one per experiment run.
+
+  Order: Cartesian grid first, then explicit CELLS in their listed order.
+  """
+  configs: list = []
+
+  # 1. Cartesian product (ACTOR_MODES × CRITIC_MODES × SEEDS).
+  for actor_mode, critic_mode in itertools.product(ACTOR_MODES, CRITIC_MODES):
+    for seed in SEEDS:
+      cfg = {
+          'actor_mode': actor_mode,
+          'critic_mode': critic_mode,
+          'seed': seed,
+      }
+      cfg.update(EXTRA_OVERRIDES)
+      configs.append(cfg)
+
+  # 2. Explicit CELLS — each must declare the required keys.
+  for i, cell in enumerate(CELLS):
+    missing = [k for k in _REQUIRED_KEYS if k not in cell]
+    if missing:
+      raise ValueError(
+          f'CELLS[{i}] is missing required keys {missing}: {cell!r}')
+    cfg = dict(EXTRA_OVERRIDES)  # base
+    cfg.update(cell)              # cell overrides EXTRA_OVERRIDES
+    configs.append(cfg)
+
+  return configs
+
+
+def _format_cell(c, num_cols=8):
+  """Pretty-print one cell as a column-aligned table row."""
+  cols = [
+      f'{c.get("actor_mode", "-"):<10}',
+      f'{c.get("critic_mode", "-"):<11}',
+      f'{c.get("seed", "-"):>4}',
+      f'{c.get("dyn_aux_weight", "-")!s:>6}',
+      f'{c.get("log_mixture_norm", "-")!s:>6}',
+      f'{c.get("log_probe_data", "-")!s:>6}',
+      f'{c.get("phi_task_width", "-")!s:>5}',
+      f'{c.get("phi_task_depth", "-")!s:>5}',
+  ]
+  return '  '.join(cols[:num_cols])
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Enumerate experiment configurations.')
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--setting', type=int,
-                       help='Print the config for this index (0-based).')
-    group.add_argument('--total', action='store_true',
-                       help='Print total number of configs.')
-    group.add_argument('--list', action='store_true',
-                       help='Print all configs as a table.')
-    args = parser.parse_args()
+  parser = argparse.ArgumentParser(
+      description='Enumerate experiment configurations.')
+  group = parser.add_mutually_exclusive_group(required=True)
+  group.add_argument('--setting', type=int,
+                     help='Print the config for this index (0-based).')
+  group.add_argument('--total', action='store_true',
+                     help='Print total number of configs.')
+  group.add_argument('--list', action='store_true',
+                     help='Print all configs as a table.')
+  args = parser.parse_args()
 
-    configs = build_configs()
+  configs = build_configs()
 
-    if args.total:
-        print(len(configs))
-        return
+  if args.total:
+    print(len(configs))
+    return
 
-    if args.list:
-        print(f'Total: {len(configs)} configurations')
-        print(f'{"idx":>4}  {"actor_mode":<12} {"critic_mode":<12} {"seed":>4}')
-        print('-' * 40)
-        for i, c in enumerate(configs):
-            print(f'{i:4d}  {c["actor_mode"]:<12} {c["critic_mode"]:<12} {c["seed"]:4d}')
-        return
+  if args.list:
+    print(f'Total: {len(configs)} configurations')
+    print(f'  Cartesian: {len(ACTOR_MODES) * len(CRITIC_MODES) * len(SEEDS)} '
+          f'(actor_modes={ACTOR_MODES}, critic_modes={CRITIC_MODES}, '
+          f'seeds={SEEDS})')
+    print(f'  Explicit cells: {len(CELLS)}')
+    if EXTRA_OVERRIDES:
+      print(f'  EXTRA_OVERRIDES applied to all: {EXTRA_OVERRIDES}')
+    print('')
+    header = '  '.join([
+        f'{"idx":>4}', f'{"actor":<10}', f'{"critic":<11}', f'{"seed":>4}',
+        f'{"dynw":>6}', f'{"mixN":>6}', f'{"prob":>6}',
+        f'{"ptw":>5}', f'{"ptd":>5}',
+    ])
+    print(header)
+    print('-' * len(header))
+    for i, c in enumerate(configs):
+      print(f'{i:>4}  {_format_cell(c)}')
+    return
 
-    # --setting N: output key=value pairs (shell-sourceable)
-    idx = args.setting
-    if idx < 0 or idx >= len(configs):
-        print(f'ERROR: setting {idx} out of range [0, {len(configs) - 1}]',
-              file=sys.stderr)
-        sys.exit(1)
+  # --setting N: emit KEY=VALUE pairs (shell-sourceable).
+  idx = args.setting
+  if idx < 0 or idx >= len(configs):
+    print(f'ERROR: setting {idx} out of range [0, {len(configs) - 1}]',
+          file=sys.stderr)
+    sys.exit(1)
 
-    cfg = configs[idx]
-    for key, value in cfg.items():
-        # Uppercase keys for shell variables
-        print(f'{key.upper()}={value}')
+  cfg = configs[idx]
+  for key, value in cfg.items():
+    # Booleans: emit as 'true' / 'false' so the shell scripts can use
+    # them in the existing `if [ "$VAR" = "true" ]; then ...` pattern.
+    if isinstance(value, bool):
+      value = 'true' if value else 'false'
+    print(f'{key.upper()}={value}')
 
 
 if __name__ == '__main__':
-    main()
+  main()
