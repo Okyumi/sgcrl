@@ -42,13 +42,14 @@ decomposed column is added, not substituted.
 | D5 | `mixture_norm` metric in CKA inner loop | A | not started | section 3.2 of plan |
 | D6 | Linear-probe task classifier (`eval_linear_probe.py`) | A & B | not started | section 3.4 / section 10 of plan |
 | D7 | CKA diagnostic run on `actor_mode='cka', critic_mode='cka'` with `log_pool_cosine=True` | A | ready to launch | depends only on D1-D4 (shipped) |
-| N1 | `state_mask.py` with `STABLE_INDICES = (0, 1, 2, 3)` | B | not started | section 2 of plan |
-| N2 | `decomposed_networks.py` (`b_shared`, `h_phi`, `h_dyn`, `phi_task`, `psi`) | B | not started | section 4 of plan |
-| N3 | `critic_mode='decomposed'` config option + new flags | B | not started | section 6 of plan |
-| N4 | Decomposed-critic learner path in `continual_learning.py` | B | not started | section 5 of plan |
-| N5 | Smoke test: one-task run with `critic_mode='decomposed'` and `dyn_aux_weight=0` (regression check) | B | not started | section 11 step 7 of plan |
-| N6 | Single-cell sanity experiment with `dyn_aux_weight=1.0` | B | not started | section 8 of plan |
-| N7 | Full ablation grid (5 cells × 5 seeds × 10 tasks) | B | not started | section 8 of plan |
+| N1 | `state_mask.py` with `STABLE_INDICES = (0, 1, 2, 3)` | B | shipped (2026-05-08) | section 2 of plan |
+| N2 | `decomposed_networks.py` (`b_shared`, `h_phi`, `h_dyn`, `phi_task`, `psi`) | B | shipped (2026-05-08) | smoke-tested, gradient isolation verified |
+| N3 | `critic_mode='decomposed'` config option + new flags | B | partial | new fields `dyn_aux_weight`, `phi_task_width`, `phi_task_depth` shipped; `critic_mode='decomposed'` accepted at the runner edge but not yet dispatched |
+| N4 | Decomposed-critic learner path in `continual_learning.py` | B | shipped as sibling | new file `continual_learning_decomposed.py` with `ContinualDecomposedLearner` |
+| N4b| Runner glue in `train_single_task` (network branch + learner branch + post-task extraction) | B | not started | three blocks documented in `2026-05-08_how_to_run_decomposed.md` Step 0 |
+| N5 | Smoke test: one-task run with `critic_mode='decomposed'` and `dyn_aux_weight=0` (regression check) | B | blocked on N4b | |
+| N6 | Single-cell sanity experiment with `dyn_aux_weight=1.0` | B | blocked on N4b | section 8 of plan |
+| N7 | Full ablation grid (5 cells × 5 seeds × 10 tasks) | B | blocked on N6 | section 8 of plan |
 | N8 | Mixed-task dynamics buffer (option B) — only if N6 fails the linear probe | B | held | section 7 of plan |
 
 ---
@@ -89,13 +90,22 @@ These feed the negative-result figure in the paper's analysis section.
 
 ## Order of next pushes
 
-1. (this push) D1, D2, D3, D4, plan + tracking docs.
-2. (next) Implement N1, N2, N3, N4. Single PR-style commit per
-   component; smoke test after each.
-3. (after N4) Run N5; verify regression to baseline.
-4. (after N5 passes) Run N6 single-cell sanity experiment.
-5. (parallel with N6) Implement D5, D6.
-6. (after N6 passes) Launch N7 ablation grid + D7 diagnostic run.
+1. ~~D1, D2, D3, D4, plan + tracking docs.~~ shipped 2026-05-08.
+2. ~~N1, N2, N3 (partial), N4.~~ shipped 2026-05-08. Foundations (state
+   mask, decomposed networks, sibling learner, config flags) are done
+   and locally smoke-tested. Runner glue (N4b) is the remaining
+   blocker.
+3. (next) **N4b**: apply the three-block runner patch documented in
+   `2026-05-08_how_to_run_decomposed.md` Step 0. Estimated ~1 hour
+   of editing.
+4. (after N4b) **N5** regression check: persistent cell still matches
+   the existing baseline. **N5b** decomposed cell with
+   `dyn_aux_weight=0.0` should also match baseline within seed noise.
+5. (after N5 passes) **N6** single-cell sanity experiment with
+   `dyn_aux_weight=1.0`.
+6. (parallel with N6) **D5, D6** diagnostics.
+7. (after N6 passes) **N7** ablation grid + **D7** CKA diagnostic
+   run.
 
 ---
 
