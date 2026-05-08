@@ -69,6 +69,13 @@ class ContinualConfig:
   # host-side matmul per pool, negligible relative to the 8M-step task.
   log_pool_cosine: bool = True
 
+  # Per-step ratio || sum_j alpha_j v_j || / || v_k || logged inside the
+  # CKA inner loop. See plan section 3.2: tests whether the actor / critic
+  # update is dominated by v_k (small ratio) versus the mixture term
+  # (large ratio). Off by default; one extra norm per inner step for each
+  # active CKA path when on. See docs/2026-05-08_d5_mixture_norm.md.
+  log_mixture_norm: bool = False
+
   # -- Misc -------------------------------------------------------------------
   clear_replay_per_task: bool = True    # clear replay buffer when switching task
   seed: int = 42
