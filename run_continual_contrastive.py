@@ -195,9 +195,11 @@ flags.DEFINE_integer('phi_task_width', 256,
                      'Width of the per-task additive encoder phi_task '
                      '(critic_mode="decomposed" only). Smaller than the '
                      'shared body. Plan section 6.')
-flags.DEFINE_integer('phi_task_depth', 2,
+flags.DEFINE_integer('phi_task_depth', 4,
                      'Depth of the per-task additive encoder phi_task '
-                     '(critic_mode="decomposed" only). Plan section 6.')
+                     '(critic_mode="decomposed" only). Must be a positive '
+                     'multiple of 4 when use_residual=True (one residual '
+                     'block at depth=4). Plan section 6.')
 flags.DEFINE_bool('log_pool_cosine', True,
                   'Log per-task pool cosine-similarity matrices on the '
                   'actor / critic CKA pools. Cheap host-side metric. '
@@ -468,7 +470,7 @@ def train_single_task(
         network_width=config.network_width,
         critic_depth=config.critic_depth,
         phi_task_width=getattr(continual_cfg, 'phi_task_width', 256),
-        phi_task_depth=getattr(continual_cfg, 'phi_task_depth', 2),
+        phi_task_depth=getattr(continual_cfg, 'phi_task_depth', 4),
         energy_fn=config.energy_fn,
         repr_norm=config.repr_norm,
     )

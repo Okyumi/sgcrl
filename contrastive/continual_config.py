@@ -59,7 +59,7 @@ class ContinualConfig:
   # See docs/2026-05-08_plan_proposal1_dyn_aux.md for the full design.
   dyn_aux_weight: float = 1.0           # mu in the algorithm
   phi_task_width: int = 256             # smaller than the shared body
-  phi_task_depth: int = 2               # smaller than the shared body
+  phi_task_depth: int = 4               # one residual block (block_size=4)
 
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.

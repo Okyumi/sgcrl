@@ -104,7 +104,7 @@ def make_decomposed_networks(
     network_width: int = 1024,
     critic_depth: int = 4,
     phi_task_width: int = 256,
-    phi_task_depth: int = 2,
+    phi_task_depth: int = 4,
     energy_fn: str = 'inner_product',
     repr_norm: bool = False,
 ) -> DecomposedCriticNetworks:
@@ -180,7 +180,12 @@ def make_decomposed_networks(
     head = hk.Linear(d_M, name='h_dyn')
     return head(hidden)  # (B, d_M)
 
-  # ---- phi_task: full small encoder, [s; a] -> repr_dim --------------------
+  # ---- phi_task: small per-task encoder, [s; a] -> repr_dim ----------------
+  # Same builder pattern as b_shared / psi: ResidualMLP when use_residual
+  # is True (with phi_task_depth a multiple of 4), plain MLP otherwise.
+  # Plan section 6 default is phi_task_depth=4 (one residual block) at
+  # phi_task_width=256, which is ~16x smaller than the b_shared body
+  # (1024-width x 4-block) per the project's run config.
   def _phi_task_fn(obs, action):
     state = obs[:, :obs_dim]
     if use_residual:
