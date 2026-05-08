@@ -40,7 +40,7 @@ decomposed column is added, not substituted.
 | D3 | `continual_config.log_pool_cosine` flag (default `False`) | A | shipped | `contrastive/continual_config.py` |
 | D4 | Post-task cosine logging in `run_continual_contrastive.py` for actor and critic pools (W&B + per-task `.npy`) | A | shipped | gated on `D3` |
 | D5 | `mixture_norm` metric in CKA inner loop | A | shipped (2026-05-08) | helper `mixture_to_vk_ratio` in `knowledge_pool.py`; emitted as `cka/actor_mixture_norm` / `cka/critic_mixture_norm` per inner step when `continual_config.log_mixture_norm=True` (default False). See `2026-05-08_d5_mixture_norm.md`. |
-| D6 | Linear-probe task classifier (`eval_linear_probe.py`) | A & B | not started | section 3.4 / section 10 of plan |
+| D6 | Linear-probe task classifier (`eval_linear_probe.py`) | A & B | shipped (2026-05-08) | runner-side `(obs, action)` dump gated on `continual_config.log_probe_data` (default False); top-level `eval_linear_probe.py` rebuilds the trained `b_shared` (decomposed) or `q_network` sa-encoder hidden (fallback); closed-form ridge least-squares probe; reports overall + per-task acc + confusion matrix. Three local smokes pass. See `2026-05-08_d6_linear_probe.md`. |
 | D7 | CKA diagnostic run on `actor_mode='cka', critic_mode='cka'` with `log_pool_cosine=True` | A | ready to launch | depends only on D1-D4 (shipped) |
 | N1 | `state_mask.py` with `STABLE_INDICES = (0, 1, 2, 3)` | B | shipped (2026-05-08) | section 2 of plan |
 | N2 | `decomposed_networks.py` (`b_shared`, `h_phi`, `h_dyn`, `phi_task`, `psi`) | B | shipped (2026-05-08) | smoke-tested, gradient isolation verified |
@@ -116,9 +116,7 @@ These feed the negative-result figure in the paper's analysis section.
    match will be close but not exact — expect a small offset).
 6. (after N5 passes) **N6** single-cell sanity experiment with
    `dyn_aux_weight=1.0`.
-7. (parallel with N6) ~~D5~~ shipped 2026-05-08. **D6** linear-probe
-   diagnostic remains (workstream A; code-only; can be done locally
-   ahead of N5 if needed).
+7. (parallel with N6) ~~D5, D6~~ shipped 2026-05-08.
 8. (after N6 passes) **N7** ablation grid + **D7** CKA diagnostic
    run.
 
