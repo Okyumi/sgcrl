@@ -28,8 +28,8 @@ import sys
 # =====================================================================
 
 ACTOR_MODES  = ['cka']
-CRITIC_MODES = ['reset', 'persistent', 'cka']
-SEEDS        = [99, 98, 97]
+CRITIC_MODES = ['cka']
+SEEDS        = [42, 43, 44]
 
 # All other parameters use the defaults from draft_3.sh / draft_4.sh.
 # Override here only if a parameter DIFFERS from the shared defaults.
