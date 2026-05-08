@@ -140,6 +140,41 @@ def compute_contribution(
   return jax.tree_util.tree_map(_blend, pool.vectors)
 
 
+def mixture_to_vk_ratio(
+    contribution,
+    v_k,
+    eps: float = 1e-12,
+) -> jnp.ndarray:
+  """Scalar metric ``|| sum_j alpha_j v_j || / || v_k ||`` (L2 over flat).
+
+  Hypothesis (plan section 3.2): in late tasks the actor / critic update
+  is mostly absorbed by ``v_k`` rather than the mixture term, because
+  the mixture term is approximately constant and uninformative. A
+  consistently small ratio (< 0.1) corroborates that hypothesis.
+
+  Args:
+    contribution: pytree shaped like one knowledge vector, holding
+      ``sum_j alpha_j v_j`` (the output of :func:`compute_contribution`).
+    v_k: pytree shaped like one knowledge vector, holding the running
+      per-task delta.
+    eps: numerical guard for the divisor at task 0 / very early steps
+      when ``v_k`` is still close to zero.
+
+  Returns:
+    A 0-dim ``jnp.ndarray`` holding the ratio.
+  """
+  def _flat_norm(pytree):
+    leaves = jax.tree_util.tree_leaves(pytree)
+    if not leaves:
+      return jnp.array(0.0, dtype=jnp.float32)
+    return jnp.linalg.norm(
+        jnp.concatenate([x.reshape(-1) for x in leaves]))
+
+  num = _flat_norm(contribution)
+  den = _flat_norm(v_k)
+  return num / (den + eps)
+
+
 @_pytree_dataclass
 class CKAState:
   """All state needed to drive one CKA-decomposed component.

@@ -32,6 +32,7 @@ from contrastive.knowledge_pool import (
     compute_contribution as cka_compute_contribution,
     compose_from_trainable as cka_compose_from_trainable,
     append_vector_host as cka_append_vector_host,
+    mixture_to_vk_ratio as cka_mixture_to_vk_ratio,
 )
 import jax
 import jax.numpy as jnp
@@ -226,6 +227,10 @@ class ContinualContrastiveLearner(acme.Learner):
 
     actor_cka_path = self._actor_cka_path
     critic_cka_path = self._critic_cka_path
+    # D5: optional per-step mixture-norm logging (off by default to keep
+    # existing run logs comparable). Read once from continual_config so
+    # JAX can fold the branch as a Python-level if.
+    log_mixture_norm = bool(getattr(continual_config, 'log_mixture_norm', False))
 
     def _make_update_step(networks, config, adaptive_entropy, obs_to_goal):
       """Factory that returns a (possibly jitted) update function."""
@@ -637,6 +642,17 @@ class ContinualContrastiveLearner(acme.Learner):
           metrics['actor_alpha_entropy'] = -jnp.sum(
               a_softmax * jnp.log(a_softmax + 1e-12))
           metrics['actor_alpha_scale'] = a_scale
+          # D5: mixture_norm = || sum_j alpha_j v_j || / || v_k ||.
+          # Hypothesis (plan section 3.2): in late tasks, the actor
+          # update is mostly absorbed by v_k rather than the mixture
+          # term. A consistently small ratio (< 0.1) corroborates that.
+          # Off by default to keep existing run logs comparable; gated
+          # on continual_config.log_mixture_norm.
+          if log_mixture_norm:
+            a_contribution = cka_compute_contribution(
+                new_actor_cka_state.pool, a_logits, a_scale)
+            metrics['cka/actor_mixture_norm'] = cka_mixture_to_vk_ratio(
+                a_contribution, new_actor_cka_state.v_k)
         if critic_cka_path:
           c_logits = new_critic_cka_state.alpha_logits
           c_scale = new_critic_cka_state.alpha_scale
@@ -654,6 +670,11 @@ class ContinualContrastiveLearner(acme.Learner):
           metrics['critic_alpha_entropy'] = -jnp.sum(
               c_softmax * jnp.log(c_softmax + 1e-12))
           metrics['critic_alpha_scale'] = c_scale
+          if log_mixture_norm:
+            c_contribution = cka_compute_contribution(
+                new_critic_cka_state.pool, c_logits, c_scale)
+            metrics['cka/critic_mixture_norm'] = cka_mixture_to_vk_ratio(
+                c_contribution, new_critic_cka_state.v_k)
 
         new_state = ContinualTrainingState(
             q_params=q_params,
