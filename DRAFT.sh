@@ -75,6 +75,16 @@ ACTOR_RESET_DORMANT_THRESHOLD="${ACTOR_RESET_DORMANT_THRESHOLD:-0.1}"
 ACTOR_RESET_WARMUP="${ACTOR_RESET_WARMUP:-200000}"
 ACTOR_RESET_MAX="${ACTOR_RESET_MAX:-3}"
 
+# Decomposed-critic + diagnostic flags (defaults preserve prior behaviour).
+# Per-cell overrides come from experiment_configs.py via the eval line
+# below; cells that don't set these get the dataclass / flag defaults.
+DYN_AUX_WEIGHT="${DYN_AUX_WEIGHT:-1.0}"
+PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
+PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-2}"
+LOG_POOL_COSINE="${LOG_POOL_COSINE:-true}"
+LOG_MIXTURE_NORM="${LOG_MIXTURE_NORM:-false}"
+LOG_PROBE_DATA="${LOG_PROBE_DATA:-false}"
+
 # Directories
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
@@ -183,6 +193,28 @@ build_flags() {
   _FLAGS="$_FLAGS --actor_reset_warmup=$ACTOR_RESET_WARMUP"
   _FLAGS="$_FLAGS --actor_reset_max=$ACTOR_RESET_MAX"
 
+  # Decomposed-critic + diagnostic flags. Read directly from the
+  # surrounding shell environment so per-cell overrides from
+  # experiment_configs.py take effect.
+  _FLAGS="$_FLAGS --dyn_aux_weight=$DYN_AUX_WEIGHT"
+  _FLAGS="$_FLAGS --phi_task_width=$PHI_TASK_WIDTH"
+  _FLAGS="$_FLAGS --phi_task_depth=$PHI_TASK_DEPTH"
+  if [ "$LOG_POOL_COSINE" = "true" ]; then
+    _FLAGS="$_FLAGS --log_pool_cosine"
+  else
+    _FLAGS="$_FLAGS --nolog_pool_cosine"
+  fi
+  if [ "$LOG_MIXTURE_NORM" = "true" ]; then
+    _FLAGS="$_FLAGS --log_mixture_norm"
+  else
+    _FLAGS="$_FLAGS --nolog_mixture_norm"
+  fi
+  if [ "$LOG_PROBE_DATA" = "true" ]; then
+    _FLAGS="$_FLAGS --log_probe_data"
+  else
+    _FLAGS="$_FLAGS --nolog_probe_data"
+  fi
+
   echo "$_FLAGS"
 }
 
@@ -263,6 +295,8 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "LSE penalty     : $LOGSUMEXP_PENALTY"
     echo "Single task     : ${SINGLE_TASK:-none}"
     echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
+    echo "Decomp critic   : dyn_aux_weight=$DYN_AUX_WEIGHT phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
+    echo "Diagnostics     : log_pool_cosine=$LOG_POOL_COSINE log_mixture_norm=$LOG_MIXTURE_NORM log_probe_data=$LOG_PROBE_DATA"
     echo "Log dir         : $LOG_DIR"
     echo "Checkpoint dir  : $CHECKPOINT_DIR"
     echo "============================================================"

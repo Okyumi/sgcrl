@@ -181,6 +181,38 @@ flags.DEFINE_float('neg_bank_weight', 0.3,
 flags.DEFINE_integer('neg_bank_max_tasks', 20,
                      'Max number of tasks retained in the bank (FIFO).')
 
+# Decomposed-critic + diagnostic flags (proposal 1, plan section 6).
+# All default to the existing ContinualConfig dataclass defaults so that
+# omitting any of these from a submit script preserves bit-identical
+# behaviour vs prior runs. Cluster cells set them via env-var pipelines
+# in the submit scripts (draft_3.sh / draft_4.sh / DRAFT.sh /
+# submit_continual_torch.sh) which read from experiment_configs.py.
+flags.DEFINE_float('dyn_aux_weight', 1.0,
+                   'Weight on the masked-dynamics auxiliary loss (mu) when '
+                   'critic_mode="decomposed". 0.0 disables L_dyn (used for '
+                   'the regression-check cell N5). Plan section 6.')
+flags.DEFINE_integer('phi_task_width', 256,
+                     'Width of the per-task additive encoder phi_task '
+                     '(critic_mode="decomposed" only). Smaller than the '
+                     'shared body. Plan section 6.')
+flags.DEFINE_integer('phi_task_depth', 2,
+                     'Depth of the per-task additive encoder phi_task '
+                     '(critic_mode="decomposed" only). Plan section 6.')
+flags.DEFINE_bool('log_pool_cosine', True,
+                  'Log per-task pool cosine-similarity matrices on the '
+                  'actor / critic CKA pools. Cheap host-side metric. '
+                  'Plan section 3.1 / D1-D4.')
+flags.DEFINE_bool('log_mixture_norm', False,
+                  'Log the per-step ratio || sum_j alpha_j v_j || / || v_k || '
+                  'inside the CKA inner loop. One extra norm per active CKA '
+                  'path when on; bit-identical when off. Plan section 3.2 / D5.')
+flags.DEFINE_bool('log_probe_data', False,
+                  'At the end of each task, dump the first batch_size '
+                  '(obs, action) pairs from the replay iterator to a '
+                  'probe_data_task{k}_seed{s}.npz file next to the '
+                  'checkpoint. Consumed by eval_linear_probe.py. Plan '
+                  'section 3.4 / D6.')
+
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
     'sawyer_hammer': np.array([0.24, 0.74, 0.11]),
@@ -1197,6 +1229,15 @@ def main(_):
       k_max=FLAGS.k_max,
       checkpoint_dir=FLAGS.checkpoint_dir,
       seed=seed,
+      # Decomposed-critic + diagnostic flags (default to dataclass
+      # defaults; submit scripts override per cell via
+      # experiment_configs.py).
+      dyn_aux_weight=FLAGS.dyn_aux_weight,
+      phi_task_width=FLAGS.phi_task_width,
+      phi_task_depth=FLAGS.phi_task_depth,
+      log_pool_cosine=FLAGS.log_pool_cosine,
+      log_mixture_norm=FLAGS.log_mixture_norm,
+      log_probe_data=FLAGS.log_probe_data,
   )
 
   # Shared config

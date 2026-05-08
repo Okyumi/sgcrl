@@ -50,6 +50,17 @@ ACTOR_MODE="${ACTOR_MODE:-cka}"
 
 # Scaling architecture
 USE_RESIDUAL="${USE_RESIDUAL:-true}"
+
+# Decomposed-critic + diagnostic flags. All default to the dataclass
+# defaults in contrastive/continual_config.py + the absl flag defaults
+# in run_continual_contrastive.py, so omitting these from the env vars
+# preserves bit-identical behaviour vs prior runs.
+DYN_AUX_WEIGHT="${DYN_AUX_WEIGHT:-1.0}"
+PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
+PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-2}"
+LOG_POOL_COSINE="${LOG_POOL_COSINE:-true}"
+LOG_MIXTURE_NORM="${LOG_MIXTURE_NORM:-false}"
+LOG_PROBE_DATA="${LOG_PROBE_DATA:-false}"
 NETWORK_WIDTH="${NETWORK_WIDTH:-256}"
 CRITIC_DEPTH="${CRITIC_DEPTH:-4}"
 ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
@@ -245,6 +256,26 @@ FLAGS="$FLAGS --neg_bank_n_per_step=$NEG_BANK_N_PER_STEP"
 FLAGS="$FLAGS --neg_bank_candidate_pool=$NEG_BANK_CANDIDATE_POOL"
 FLAGS="$FLAGS --neg_bank_weight=$NEG_BANK_WEIGHT"
 FLAGS="$FLAGS --neg_bank_max_tasks=$NEG_BANK_MAX_TASKS"
+
+# Decomposed-critic + diagnostic flags
+FLAGS="$FLAGS --dyn_aux_weight=$DYN_AUX_WEIGHT"
+FLAGS="$FLAGS --phi_task_width=$PHI_TASK_WIDTH"
+FLAGS="$FLAGS --phi_task_depth=$PHI_TASK_DEPTH"
+if [ "$LOG_POOL_COSINE" = "true" ]; then
+  FLAGS="$FLAGS --log_pool_cosine"
+else
+  FLAGS="$FLAGS --nolog_pool_cosine"
+fi
+if [ "$LOG_MIXTURE_NORM" = "true" ]; then
+  FLAGS="$FLAGS --log_mixture_norm"
+else
+  FLAGS="$FLAGS --nolog_mixture_norm"
+fi
+if [ "$LOG_PROBE_DATA" = "true" ]; then
+  FLAGS="$FLAGS --log_probe_data"
+else
+  FLAGS="$FLAGS --nolog_probe_data"
+fi
 
 # ---- run -------------------------------------------------------------------
 cd "$REPO_DIR"

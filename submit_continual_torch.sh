@@ -47,6 +47,14 @@ ENERGY_FN="${ENERGY_FN:-inner_product}"
 LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
 SINGLE_TASK="${SINGLE_TASK:-}"
 
+# Decomposed-critic + diagnostic flags (defaults preserve prior behaviour).
+DYN_AUX_WEIGHT="${DYN_AUX_WEIGHT:-1.0}"
+PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
+PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-2}"
+LOG_POOL_COSINE="${LOG_POOL_COSINE:-true}"
+LOG_MIXTURE_NORM="${LOG_MIXTURE_NORM:-false}"
+LOG_PROBE_DATA="${LOG_PROBE_DATA:-false}"
+
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
 REPO_DIR="/scratch/yd2247/sgcrl"
@@ -136,6 +144,26 @@ FLAGS="$FLAGS --energy_fn=$ENERGY_FN"
 FLAGS="$FLAGS --logsumexp_penalty=$LOGSUMEXP_PENALTY"
 if [ -n "$SINGLE_TASK" ]; then
   FLAGS="$FLAGS --single_task=$SINGLE_TASK"
+fi
+
+# Decomposed-critic + diagnostic flags
+FLAGS="$FLAGS --dyn_aux_weight=$DYN_AUX_WEIGHT"
+FLAGS="$FLAGS --phi_task_width=$PHI_TASK_WIDTH"
+FLAGS="$FLAGS --phi_task_depth=$PHI_TASK_DEPTH"
+if [ "$LOG_POOL_COSINE" = "true" ]; then
+  FLAGS="$FLAGS --log_pool_cosine"
+else
+  FLAGS="$FLAGS --nolog_pool_cosine"
+fi
+if [ "$LOG_MIXTURE_NORM" = "true" ]; then
+  FLAGS="$FLAGS --log_mixture_norm"
+else
+  FLAGS="$FLAGS --nolog_mixture_norm"
+fi
+if [ "$LOG_PROBE_DATA" = "true" ]; then
+  FLAGS="$FLAGS --log_probe_data"
+else
+  FLAGS="$FLAGS --nolog_probe_data"
 fi
 
 cd "$REPO_DIR"
