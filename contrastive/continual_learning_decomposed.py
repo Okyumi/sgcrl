@@ -9,9 +9,12 @@ Algorithm (matches ``docs/2026-05-08_plan_proposal1_dyn_aux.md``):
 
   phi(s, a)  = h_phi(b_shared([s; a])) + phi_task([s; a])
   psi(g)     = psi(g)
-  score      = - || phi(s, a) - psi(g) ||_2
+  score      = phi(s, a) @ psi(g).T            # SGCRL inner product (default)
+             or -|| phi(s, a) - psi(g) ||_2    # if config.energy_fn == 'l2'
 
-  L_InfoNCE  = standard InfoNCE on the (B, B) score matrix
+  L_InfoNCE  = standard InfoNCE on the (B, B) score matrix, in the same
+               form as the existing critic: sigmoid-BCE (use_cpc=False,
+               default) or softmax-CE+logsumexp (use_cpc=True)
   L_dyn      = || h_dyn(b_shared(s, a)) - select_stable(s') ||_2^2
 
 Trainable groups (each has its own optimiser state):
@@ -29,8 +32,10 @@ Continual handoff at task k > 0:
   phi_task params + opt state                                 -> reinit
   actor params + opt state                                    -> reinit (reset)
 
-The actor objective is the standard SGCRL inner-product maximisation
-(here, a negative-l2 score maximisation) under the composed phi.
+The actor objective matches the existing SGCRL learner: optionally roll
+goals via ``config.random_goals`` (0.0 / 0.5 / 1.0), then maximise the
+critic's diagonal score under the composed phi, plus an entropy bonus
+when ``config.use_action_entropy=True``.
 
 Excluded from this learner intentionally (out of scope for proposal 1):
   - TD critic path (``config.use_td=False`` is required)
@@ -161,12 +166,15 @@ class ContinualDecomposedLearner(acme.Learner):
     self._timestamp: Optional[float] = None
     self._last_metrics: Dict[str, float] = {}
 
-    self._adaptive_entropy = bool(config.adaptive_entropy)
+    # SGCRL convention: adaptive entropy is on iff entropy_coefficient is
+    # None, mirroring continual_learning.py:170.
+    self._adaptive_entropy = (config.entropy_coefficient is None)
     if not self._adaptive_entropy:
       raise ValueError(
-          'critic_mode=decomposed requires adaptive_entropy=True. The '
-          'project default is True with target_entropy=-2.0; flip the '
-          'flag back on if you have changed it.')
+          'critic_mode=decomposed requires adaptive entropy '
+          '(config.entropy_coefficient=None). The project default is '
+          'adaptive with target_entropy=-2.0; do not set '
+          'entropy_coefficient if you want to keep that behaviour.')
     self._dyn_aux_weight = float(
         getattr(continual_config, 'dyn_aux_weight', 1.0))
 
@@ -260,6 +268,9 @@ class ContinualDecomposedLearner(acme.Learner):
     adaptive_entropy = self._adaptive_entropy
     target_entropy = config.target_entropy
     logsumexp_penalty_coeff = float(getattr(config, 'logsumexp_penalty', 0.0))
+    use_cpc = bool(getattr(config, 'use_cpc', False))
+    use_action_entropy = bool(getattr(config, 'use_action_entropy', True))
+    random_goals = float(getattr(config, 'random_goals', 0.5))
     dyn_w = self._dyn_aux_weight
     stable_idx = jnp.asarray(sm.STABLE_INDICES)
 
@@ -286,30 +297,34 @@ class ContinualDecomposedLearner(acme.Learner):
       p_task = critic_params_dict['phi_task']
       p_psi = critic_params_dict['psi']
 
-      score = decomp_nets.apply_score(p_b, p_phi, p_task, p_psi,
-                                      transitions.observation,
-                                      transitions.action)
-      B = score.shape[0]
+      logits = decomp_nets.apply_score(p_b, p_phi, p_task, p_psi,
+                                       transitions.observation,
+                                       transitions.action)
+      B = logits.shape[0]
       I = jnp.eye(B)
-      # InfoNCE row-wise classification.
-      nce = -jnp.mean(jnp.diag(score) - jax.nn.logsumexp(score, axis=1))
 
-      # Optional logsumexp regulariser, matching the existing critic.
-      lse = jax.nn.logsumexp(score + 1e-6, axis=1)
-      reg = logsumexp_penalty_coeff * jnp.mean(lse ** 2)
+      # InfoNCE in the same form as the existing critic
+      # (continual_learning.py: critic_loss_fn). use_cpc=False (default)
+      # uses sigmoid-BCE per-cell with the identity as labels and folds
+      # the logsumexp regulariser into the metrics. use_cpc=True uses
+      # softmax-CE plus logsumexp_penalty * logsumexp(...)^2.
+      if use_cpc:
+        loss = (optax.softmax_cross_entropy(logits=logits, labels=I)
+                + logsumexp_penalty_coeff * jax.nn.logsumexp(logits, axis=1) ** 2)
+      else:
+        loss = optax.sigmoid_binary_cross_entropy(logits=logits, labels=I)
+      total = jnp.mean(loss)
 
-      # Diagnostics.
-      correct = jnp.argmax(score, axis=1) == jnp.argmax(I, axis=1)
-      bin_acc = jnp.mean(jnp.diag(score) > jnp.mean(score, axis=1))
+      # Diagnostics matching the existing learner's keys.
+      correct = jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1)
+      bin_acc = jnp.mean((logits > 0) == I)
       cat_acc = jnp.mean(correct.astype(jnp.float32))
-      logits_pos = jnp.mean(jnp.diag(score))
-      logits_neg = (jnp.sum(score * (1 - I)) /
-                    jnp.maximum(jnp.sum(1 - I), 1.0))
-
-      total = nce + reg
+      logits_pos = jnp.sum(logits * I) / jnp.sum(I)
+      logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
+      lse = jax.nn.logsumexp(logits, axis=1) ** 2
       aux = dict(
           critic_loss=total,
-          infonce=nce,
+          infonce=total,
           logsumexp=jnp.mean(lse),
           binary_accuracy=bin_acc,
           categorical_accuracy=cat_acc,
@@ -331,27 +346,51 @@ class ContinualDecomposedLearner(acme.Learner):
     def actor_loss_fn(policy_params, b_shared_params, h_phi_params,
                       phi_task_params, psi_params, log_alpha, transitions,
                       key):
-      """Actor loss: maximise inner-product score under stop-grad critic."""
-      dist_params = policy_network.apply(policy_params,
-                                          transitions.observation)
+      """Actor loss: matches continual_learning.py:408-438.
+
+      Optionally rolls goals via ``config.random_goals`` (0.0 / 0.5 / 1.0),
+      computes the critic score under the composed phi, takes
+      ``-jnp.diag(score)``, and adds the entropy bonus when
+      ``config.use_action_entropy=True``. The critic params are NOT
+      stop-gradient-wrapped here because policy_params are the only
+      argnums=0 leaves seen by ``value_and_grad``; the existing learner
+      relies on the same pattern.
+      """
+      obs = transitions.observation
+      state = obs[:, :obs_dim]
+      goal = obs[:, obs_dim:]
+
+      if random_goals == 0.0:
+        new_state, new_goal = state, goal
+      elif random_goals == 0.5:
+        new_state = jnp.concatenate([state, state], axis=0)
+        new_goal = jnp.concatenate([goal, jnp.roll(goal, 1, axis=0)], axis=0)
+      else:
+        new_state = state
+        new_goal = jnp.roll(goal, 1, axis=0)
+
+      new_obs = jnp.concatenate([new_state, new_goal], axis=1)
+      dist_params = policy_network.apply(policy_params, new_obs)
       action = sample_fn(dist_params, key)
       log_prob = log_prob_fn(dist_params, action)
+
+      # Critic score under the composed phi. argnums=0 of the outer
+      # value_and_grad is policy_params, so critic params receive no
+      # gradient signal here.
       score = decomp_nets.apply_score(
-          jax.lax.stop_gradient(b_shared_params),
-          jax.lax.stop_gradient(h_phi_params),
-          jax.lax.stop_gradient(phi_task_params),
-          jax.lax.stop_gradient(psi_params),
-          transitions.observation, action)
-      q_action = jnp.diag(score)  # use the matched (s,a)-vs-its-own-g entry
-      if adaptive_entropy:
+          b_shared_params, h_phi_params, phi_task_params, psi_params,
+          new_obs, action)
+      q_action = jnp.diag(score)            # matched (s,a)-to-own-g entry
+      actor_loss = -q_action                # maximise Q
+
+      if use_action_entropy:
         alpha = jnp.exp(log_alpha)
-        actor_loss = jnp.mean(alpha * log_prob - q_action)
-        ent_aux = dict(entropy_mean=-jnp.mean(log_prob))
-      else:
-        actor_loss = -jnp.mean(q_action)
-        ent_aux = dict(entropy_mean=-jnp.mean(log_prob))
-      ent_aux['actor_loss'] = actor_loss
-      return actor_loss, ent_aux
+        # Match continual_learning.py:435 sign: -= alpha * (-log_prob).
+        actor_loss -= alpha * (-log_prob)
+
+      ent_aux = dict(entropy_mean=jnp.mean(-log_prob),
+                     actor_loss=jnp.mean(actor_loss))
+      return jnp.mean(actor_loss), ent_aux
 
     def alpha_loss_fn(log_alpha, policy_params, transitions, key):
       dist_params = policy_network.apply(policy_params, transitions.observation)
