@@ -58,7 +58,10 @@ from contrastive.continual_config import (
 from contrastive.continual_learning import (
     ContinualContrastiveLearner, ContinualTrainingState,
 )
-from contrastive.knowledge_pool import KnowledgePool, _pytree_zeros_like
+from contrastive.knowledge_pool import (
+    KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
+    cosine_matrix_from_vectors,
+)
 from contrastive.negative_bank import NegativeBank
 from contrastive import rl_metrics
 from default import make_default_logger
@@ -851,6 +854,38 @@ def train_single_task(
 
   pool.merge_if_needed()
 
+  # ---- CKA diagnostics: actor-pool cosine similarity --------------------
+  # Cheap host-side metric (one matmul per pool). Off by default; enable
+  # via continual_cfg.log_pool_cosine. See docs/plan_proposal1_dyn_aux.md
+  # section 3.1 / section 9 for the diagnostic experiment that consumes
+  # this metric.
+  if getattr(continual_cfg, 'log_pool_cosine', False):
+    actor_summary = cosine_summary_from_vectors(pool.get_vectors())
+    print(
+        f'  [pool/cosine actor] task={task_id} '
+        f"n_active={int(actor_summary['n_active'])} "
+        f"mean_offdiag={actor_summary['mean_offdiag']:.4f} "
+        f"max_offdiag={actor_summary['max_offdiag']:.4f} "
+        f"min_offdiag={actor_summary['min_offdiag']:.4f}",
+        flush=True,
+    )
+    if FLAGS.use_wandb and wandb is not None:
+      wandb.log({
+          f'pool_cosine_actor/{k}': v
+          for k, v in actor_summary.items()
+      }, step=env_steps_done)
+    # Also persist the full matrix for paper figures.
+    actor_mat = cosine_matrix_from_vectors(pool.get_vectors())
+    if actor_mat.shape[0] > 0:
+      mat_path = os.path.join(
+          os.path.dirname(_ckpt_path(
+              FLAGS.checkpoint_dir, task_id, seed, critic_mode,
+              FLAGS.use_task_id, adapt_heads_only, actor_mode)),
+          f'pool_cosine_actor_task{task_id}.npy',
+      )
+      os.makedirs(os.path.dirname(mat_path), exist_ok=True)
+      np.save(mat_path, np.asarray(actor_mat))
+
   out_q_params = learner.q_params
   out_target_q_params = learner.target_q_params
   out_q_optimizer_state = learner.q_optimizer_state
@@ -870,6 +905,34 @@ def train_single_task(
       # Extract w_k_critic from the post-training CKA state.
       out_critic_pool.append(learner.w_k_critic)
       out_critic_pool.merge_if_needed()
+
+    # ---- CKA diagnostics: critic-pool cosine similarity ---------------
+    if getattr(continual_cfg, 'log_pool_cosine', False):
+      critic_summary = cosine_summary_from_vectors(
+          out_critic_pool.get_vectors())
+      print(
+          f'  [pool/cosine critic] task={task_id} '
+          f"n_active={int(critic_summary['n_active'])} "
+          f"mean_offdiag={critic_summary['mean_offdiag']:.4f} "
+          f"max_offdiag={critic_summary['max_offdiag']:.4f} "
+          f"min_offdiag={critic_summary['min_offdiag']:.4f}",
+          flush=True,
+      )
+      if FLAGS.use_wandb and wandb is not None:
+        wandb.log({
+            f'pool_cosine_critic/{k}': v
+            for k, v in critic_summary.items()
+        }, step=env_steps_done)
+      critic_mat = cosine_matrix_from_vectors(out_critic_pool.get_vectors())
+      if critic_mat.shape[0] > 0:
+        mat_path = os.path.join(
+            os.path.dirname(_ckpt_path(
+                FLAGS.checkpoint_dir, task_id, seed, critic_mode,
+                FLAGS.use_task_id, adapt_heads_only, actor_mode)),
+            f'pool_cosine_critic_task{task_id}.npy',
+        )
+        os.makedirs(os.path.dirname(mat_path), exist_ok=True)
+        np.save(mat_path, np.asarray(critic_mat))
 
   # ---- Extract goals for the negative bank (BEFORE stopping the server) -
   # Draws a batch from the current task's replay buffer via the iterator,
