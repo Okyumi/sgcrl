@@ -355,6 +355,37 @@ def train_single_task(
 
   np.random.seed(seed + task_id)
 
+  # ---- early guards: incompatible flags for critic_mode='decomposed' ----
+  # Fail fast before booting the replay server. The decomposed learner
+  # also raises on use_td/twin_q internally, but failing here keeps the
+  # error attributable to a single source.
+  if critic_mode == 'decomposed':
+    if config.use_td:
+      raise ValueError(
+          "critic_mode='decomposed' requires use_td=False (no TD path).")
+    if config.twin_q:
+      raise ValueError(
+          "critic_mode='decomposed' requires twin_q=False.")
+    if config.use_image_obs:
+      raise ValueError(
+          "critic_mode='decomposed' does not support use_image_obs=True.")
+    if config.entropy_coefficient is not None:
+      raise ValueError(
+          "critic_mode='decomposed' requires adaptive entropy "
+          "(config.entropy_coefficient=None).")
+    if FLAGS.neg_bank_mode != 'off':
+      raise ValueError(
+          "critic_mode='decomposed' does not support neg_bank_mode != 'off'.")
+    if actor_mode == 'cka':
+      raise ValueError(
+          "critic_mode='decomposed' is incompatible with actor_mode='cka' "
+          "(proposal 1 keeps the actor reset; use actor_mode='reset').")
+    if FLAGS.k_sample_k > 0:
+      raise ValueError(
+          "critic_mode='decomposed' does not currently support k_sample_k>0 "
+          "in cross-task evaluation; the decomposed critic exposes a "
+          "5-tuple bundle, not a single q_params pytree.")
+
   # ---- environment -------------------------------------------------------
   # Task ID is appended to both state and goal at the gym level
   # (via TaskIDGymWrapper in env_utils.py).  Observation layout:
@@ -380,6 +411,11 @@ def train_single_task(
     max_steps = continual_cfg.steps_per_task
 
   # ---- networks ----------------------------------------------------------
+  # The actor is always built from `make_networks` (this gives us the
+  # policy_network + sample / log_prob heads). When critic_mode is
+  # 'decomposed' we additionally build the four-component decomposed
+  # critic and pass it to the sibling learner; when not, the existing
+  # q_network inside `networks` is used by ContinualContrastiveLearner.
   networks = contrastive.make_networks(
       env_spec, obs_dim=obs_dim,
       repr_dim=config.repr_dim, repr_norm=config.repr_norm,
@@ -390,6 +426,20 @@ def train_single_task(
       critic_depth=config.critic_depth,
       actor_depth=config.actor_depth,
       energy_fn=config.energy_fn)
+
+  decomp_nets = None
+  if critic_mode == 'decomposed':
+    decomp_nets = make_decomposed_networks(
+        env_spec, obs_dim=obs_dim,
+        repr_dim=config.repr_dim,
+        use_residual=config.use_residual,
+        network_width=config.network_width,
+        critic_depth=config.critic_depth,
+        phi_task_width=getattr(continual_cfg, 'phi_task_width', 256),
+        phi_task_depth=getattr(continual_cfg, 'phi_task_depth', 2),
+        energy_fn=config.energy_fn,
+        repr_norm=config.repr_norm,
+    )
 
   # ---- replay buffer (reverb) -------------------------------------------
   # A fresh replay buffer is created per task so that experience from
@@ -499,39 +549,66 @@ def train_single_task(
   beta_optimizer = optax.adam(learning_rate=1e-3)
   alpha_scale_optimizer = optax.adam(learning_rate=1e-3)
 
-  learner = ContinualContrastiveLearner(
-      networks=networks,
-      rng=rng,
-      q_optimizer=q_optimizer,
-      vk_optimizer=vk_optimizer,
-      beta_optimizer=beta_optimizer,
-      alpha_scale_optimizer=alpha_scale_optimizer,
-      iterator=iterator,
-      counter=counting.Counter(),
-      logger=learner_logger,
-      obs_to_goal=functools.partial(
-          contrastive_utils.obs_to_goal_2d,
-          start_index=config.start_index,
-          end_index=config.end_index),
-      config=config,
-      continual_config=continual_cfg,
-      task_id=task_id,
-      theta_base=theta_base,
-      pool=pool,
-      prev_q_params=prev_q_params,
-      prev_target_q_params=prev_target_q_params,
-      prev_q_optimizer_state=prev_q_optimizer_state,
-      critic_mode=critic_mode,
-      actor_mode=actor_mode,
-      adapt_heads_only=adapt_heads_only,
-      encoder_from_base=encoder_from_base,
-      q_base=q_base,
-      critic_pool=critic_pool,
-      neg_bank_mode=FLAGS.neg_bank_mode,
-      neg_bank_n_per_step=FLAGS.neg_bank_n_per_step,
-      neg_bank_weight=FLAGS.neg_bank_weight,
-      neg_bank_hard_ratio=(FLAGS.neg_bank_candidate_pool // max(FLAGS.neg_bank_n_per_step, 1)),
-  )
+  if critic_mode == 'decomposed':
+    # Sibling learner: shares the actor with `make_networks` (we hand it
+    # the policy_network + sample / log_prob fns) but maintains its own
+    # 4-component critic + h_dyn head. CKA / persistent / reset paths
+    # are untouched.
+    learner = ContinualDecomposedLearner(
+        decomp_nets=decomp_nets,
+        policy_network=networks.policy_network,
+        sample_fn=networks.sample,
+        log_prob_fn=networks.log_prob,
+        rng=rng,
+        iterator=iterator,
+        counter=counting.Counter(),
+        logger=learner_logger,
+        config=config,
+        continual_config=continual_cfg,
+        task_id=task_id,
+        prev_b_shared_params=prev_b_shared_params,
+        prev_b_shared_opt_state=prev_b_shared_opt_state,
+        prev_h_phi_params=prev_h_phi_params,
+        prev_h_phi_opt_state=prev_h_phi_opt_state,
+        prev_h_dyn_params=prev_h_dyn_params,
+        prev_h_dyn_opt_state=prev_h_dyn_opt_state,
+        prev_psi_params=prev_psi_params,
+        prev_psi_opt_state=prev_psi_opt_state,
+    )
+  else:
+    learner = ContinualContrastiveLearner(
+        networks=networks,
+        rng=rng,
+        q_optimizer=q_optimizer,
+        vk_optimizer=vk_optimizer,
+        beta_optimizer=beta_optimizer,
+        alpha_scale_optimizer=alpha_scale_optimizer,
+        iterator=iterator,
+        counter=counting.Counter(),
+        logger=learner_logger,
+        obs_to_goal=functools.partial(
+            contrastive_utils.obs_to_goal_2d,
+            start_index=config.start_index,
+            end_index=config.end_index),
+        config=config,
+        continual_config=continual_cfg,
+        task_id=task_id,
+        theta_base=theta_base,
+        pool=pool,
+        prev_q_params=prev_q_params,
+        prev_target_q_params=prev_target_q_params,
+        prev_q_optimizer_state=prev_q_optimizer_state,
+        critic_mode=critic_mode,
+        actor_mode=actor_mode,
+        adapt_heads_only=adapt_heads_only,
+        encoder_from_base=encoder_from_base,
+        q_base=q_base,
+        critic_pool=critic_pool,
+        neg_bank_mode=FLAGS.neg_bank_mode,
+        neg_bank_n_per_step=FLAGS.neg_bank_n_per_step,
+        neg_bank_weight=FLAGS.neg_bank_weight,
+        neg_bank_hard_ratio=(FLAGS.neg_bank_candidate_pool // max(FLAGS.neg_bank_n_per_step, 1)),
+    )
 
   # ---- actor (for data collection) ---------------------------------------
   policy_network = contrastive_networks.apply_policy_and_sample(networks)
@@ -822,6 +899,60 @@ def train_single_task(
   composed_policy = learner.get_variables(['policy'])[0]
 
   # ---- extract state for next task ---------------------------------------
+  if critic_mode == 'decomposed':
+    # The decomposed actor is reset every task: there is no v_k pool to
+    # extract, no theta_base to fold, no critic CKA pool to update. The
+    # only carry is the four shared critic groups (b_shared / h_phi /
+    # h_dyn / psi) plus their optimiser states. phi_task and the actor
+    # are reinitialised inside ContinualDecomposedLearner at the next
+    # task's construction.
+    out_theta_base = None
+    out_q_params = None
+    out_target_q_params = None
+    out_q_optimizer_state = None
+    out_q_base = None
+    out_critic_pool = critic_pool if critic_pool is not None else KnowledgePool(
+        k_max=continual_cfg.k_max)
+    out_b_shared_params = learner.b_shared_params
+    out_b_shared_opt_state = learner.b_shared_opt_state
+    out_h_phi_params = learner.h_phi_params
+    out_h_phi_opt_state = learner.h_phi_opt_state
+    out_h_dyn_params = learner.h_dyn_params
+    out_h_dyn_opt_state = learner.h_dyn_opt_state
+    out_psi_params = learner.psi_params
+    out_psi_opt_state = learner.psi_opt_state
+    print(
+        f'  [decomposed] Carrying b_shared / h_phi / h_dyn / psi to task '
+        f'{task_id + 1}; phi_task and actor reinitialised next task.',
+        flush=True,
+    )
+
+    # ---- skip neg-bank goal extraction (guarded above; bank is off) ---
+    task_goals_for_bank = None
+
+    # Cleanup
+    replay_server.stop()
+    try:
+      env.close()
+    except Exception:
+      pass
+    try:
+      eval_env.close()
+    except Exception:
+      pass
+    del learner, variable_client, eval_variable_client
+
+    return (
+        out_theta_base, out_q_params, out_target_q_params,
+        out_q_optimizer_state, pool, composed_policy,
+        out_q_base, out_critic_pool, task_goals_for_bank,
+        # Decomposed carry (None for non-decomposed paths).
+        out_b_shared_params, out_b_shared_opt_state,
+        out_h_phi_params, out_h_phi_opt_state,
+        out_h_dyn_params, out_h_dyn_opt_state,
+        out_psi_params, out_psi_opt_state,
+    )
+
   v_k = learner.v_k
 
   if task_id == 0:
@@ -993,9 +1124,16 @@ def train_single_task(
     pass
   del learner, variable_client, eval_variable_client
 
-  return (out_theta_base, out_q_params, out_target_q_params,
-          out_q_optimizer_state, pool, composed_policy,
-          out_q_base, out_critic_pool, task_goals_for_bank)
+  return (
+      out_theta_base, out_q_params, out_target_q_params,
+      out_q_optimizer_state, pool, composed_policy,
+      out_q_base, out_critic_pool, task_goals_for_bank,
+      # Decomposed carry slots: None on this branch (non-decomposed critic).
+      None, None,  # b_shared params / opt_state
+      None, None,  # h_phi params / opt_state
+      None, None,  # h_dyn params / opt_state
+      None, None,  # psi params / opt_state
+  )
 
 
 # ---- main ----------------------------------------------------------------
@@ -1078,6 +1216,16 @@ def main(_):
   q_base = None  # frozen critic base (critic_mode='cka')
   critic_pool = KnowledgePool(k_max=continual_cfg.k_max)
 
+  # Decomposed-critic carry (only used when --critic_mode=decomposed).
+  prev_b_shared_params = None
+  prev_b_shared_opt_state = None
+  prev_h_phi_params = None
+  prev_h_phi_opt_state = None
+  prev_h_dyn_params = None
+  prev_h_dyn_opt_state = None
+  prev_psi_params = None
+  prev_psi_opt_state = None
+
   # Previous-replay negative bank (offline-to-online variant)
   # goal_dim = config.obs_dim (state and goal have identical dimensionality
   # after the TaskIDGymWrapper is applied).
@@ -1131,6 +1279,15 @@ def main(_):
       critic_pool_vecs = ckpt.get('critic_pool_vectors')
       if critic_pool_vecs is not None:
         critic_pool.load_state_dict(critic_pool_vecs)
+    if FLAGS.critic_mode == 'decomposed':
+      prev_b_shared_params = ckpt.get('decomposed_b_shared_params')
+      prev_b_shared_opt_state = ckpt.get('decomposed_b_shared_opt_state')
+      prev_h_phi_params = ckpt.get('decomposed_h_phi_params')
+      prev_h_phi_opt_state = ckpt.get('decomposed_h_phi_opt_state')
+      prev_h_dyn_params = ckpt.get('decomposed_h_dyn_params')
+      prev_h_dyn_opt_state = ckpt.get('decomposed_h_dyn_opt_state')
+      prev_psi_params = ckpt.get('decomposed_psi_params')
+      prev_psi_opt_state = ckpt.get('decomposed_psi_opt_state')
 
   for task_id in range(start_task, num_tasks):
     env_name = task_sequence[task_id]
@@ -1211,7 +1368,11 @@ def main(_):
 
     (theta_base, prev_q, prev_tgt_q, prev_q_opt, pool,
      composed_policy, q_base, critic_pool,
-     task_goals_for_bank) = train_single_task(
+     task_goals_for_bank,
+     prev_b_shared_params, prev_b_shared_opt_state,
+     prev_h_phi_params, prev_h_phi_opt_state,
+     prev_h_dyn_params, prev_h_dyn_opt_state,
+     prev_psi_params, prev_psi_opt_state) = train_single_task(
         task_id=task_id,
         env_name=env_name,
         config=config,
@@ -1230,6 +1391,15 @@ def main(_):
         q_base=q_base,
         critic_pool=critic_pool,
         neg_bank=neg_bank,
+        # Decomposed-critic carry (None for non-decomposed paths).
+        prev_b_shared_params=prev_b_shared_params,
+        prev_b_shared_opt_state=prev_b_shared_opt_state,
+        prev_h_phi_params=prev_h_phi_params,
+        prev_h_phi_opt_state=prev_h_phi_opt_state,
+        prev_h_dyn_params=prev_h_dyn_params,
+        prev_h_dyn_opt_state=prev_h_dyn_opt_state,
+        prev_psi_params=prev_psi_params,
+        prev_psi_opt_state=prev_psi_opt_state,
     )
 
     # Post-task: add this task's goals to the negative bank.
@@ -1262,6 +1432,15 @@ def main(_):
     if FLAGS.critic_mode == 'cka':
       ckpt_data['q_base'] = q_base
       ckpt_data['critic_pool_vectors'] = critic_pool.state_dict()
+    if FLAGS.critic_mode == 'decomposed':
+      ckpt_data['decomposed_b_shared_params'] = prev_b_shared_params
+      ckpt_data['decomposed_b_shared_opt_state'] = prev_b_shared_opt_state
+      ckpt_data['decomposed_h_phi_params'] = prev_h_phi_params
+      ckpt_data['decomposed_h_phi_opt_state'] = prev_h_phi_opt_state
+      ckpt_data['decomposed_h_dyn_params'] = prev_h_dyn_params
+      ckpt_data['decomposed_h_dyn_opt_state'] = prev_h_dyn_opt_state
+      ckpt_data['decomposed_psi_params'] = prev_psi_params
+      ckpt_data['decomposed_psi_opt_state'] = prev_psi_opt_state
     save_ckpt(FLAGS.checkpoint_dir, task_id, seed, ckpt_data,
               critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
               adapt_heads_only=FLAGS.adapt_heads_only,
