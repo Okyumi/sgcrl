@@ -898,6 +898,41 @@ def train_single_task(
   # Must happen before pool extraction which changes the composition.
   composed_policy = learner.get_variables(['policy'])[0]
 
+  # ---- D6a: per-task probe data dump (linear-probe diagnostic) -----------
+  # Saves a small (obs, action) sample alongside the checkpoint for the
+  # `eval_linear_probe.py` task-classifier diagnostic. Off by default;
+  # gated on continual_cfg.log_probe_data so existing runs are
+  # bit-identical. The sample is drawn from the SAME iterator the
+  # learner has been consuming (via flatten_fn), so it carries the same
+  # HER goal-relabeling and the same obs layout (state||goal) the
+  # learner saw during training. We take the first config.batch_size
+  # rows of one batch (256 by default).
+  def _dump_probe_data():
+    if not getattr(continual_cfg, 'log_probe_data', False):
+      return
+    try:
+      sample = next(iterator)
+      tr = types.Transition(*sample.data)
+      obs_np = np.asarray(tr.observation[:config.batch_size])
+      act_np = np.asarray(tr.action[:config.batch_size])
+      probe_path = os.path.join(
+          os.path.dirname(_ckpt_path(
+              FLAGS.checkpoint_dir, task_id, seed, critic_mode,
+              FLAGS.use_task_id, adapt_heads_only, actor_mode)),
+          f'probe_data_task{task_id}_seed{seed}.npz',
+      )
+      os.makedirs(os.path.dirname(probe_path), exist_ok=True)
+      np.savez(probe_path,
+               obs=obs_np, action=act_np,
+               task_id=np.int32(task_id),
+               obs_dim=np.int32(config.obs_dim))
+      print(f'  [probe] Saved {obs_np.shape[0]} (obs, action) pairs to {probe_path}',
+            flush=True)
+    except Exception as e:
+      print(f'  [probe] Warning: probe-data dump failed: {e}', flush=True)
+
+  _dump_probe_data()
+
   # ---- extract state for next task ---------------------------------------
   if critic_mode == 'decomposed':
     # The decomposed actor is reset every task: there is no v_k pool to
