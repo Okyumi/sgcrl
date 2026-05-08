@@ -167,7 +167,7 @@ def _build_decomposed_apply(env_spec, obs_dim: int, ckpt: dict, cfg):
       network_width=cfg.network_width,
       critic_depth=cfg.critic_depth,
       phi_task_width=getattr(cfg, 'phi_task_width', 256),
-      phi_task_depth=getattr(cfg, 'phi_task_depth', 2),
+      phi_task_depth=getattr(cfg, 'phi_task_depth', 4),
       energy_fn=cfg.energy_fn,
       repr_norm=cfg.repr_norm,
   )

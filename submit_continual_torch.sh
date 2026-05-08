@@ -50,7 +50,7 @@ SINGLE_TASK="${SINGLE_TASK:-}"
 # Decomposed-critic + diagnostic flags (defaults preserve prior behaviour).
 DYN_AUX_WEIGHT="${DYN_AUX_WEIGHT:-1.0}"
 PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
-PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-2}"
+PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-4}"
 LOG_POOL_COSINE="${LOG_POOL_COSINE:-true}"
 LOG_MIXTURE_NORM="${LOG_MIXTURE_NORM:-false}"
 LOG_PROBE_DATA="${LOG_PROBE_DATA:-false}"
