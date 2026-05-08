@@ -41,8 +41,8 @@ import sys
 # the 9-cell ablation sweep.
 # =====================================================================
 
-ACTOR_MODES = ['cka']
-CRITIC_MODES = ['cka']
+ACTOR_MODES = ['reset']
+CRITIC_MODES = ['decomposed']
 SEEDS = [42, 43, 44]
 
 # Overrides applied to every Cartesian-grid cell. The CELLS list below

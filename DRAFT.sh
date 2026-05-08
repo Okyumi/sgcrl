@@ -254,7 +254,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
   echo "------------------------------------------------------------"
   echo "[slot $i] Config #${CONFIG_IDX}: actor=$ACTOR_MODE critic=$CRITIC_MODE seed=$SEED"
   echo "[slot $i] Log: ${EXP_LOG_PREFIX}.{out,err}"
-  echo "[slot $i] Running: python run_continual_contrastive.py $FLAGS"
+  echo "[slot $i] Running: python -u run_continual_contrastive.py $FLAGS"
   echo "------------------------------------------------------------"
 
   (
@@ -301,10 +301,10 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "Checkpoint dir  : $CHECKPOINT_DIR"
     echo "============================================================"
     echo ""
-    echo "Running: python run_continual_contrastive.py $FLAGS"
+    echo "Running: python -u run_continual_contrastive.py $FLAGS"
     echo ""
 
-    python run_continual_contrastive.py $FLAGS
+    python -u run_continual_contrastive.py $FLAGS
 
     echo ""
     echo "============================================================"
