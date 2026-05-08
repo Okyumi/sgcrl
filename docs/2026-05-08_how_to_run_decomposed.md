@@ -51,6 +51,8 @@ What is left:
            critic_depth=config.critic_depth,
            phi_task_width=continual_cfg.phi_task_width,
            phi_task_depth=continual_cfg.phi_task_depth,
+           energy_fn=config.energy_fn,        # SGCRL default 'inner_product'
+           repr_norm=config.repr_norm,
        )
    ```
 

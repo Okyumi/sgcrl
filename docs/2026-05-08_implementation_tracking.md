@@ -44,6 +44,7 @@ decomposed column is added, not substituted.
 | D7 | CKA diagnostic run on `actor_mode='cka', critic_mode='cka'` with `log_pool_cosine=True` | A | ready to launch | depends only on D1-D4 (shipped) |
 | N1 | `state_mask.py` with `STABLE_INDICES = (0, 1, 2, 3)` | B | shipped (2026-05-08) | section 2 of plan |
 | N2 | `decomposed_networks.py` (`b_shared`, `h_phi`, `h_dyn`, `phi_task`, `psi`) | B | shipped (2026-05-08) | smoke-tested, gradient isolation verified |
+| N2b| Verify decomposed implementation matches SGCRL conventions (score, hyperparameters, actor loss) | B | shipped (2026-05-08) | see `2026-05-08_decomposed_critic_verification.md`; fixed 4 bugs (score=neg-L2, adaptive_entropy field, InfoNCE form, actor goal-rolling+entropy gate) |
 | N3 | `critic_mode='decomposed'` config option + new flags | B | partial | new fields `dyn_aux_weight`, `phi_task_width`, `phi_task_depth` shipped; `critic_mode='decomposed'` accepted at the runner edge but not yet dispatched |
 | N4 | Decomposed-critic learner path in `continual_learning.py` | B | shipped as sibling | new file `continual_learning_decomposed.py` with `ContinualDecomposedLearner` |
 | N4b| Runner glue in `train_single_task` (network branch + learner branch + post-task extraction) | B | not started | three blocks documented in `2026-05-08_how_to_run_decomposed.md` Step 0 |
@@ -95,16 +96,22 @@ These feed the negative-result figure in the paper's analysis section.
    mask, decomposed networks, sibling learner, config flags) are done
    and locally smoke-tested. Runner glue (N4b) is the remaining
    blocker.
-3. (next) **N4b**: apply the three-block runner patch documented in
+3. ~~N2b: verify SGCRL conventions and fix bugs.~~ shipped 2026-05-08.
+   Switched the score to inner product (was neg-L2 by mistake), fixed
+   `adaptive_entropy` detection to match `entropy_coefficient is None`,
+   reshaped the critic loss to use sigmoid-BCE / softmax-CE branches
+   under `use_cpc`, added goal rolling and `use_action_entropy` gating
+   to the actor loss. Smoke test re-run; gradient isolation preserved.
+4. (next) **N4b**: apply the three-block runner patch documented in
    `2026-05-08_how_to_run_decomposed.md` Step 0. Estimated ~1 hour
    of editing.
-4. (after N4b) **N5** regression check: persistent cell still matches
+5. (after N4b) **N5** regression check: persistent cell still matches
    the existing baseline. **N5b** decomposed cell with
    `dyn_aux_weight=0.0` should also match baseline within seed noise.
-5. (after N5 passes) **N6** single-cell sanity experiment with
+6. (after N5 passes) **N6** single-cell sanity experiment with
    `dyn_aux_weight=1.0`.
-6. (parallel with N6) **D5, D6** diagnostics.
-7. (after N6 passes) **N7** ablation grid + **D7** CKA diagnostic
+7. (parallel with N6) **D5, D6** diagnostics.
+8. (after N6 passes) **N7** ablation grid + **D7** CKA diagnostic
    run.
 
 ---
