@@ -1392,7 +1392,9 @@ def main(_):
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
           project='continual_gcrl_paper',
-          group="measure_similarityof_vk",
+          # group="C0: CKA-failure diagnostic",
+          # group="C1: decomposed regression check and baseline",
+          group="C2: decomposed single-cell sanity",
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,

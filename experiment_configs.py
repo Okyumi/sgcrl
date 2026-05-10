@@ -41,9 +41,9 @@ import sys
 # the 9-cell ablation sweep.
 # =====================================================================
 
-ACTOR_MODES = ['reset']
-CRITIC_MODES = ['decomposed']
-SEEDS = [42, 43, 44]
+ACTOR_MODES = []
+CRITIC_MODES = []
+SEEDS = []
 
 # Overrides applied to every Cartesian-grid cell. The CELLS list below
 # can additionally override these on a per-cell basis.
@@ -97,12 +97,12 @@ CELLS: list = [
     #  'log_probe_data': True},
 
     # ---- C2: decomposed single-cell sanity, dyn_aux_weight=1 (N6) --
-    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
-    #  'dyn_aux_weight': 1.0, 'log_probe_data': True},
-    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 6,
-    #  'dyn_aux_weight': 1.0, 'log_probe_data': True},
-    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
-    #  'dyn_aux_weight': 1.0, 'log_probe_data': True},
+    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+     'dyn_aux_weight': 1.0, 'log_probe_data': True},
+    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 6,
+     'dyn_aux_weight': 1.0, 'log_probe_data': True},
+    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
+     'dyn_aux_weight': 1.0, 'log_probe_data': True},
 
     # ---- C3: full ablation grid (N7) --------------------------------
     # G1 baseline (actor_mode=reset, critic_mode=persistent), 5 seeds
