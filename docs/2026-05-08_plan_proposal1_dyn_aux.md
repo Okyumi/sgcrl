@@ -127,6 +127,18 @@ on the host and logs:
 If `pool_cos_mean_offdiag > 0.9` consistently, the audit's hypothesis
 is confirmed and the paper has its empirical reason for CKA's failure.
 
+**REVISED 2026-05-12 (after running the C0 diagnostic):** the pool
+vectors do NOT collapse. Observed actor `mean_offdiag` ~ 0.17,
+critic ~ 0. The hypothesis above is refuted. The real reason CKA
+fails for contrastive GCRL is documented in
+`docs/2026-05-12_cka_failure_results.md`: contrastive losses are
+shift-invariant in state-independent additive perturbations, so
+the mixture term lives in the gradient null space regardless of
+pool quality. The `mixture_norm` half of the diagnostic (§3.2) is
+still the correct signature; the cosine-similarity half should be
+reframed as "pool quality is sufficient; the failure is in the
+gradient flow".
+
 ### 3.2 Per-task contribution of `v_k` vs the mixture term
 
 Hypothesis: even when `alpha` is technically trainable
@@ -390,6 +402,17 @@ If observed, this is the empirical content of "CKA fails because the
 per-task knowledge vectors do not span useful directions in this
 setting", which the paper claims qualitatively. With this data the
 claim becomes quantitative.
+
+**REVISED 2026-05-12 (after the C0 diagnostic ran):** the
+mixture-norm half of the expected pattern held; the cosine
+alignment half did NOT (vectors stayed roughly orthogonal, mean
+actor cosine ~0.17, critic ~0). The empirical claim is therefore
+*not* "vectors collapse to one direction" but rather "the
+mixture term lives in the gradient null space of contrastive
+losses". See `docs/2026-05-12_cka_failure_results.md` for the full
+revised hypothesis (state-independent additive perturbations being
+shift-invariants of softmax / argmax) and the falsifiable
+predictions it makes.
 
 This run uses the existing CKA code; no algorithmic changes are
 required, only logging.

@@ -138,16 +138,28 @@ sbatch --array=0-$LAST_T DRAFT.sh                 # NYU Torch: 3 tasks per GPU
 - Per-task `.npy` matrices in
   `/scratch/yd2247/sgcrl/logs/continual_checkpoints/actor_cka_critic_cka_tid_False_heads_True/seed_<S>/pool_cosine_{actor,critic}_task{k}.npy`.
 
-**Pass criterion (plan §3.1, §3.2):**
+**Pass criterion (REVISED 2026-05-12 after one run; see
+`docs/2026-05-12_cka_failure_results.md`):**
 
 - task 1: `n_active=0`, alpha metrics flat.
 - task 2: `n_active=1`, off-diagonal stats are NaN.
-- task 3+: `n_active >= 2`. **`pool_cos_mean_offdiag > 0.9`** AND
-  **`mixture_norm < 0.1`** sustained through training.
+- task 3+: `n_active >= 2`. **`mixture_norm < 0.1`** sustained
+  through training (this is the core failure signature).
 
-If both hold, the audit hypothesis is empirically supported. If
-`mean_offdiag < 0.5` or `mixture_norm > 0.5` at task 3+, the audit is
-wrong — the paper needs a different explanation for CKA's failure.
+The original criterion also required `pool_cos_mean_offdiag > 0.9`,
+on the conjecture that pool vectors collapse to one direction. The
+first seed of C0 falsified that piece: actor `mean_offdiag` ~ 0.17
+(stable across tasks 3-9), critic ~ 0. Pool vectors are diverse; the
+failure mode is in the **gradient flow**, not the pool geometry.
+Updated paper narrative is in
+`docs/2026-05-12_cka_failure_results.md`.
+
+One additional seed (seed 6 or 7) is needed to confirm the cosine
+numbers reproduce. If they do, the negative-result figure shows
+(i) `mixture_norm` decaying from non-trivial values to ~0 within
+each task, and (ii) `mean_offdiag` staying well below 0.9 — the
+two together being the quantitative signature of "mixture lives in
+the gradient null space of contrastive losses".
 
 **Paper mapping:** negative-result figure in the analysis section.
 
