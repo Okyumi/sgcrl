@@ -1,0 +1,13 @@
+task_id,env,seed,critic_mode,dyn_aux_weight,state,id,eval_this_env,evaluator_success_rate
+0,sawyer_hammer,5,decomposed,n/a,finished,kasyumio,0.5,0.4
+0,sawyer_hammer,6,decomposed,n/a,finished,y2ujgno0,1.0,1.0
+0,sawyer_hammer,7,decomposed,n/a,finished,32vu3g8b,0.9,0.8
+0,sawyer_hammer,5,persistent,n/a,finished,yya4w369,0.8,0.9
+0,sawyer_hammer,6,persistent,n/a,finished,fiajmg89,1.0,1.0
+0,sawyer_hammer,7,persistent,n/a,finished,q8mnfikj,0.4,0.7
+1,sawyer_push_wall,5,decomposed,n/a,crashed,zvdgfgu6,,
+1,sawyer_push_wall,6,decomposed,n/a,crashed,ljpewm8a,,
+1,sawyer_push_wall,7,decomposed,n/a,crashed,oto0gcg9,,
+1,sawyer_push_wall,5,persistent,n/a,crashed,18aajcpb,,
+1,sawyer_push_wall,6,persistent,n/a,crashed,i8fhjgxe,,
+1,sawyer_push_wall,7,persistent,n/a,crashed,ms94qhwo,,

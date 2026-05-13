@@ -1,0 +1,7 @@
+task_id,env,seed,critic_mode,best,end,mean,n_evals
+0,sawyer_hammer,5,decomposed,1.0,0.4,0.8044025157232706,159
+0,sawyer_hammer,6,decomposed,1.0,1.0,0.9421383647798743,159
+0,sawyer_hammer,7,decomposed,1.0,0.8,0.9094339622641509,159
+0,sawyer_hammer,5,persistent,1.0,0.9,0.8490566037735849,159
+0,sawyer_hammer,6,persistent,1.0,1.0,0.889937106918239,159
+0,sawyer_hammer,7,persistent,1.0,0.7,0.7616352201257861,159

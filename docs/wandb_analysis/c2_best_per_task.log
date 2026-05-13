@@ -1,0 +1,37 @@
+wandb: [wandb.Api()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+  task0_sawyer_hammer_s5: n_evals=159, best=1.000, end=1.000
+  task0_sawyer_hammer_s7: n_evals=159, best=1.000, end=0.800
+  task0_sawyer_hammer_s6: n_evals=159, best=1.000, end=0.900
+  task1_sawyer_push_wall_s5: n_evals=159, best=1.000, end=0.000
+  task1_sawyer_push_wall_s6: n_evals=159, best=1.000, end=1.000
+  task1_sawyer_push_wall_s7: n_evals=159, best=1.000, end=0.900
+  task2_sawyer_faucet_close_s5: n_evals=159, best=0.900, end=0.500
+  task2_sawyer_faucet_close_s6: n_evals=159, best=0.800, end=0.400
+  task2_sawyer_faucet_close_s7: n_evals=159, best=0.900, end=0.100
+  task3_sawyer_push_back_s6: n_evals=159, best=1.000, end=0.300
+  task3_sawyer_push_back_s5: n_evals=159, best=1.000, end=1.000
+  task3_sawyer_push_back_s7: n_evals=159, best=1.000, end=1.000
+  task4_sawyer_stick_pull_s6: n_evals=159, best=1.000, end=0.300
+  task4_sawyer_stick_pull_s7: n_evals=159, best=1.000, end=0.300
+  task4_sawyer_stick_pull_s5: n_evals=159, best=1.000, end=0.700
+  task5_sawyer_handle_press_side_s6: n_evals=159, best=0.400, end=0.100
+  task5_sawyer_handle_press_side_s7: n_evals=159, best=0.500, end=0.100
+  task5_sawyer_handle_press_side_s5: n_evals=159, best=0.300, end=0.000
+  task6_sawyer_push_s6: n_evals=159, best=1.000, end=0.100
+  task6_sawyer_push_s5: n_evals=159, best=1.000, end=0.500
+  task6_sawyer_push_s7: n_evals=159, best=1.000, end=0.200
+  task7_sawyer_shelf_place_s6: n_evals=159, best=1.000, end=0.500
+  task7_sawyer_shelf_place_s7: n_evals=159, best=1.000, end=0.900
+  task7_sawyer_shelf_place_s5: n_evals=159, best=0.900, end=0.200
+
+===== C2 best-during-training success rate (mean ± stderr over 3 seeds) =====
+  k=0  sawyer_hammer                 best=1.000 ± 0.000   end=0.900 ± 0.058   mean-over-task=0.895   (n=3)
+  k=1  sawyer_push_wall              best=1.000 ± 0.000   end=0.633 ± 0.318   mean-over-task=0.749   (n=3)
+  k=2  sawyer_faucet_close           best=0.867 ± 0.033   end=0.333 ± 0.120   mean-over-task=0.361   (n=3)
+  k=3  sawyer_push_back              best=1.000 ± 0.000   end=0.767 ± 0.233   mean-over-task=0.793   (n=3)
+  k=4  sawyer_stick_pull             best=1.000 ± 0.000   end=0.433 ± 0.133   mean-over-task=0.537   (n=3)
+  k=5  sawyer_handle_press_side      best=0.400 ± 0.058   end=0.067 ± 0.033   mean-over-task=0.072   (n=3)
+  k=6  sawyer_push                   best=1.000 ± 0.000   end=0.267 ± 0.120   mean-over-task=0.536   (n=3)
+  k=7  sawyer_shelf_place            best=0.967 ± 0.033   end=0.533 ± 0.203   mean-over-task=0.390   (n=3)
+
+Saved: docs/wandb_analysis/csv/c2_best_per_task_{seeds,agg}.csv

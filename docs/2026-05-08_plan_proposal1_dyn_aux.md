@@ -129,15 +129,18 @@ is confirmed and the paper has its empirical reason for CKA's failure.
 
 **REVISED 2026-05-12 (after running the C0 diagnostic):** the pool
 vectors do NOT collapse. Observed actor `mean_offdiag` ~ 0.17,
-critic ~ 0. The hypothesis above is refuted. The real reason CKA
-fails for contrastive GCRL is documented in
-`docs/2026-05-12_cka_failure_results.md`: contrastive losses are
-shift-invariant in state-independent additive perturbations, so
-the mixture term lives in the gradient null space regardless of
-pool quality. The `mixture_norm` half of the diagnostic (§3.2) is
-still the correct signature; the cosine-similarity half should be
-reframed as "pool quality is sufficient; the failure is in the
-gradient flow".
+critic ~ 0. The hypothesis above is refuted.
+
+**FURTHER REVISED 2026-05-13 (after pulling all 3-seed W&B data):**
+the "gradient null space" explanation in
+`docs/2026-05-12_cka_failure_results.md` is also wrong. The actor
+mixture does decay to ~0.02 (near zero), but the critic mixture
+decays only to ~0.5 (not zero) and the critic `α_scale` actively
+**grows** on later tasks (up to ~2.0 at k=8). Both halves of the
+original collapse hypothesis are refuted. See
+`docs/2026-05-13_wandb_findings.md` for the quantitative table and
+`docs/2026-05-13_revised_hypothesis_plan.md` for a fresh
+hypothesis-test plan.
 
 ### 3.2 Per-task contribution of `v_k` vs the mixture term
 
@@ -406,13 +409,20 @@ claim becomes quantitative.
 **REVISED 2026-05-12 (after the C0 diagnostic ran):** the
 mixture-norm half of the expected pattern held; the cosine
 alignment half did NOT (vectors stayed roughly orthogonal, mean
-actor cosine ~0.17, critic ~0). The empirical claim is therefore
-*not* "vectors collapse to one direction" but rather "the
-mixture term lives in the gradient null space of contrastive
-losses". See `docs/2026-05-12_cka_failure_results.md` for the full
-revised hypothesis (state-independent additive perturbations being
-shift-invariants of softmax / argmax) and the falsifiable
-predictions it makes.
+actor cosine ~0.17, critic ~0). The empirical claim was
+reframed as "the mixture term lives in the gradient null space of
+contrastive losses".
+
+**FURTHER REVISED 2026-05-13 (after pulling 3-seed W&B data):**
+the "gradient null space" reframing is also wrong. Critic
+mixture-norm decays to ~0.5 (not zero) and critic `α_scale`
+actively **grows** on later tasks. The mixture term is alive on
+the critic side. The actor mixture does die, so the failure mode
+is **asymmetric across actor vs critic**, which neither of the
+prior hypotheses predicted. See
+`docs/2026-05-13_wandb_findings.md` for numbers and
+`docs/2026-05-13_revised_hypothesis_plan.md` for the fresh
+hypothesis-test plan.
 
 This run uses the existing CKA code; no algorithmic changes are
 required, only logging.

@@ -1,0 +1,23 @@
+wandb: [wandb.Api()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+===== C0 (CKA cell) best-during-training success rate per task =====
+  k=0  sawyer_hammer                 best=1.000 ± 0.000   end=0.867 ± 0.133   mean-over-task=0.866   (n=3)
+  k=1  sawyer_push_wall              best=1.000 ± 0.000   end=0.700 ± 0.058   mean-over-task=0.683   (n=3)
+  k=2  sawyer_faucet_close           best=0.733 ± 0.088   end=0.167 ± 0.033   mean-over-task=0.315   (n=3)
+  k=3  sawyer_push_back              best=1.000 ± 0.000   end=0.933 ± 0.033   mean-over-task=0.608   (n=3)
+  k=4  sawyer_stick_pull             best=1.000 ± 0.000   end=0.433 ± 0.133   mean-over-task=0.486   (n=3)
+  k=5  sawyer_handle_press_side      best=0.167 ± 0.033   end=0.000 ± 0.000   mean-over-task=0.008   (n=3)
+  k=6  sawyer_push                   best=1.000 ± 0.000   end=0.233 ± 0.186   mean-over-task=0.344   (n=3)
+  k=7  sawyer_shelf_place            best=0.933 ± 0.033   end=0.600 ± 0.058   mean-over-task=0.345   (n=3)
+  k=8  sawyer_window_close           best=0.433 ± 0.067   end=0.000 ± 0.000   mean-over-task=0.045   (n=3)
+  k=9  sawyer_peg_unplug_side        best=0.700 ± 0.058   end=0.333 ± 0.120   mean-over-task=0.238   (n=3)
+
+===== C1 task=0 best-during-training: persistent vs decomposed =====
+ task_id           env  seed critic_mode  best  end     mean  n_evals
+       0 sawyer_hammer     5  decomposed   1.0  0.4 0.804403      159
+       0 sawyer_hammer     6  decomposed   1.0  1.0 0.942138      159
+       0 sawyer_hammer     7  decomposed   1.0  0.8 0.909434      159
+       0 sawyer_hammer     5  persistent   1.0  0.9 0.849057      159
+       0 sawyer_hammer     6  persistent   1.0  1.0 0.889937      159
+       0 sawyer_hammer     7  persistent   1.0  0.7 0.761635      159
+  critic_mode=decomposed   best=1.000 ± 0.000   end=0.733 ± 0.176   mean=0.885   (n=3)
+  critic_mode=persistent   best=1.000 ± 0.000   end=0.867 ± 0.088   mean=0.834   (n=3)

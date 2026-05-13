@@ -138,28 +138,23 @@ sbatch --array=0-$LAST_T DRAFT.sh                 # NYU Torch: 3 tasks per GPU
 - Per-task `.npy` matrices in
   `/scratch/yd2247/sgcrl/logs/continual_checkpoints/actor_cka_critic_cka_tid_False_heads_True/seed_<S>/pool_cosine_{actor,critic}_task{k}.npy`.
 
-**Pass criterion (REVISED 2026-05-12 after one run; see
-`docs/2026-05-12_cka_failure_results.md`):**
+**Pass criterion (UPDATED 2026-05-13 after 3-seed run analysis; see
+`docs/2026-05-13_wandb_findings.md`):**
 
-- task 1: `n_active=0`, alpha metrics flat.
-- task 2: `n_active=1`, off-diagonal stats are NaN.
-- task 3+: `n_active >= 2`. **`mixture_norm < 0.1`** sustained
-  through training (this is the core failure signature).
+The original criterion (`pool_cos_mean_offdiag > 0.9` AND
+`mixture_norm < 0.1`) is REFUTED. Both halves failed:
 
-The original criterion also required `pool_cos_mean_offdiag > 0.9`,
-on the conjecture that pool vectors collapse to one direction. The
-first seed of C0 falsified that piece: actor `mean_offdiag` ~ 0.17
-(stable across tasks 3-9), critic ~ 0. Pool vectors are diverse; the
-failure mode is in the **gradient flow**, not the pool geometry.
-Updated paper narrative is in
-`docs/2026-05-12_cka_failure_results.md`.
+- Pool cosine: actor ~ 0.17, critic ~ 0 (neither near 0.9).
+- Mixture norm: actor decays to ~0.02 (passes), critic decays only
+  to ~0.5 (fails the <0.1 threshold).
+- Critic `α_scale` actively GROWS on later tasks (k=5..8 reaches
+  1.4-2.0), opposite to the predicted decay-to-zero.
 
-One additional seed (seed 6 or 7) is needed to confirm the cosine
-numbers reproduce. If they do, the negative-result figure shows
-(i) `mixture_norm` decaying from non-trivial values to ~0 within
-each task, and (ii) `mean_offdiag` staying well below 0.9 — the
-two together being the quantitative signature of "mixture lives in
-the gradient null space of contrastive losses".
+The negative result for the paper is real (CKA-RL fails on the
+contrastive eval suite), but the **mechanism** is unresolved. C0 is
+therefore reclassified from "diagnostic run" to "exploratory run".
+A fresh hypothesis-test plan is in
+`docs/2026-05-13_revised_hypothesis_plan.md`.
 
 **Paper mapping:** negative-result figure in the analysis section.
 
