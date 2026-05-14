@@ -1,0 +1,11 @@
+{
+  "raw_dir": "results/data/raw",
+  "groups": [
+    "for_real",
+    "real1",
+    "real2"
+  ],
+  "reference_cell": "actor=reset-critic=reset",
+  "n_history_rows": 113049,
+  "n_cells": 9
+}

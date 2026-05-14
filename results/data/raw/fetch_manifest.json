@@ -1,0 +1,24 @@
+{
+  "project": "nyuad_mmvc/continual_gcrl_paper",
+  "groups": [
+    "for_real",
+    "real1",
+    "real2"
+  ],
+  "fetched_at_utc": "2026-05-14T09:14:52Z",
+  "include_crashed": false,
+  "per_group": {
+    "for_real": {
+      "n_runs_discovered": 409,
+      "n_runs_kept": 376
+    },
+    "real1": {
+      "n_runs_discovered": 193,
+      "n_runs_kept": 188
+    },
+    "real2": {
+      "n_runs_discovered": 162,
+      "n_runs_kept": 147
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "group": "real2",
+  "project": "nyuad_mmvc/continual_gcrl_paper",
+  "fetched_at_utc": "2026-05-14T09:22:32Z",
+  "n_runs_discovered": 162,
+  "n_runs_kept": 147,
+  "n_skipped_state": 15,
+  "n_skipped_name_pattern": 0,
+  "n_no_history": 0,
+  "include_crashed": false,
+  "history_keys": [
+    "evaluator/env_steps",
+    "evaluator/success_rate"
+  ],
+  "run_fields": [
+    "actor_mode",
+    "critic_mode",
+    "seed",
+    "env_name",
+    "use_task_id",
+    "adapt_heads_only",
+    "encoder_from_base",
+    "k_max",
+    "k_sample_k",
+    "intra_eval_previous_tasks",
+    "dyn_aux_weight",
+    "phi_task_width",
+    "phi_task_depth"
+  ]
+}
