@@ -49,6 +49,7 @@ SINGLE_TASK="${SINGLE_TASK:-}"
 
 # Decomposed-critic + diagnostic flags (defaults preserve prior behaviour).
 DYN_AUX_WEIGHT="${DYN_AUX_WEIGHT:-1.0}"
+DYN_AUX_AFTER_TASK0="${DYN_AUX_AFTER_TASK0:--1.0}"
 PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
 PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-4}"
 LOG_POOL_COSINE="${LOG_POOL_COSINE:-true}"
@@ -148,6 +149,7 @@ fi
 
 # Decomposed-critic + diagnostic flags
 FLAGS="$FLAGS --dyn_aux_weight=$DYN_AUX_WEIGHT"
+FLAGS="$FLAGS --dyn_aux_after_task0=$DYN_AUX_AFTER_TASK0"
 FLAGS="$FLAGS --phi_task_width=$PHI_TASK_WIDTH"
 FLAGS="$FLAGS --phi_task_depth=$PHI_TASK_DEPTH"
 if [ "$LOG_POOL_COSINE" = "true" ]; then

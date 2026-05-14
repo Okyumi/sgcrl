@@ -79,6 +79,7 @@ ACTOR_RESET_MAX="${ACTOR_RESET_MAX:-3}"
 # Per-cell overrides come from experiment_configs.py via the eval line
 # below; cells that don't set these get the dataclass / flag defaults.
 DYN_AUX_WEIGHT="${DYN_AUX_WEIGHT:-1.0}"
+DYN_AUX_AFTER_TASK0="${DYN_AUX_AFTER_TASK0:--1.0}"
 PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
 PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-4}"
 LOG_POOL_COSINE="${LOG_POOL_COSINE:-true}"
@@ -197,6 +198,7 @@ build_flags() {
   # surrounding shell environment so per-cell overrides from
   # experiment_configs.py take effect.
   _FLAGS="$_FLAGS --dyn_aux_weight=$DYN_AUX_WEIGHT"
+  _FLAGS="$_FLAGS --dyn_aux_after_task0=$DYN_AUX_AFTER_TASK0"
   _FLAGS="$_FLAGS --phi_task_width=$PHI_TASK_WIDTH"
   _FLAGS="$_FLAGS --phi_task_depth=$PHI_TASK_DEPTH"
   if [ "$LOG_POOL_COSINE" = "true" ]; then
@@ -295,7 +297,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "LSE penalty     : $LOGSUMEXP_PENALTY"
     echo "Single task     : ${SINGLE_TASK:-none}"
     echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
-    echo "Decomp critic   : dyn_aux_weight=$DYN_AUX_WEIGHT phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
+    echo "Decomp critic   : dyn_aux_weight=$DYN_AUX_WEIGHT (after_task0=$DYN_AUX_AFTER_TASK0) phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
     echo "Diagnostics     : log_pool_cosine=$LOG_POOL_COSINE log_mixture_norm=$LOG_MIXTURE_NORM log_probe_data=$LOG_PROBE_DATA"
     echo "Log dir         : $LOG_DIR"
     echo "Checkpoint dir  : $CHECKPOINT_DIR"

@@ -38,8 +38,9 @@ absl defaults so omitting them preserves prior behaviour):
 | Flag | Type | Default | Purpose |
 |---|---|---|---|
 | `dyn_aux_weight` | float | `1.0` | `mu` on `L_dyn` (decomposed critic only). `0.0` for the regression-check cell. |
+| `dyn_aux_after_task0` | float | `-1.0` | If `>= 0`, override `dyn_aux_weight` starting at task 1 (k=0 still uses `dyn_aux_weight`). `-1.0` = disabled. Used by the **C2b** ablation cell. See `docs/2026-05-14_c2_ldyn_interpretation.md`. |
 | `phi_task_width` | int | `256` | width of the per-task additive encoder |
-| `phi_task_depth` | int | `2` | depth of the per-task additive encoder |
+| `phi_task_depth` | int | `4` | depth of the per-task additive encoder (must be a multiple of 4 because `ResidualMLP`'s block size is 4). Default updated 2026-05-14 from `2` → `4`. |
 | `log_pool_cosine` | bool | `true` | per-task pool cosine matrices for D1–D4 |
 | `log_mixture_norm` | bool | `false` | per-step `||sum_j a_j v_j|| / ||v_k||` for D5 |
 | `log_probe_data` | bool | `false` | per-task `(obs, action)` dump for D6 |
@@ -332,6 +333,94 @@ references plan §3.4 thresholds.
 
 ---
 
+### C2b — dynamics aux **only at task 0** (post-hoc ablation)
+
+**Implements:** the question raised in
+`docs/2026-05-14_c2_ldyn_interpretation.md`: is `L_dyn` doing real
+work during tasks 1..9 or is it just a task-0 initialiser for
+`b_shared`?
+
+**Gates:** C2 has at least one finished seed (so we have a comparison
+curve). Runs in parallel with C3 if C2 has already passed.
+
+New flag: `--dyn_aux_after_task0=0.0`. The runner uses
+`dyn_aux_weight=1.0` at k=0 (so `b_shared` gets its dynamics-shaped
+initialisation) and switches to `0.0` for k=1..9. If C2b matches C2,
+`L_dyn` is a one-shot initialiser and the paper text can be
+simplified accordingly. If C2b is materially worse, the aux is
+providing a continual constraint that we underestimated.
+
+```python
+# experiment_configs.py — CELLS for C2b
+CELLS = [
+    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+     'dyn_aux_weight': 1.0, 'dyn_aux_after_task0': 0.0,
+     'log_probe_data': True},
+    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 6,
+     'dyn_aux_weight': 1.0, 'dyn_aux_after_task0': 0.0,
+     'log_probe_data': True},
+    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
+     'dyn_aux_weight': 1.0, 'dyn_aux_after_task0': 0.0,
+     'log_probe_data': True},
+]
+ACTOR_MODES = []; CRITIC_MODES = []; SEEDS = []
+```
+
+The scaffolding is already in `experiment_configs.py` as a
+commented-out block; uncomment when ready to launch.
+
+Submit (NYUAD):
+
+```bash
+cd /scratch/yd2247/sgcrl
+git pull origin section3_done
+
+N=$(python experiment_configs.py --total)              # 3
+LAST=$(( (N + 2 - 1) / 2 - 1 ))                        # 1
+K_MAX=5 NETWORK_WIDTH=1024 sbatch --array=0-$LAST --time=72:00:00 draft_4.sh
+```
+
+Submit (NYU Torch):
+
+```bash
+N=$(python experiment_configs.py --total)
+LAST_T=$(( (N + 3 - 1) / 3 - 1 ))                      # 0
+K_MAX=5 NETWORK_WIDTH=1024 sbatch --array=0-$LAST_T --time=72:00:00 DRAFT.sh
+```
+
+**Pass / read criteria:**
+
+- Per-task success curves of C2b are within ±0.05 of C2 on `k >= 1`
+  on at least 2/3 seeds → conclude `L_dyn` is a task-0 initialiser
+  only; recommend keeping it for the warm-start but stating so in
+  the paper.
+- C2b strictly under C2 by >= 0.05 on a majority of post-k=0 tasks →
+  the auxiliary is providing continual signal; keep `dyn_aux_weight=1.0`
+  throughout and revise the writeup.
+- C2b strictly above C2 on a majority of post-k=0 tasks → unexpected;
+  most likely a sign the auxiliary is *underconstraining* `b_shared`
+  late in the curriculum (the L_dyn floor on tasks 1..9 was already
+  at ~1e-4; turning it off completely removes a constant noise term).
+  Investigate before drawing conclusions.
+
+**Ckpt-path note (important for this cell).** As of the 2026-05-14
+`_ckpt_path` fix, `critic_mode='decomposed'` checkpoints are keyed
+by `(actor_mode, critic_mode, use_task_id, adapt_heads_only,
+dyn_aux_weight, phi_task_width, phi_task_depth)`. The runner does
+not include `dyn_aux_after_task0` in the key — the per-task override
+is a *training-time* schedule, not a network-shape parameter, and
+the resulting checkpoint at any task `k >= 1` for C2b is still a
+valid `dyn_aux_weight=1.0` model. This means **you can resume a C2b
+run from a C2 task-0 checkpoint** (same key) and only the post-task-0
+training changes. This is intentional. If you want C2b kept under a
+separate directory anyway, override `CHECKPOINT_DIR` on the sbatch
+line.
+
+**Paper mapping:** appendix table, row `dyn_aux at k=0 only` next to
+the full-grid G2/G3/G4 columns.
+
+---
+
 ### C3 — N7: full ablation grid (5 cells × 5 seeds × 10 tasks)
 
 **Implements:** N7. **Gates:** C2 passes all three criteria.
@@ -471,6 +560,19 @@ days 3–4; C4 is analysis only.
   `--critic_mode=decomposed` is passed (N4b). Cells from different
   configurations live under different `_ckpt_path` config keys, so
   there is no accidental cross-pollination.
+- **`_ckpt_path` was extended on 2026-05-14** to disambiguate
+  decomposed-critic checkpoints by `(dyn_aux_weight, phi_task_width,
+  phi_task_depth)`. New decomposed checkpoints land at
+  `actor_<a>_critic_decomposed_tid_<b>_heads_<c>_dyn<w:.3f>_pt<W>x<D>/seed_<S>/task_<k>.pkl`.
+  Persistent / CKA paths are unchanged. **Migration:** legacy
+  decomposed checkpoints (written before 2026-05-14) sit under the
+  un-disambiguated path. `load_ckpt` raises a clear `FileNotFoundError`
+  pointing at both paths and asking the user to `mv` the legacy file
+  to the new path *if they remember the original config*. If you do
+  not know the original `(dyn_aux_weight, phi_task_width,
+  phi_task_depth)` triplet for a legacy checkpoint, re-run from
+  task 0; do not guess. See `docs/2026-05-14_c1_crash_and_ckpt_collision.md`
+  for the analysis that motivated this change.
 - **`log_probe_data=true` adds one `next(iterator)` and a ~10 KB
   npz dump per task** — negligible relative to the 8M-step training.
 - **`log_mixture_norm=true` adds one extra norm per inner step** in
@@ -487,9 +589,12 @@ days 3–4; C4 is analysis only.
 - `2026-05-08_decomposed_critic_n4b.md` (runner-glue log)
 - `2026-05-08_d5_mixture_norm.md` (mixture_norm helper + wiring)
 - `2026-05-08_d6_linear_probe.md` (probe data dump + eval script)
-- `experiment_configs.py` (CELLS list + Cartesian grid)
+- `2026-05-14_c1_crash_and_ckpt_collision.md` (motivates the 2026-05-14 `_ckpt_path` fix)
+- `2026-05-14_c2_ldyn_interpretation.md` (motivates the C2b cell)
+- `2026-05-14_mechanism_qa.md` (why decomposed > CKA; C2 task-8 read)
+- `experiment_configs.py` (CELLS list + Cartesian grid; C2b entries staged)
 - `draft_3.sh`, `draft_4.sh`, `DRAFT.sh`, `submit_continual_torch.sh`
-  (the four launchers)
+  (the four launchers — all thread `DYN_AUX_AFTER_TASK0` as of 2026-05-14)
 
 When the runbook gets stale (cells move, criteria change, new cells
 added), update `implementation_tracking.md` first, then propagate

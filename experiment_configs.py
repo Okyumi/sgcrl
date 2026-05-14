@@ -104,6 +104,25 @@ CELLS: list = [
     {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
      'dyn_aux_weight': 1.0, 'log_probe_data': True},
 
+    # ---- C2b: dyn-aux only at task 0; off afterward -----------------
+    # Tests whether the dynamics auxiliary is doing real work during
+    # tasks 1..9 or just acting as a task-0 initialiser for b_shared.
+    # See docs/2026-05-14_c2_ldyn_interpretation.md for the rationale.
+    # The new --dyn_aux_after_task0=0.0 flag overrides dyn_aux_weight
+    # starting at task 1. If C2b matches C2, the aux is purely a
+    # task-0 init and we can simplify the algorithm description in
+    # the paper. If C2b is worse, the aux is providing a continual
+    # constraint we underestimated.
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+    #  'dyn_aux_weight': 1.0, 'dyn_aux_after_task0': 0.0,
+    #  'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 6,
+    #  'dyn_aux_weight': 1.0, 'dyn_aux_after_task0': 0.0,
+    #  'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
+    #  'dyn_aux_weight': 1.0, 'dyn_aux_after_task0': 0.0,
+    #  'log_probe_data': True},
+
     # ---- C3: full ablation grid (N7) --------------------------------
     # G1 baseline (actor_mode=reset, critic_mode=persistent), 5 seeds
     # G2 dyn-aux off  (dyn_aux_weight=0.0, decomposed), 5 seeds

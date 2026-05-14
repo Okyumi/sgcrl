@@ -52,6 +52,9 @@ decomposed column is added, not substituted.
 | N6 | Single-cell sanity experiment with `dyn_aux_weight=1.0` | B | blocked on N5 | section 8 of plan |
 | N7 | Full ablation grid (5 cells × 5 seeds × 10 tasks) | B | blocked on N6 | section 8 of plan |
 | N8 | Mixed-task dynamics buffer (option B) — only if N6 fails the linear probe | B | held | section 7 of plan |
+| N9 | `_ckpt_path` extended to disambiguate decomposed checkpoints by `(dyn_aux_weight, phi_task_width, phi_task_depth)` | B | shipped (2026-05-14) | Persistent / CKA paths unchanged. `load_ckpt` raises `FileNotFoundError` with a migration message when only the legacy un-disambiguated path exists. Six call sites updated. See runbook "Common pitfalls" entry and `docs/2026-05-14_c1_crash_and_ckpt_collision.md`. |
+| N10 | `--dyn_aux_after_task0` flag + per-task override for the C2b ablation cell | B | shipped (2026-05-14), cell staged in `experiment_configs.py` (commented out) | Tests whether `L_dyn` is doing real work on `k >= 1` or just acting as a task-0 initialiser. Threaded through all four submit scripts (`DRAFT.sh`, `draft_3.sh`, `draft_4.sh`, `submit_continual_torch.sh`) as `DYN_AUX_AFTER_TASK0` env var, default `-1.0` (disabled). See `docs/2026-05-14_c2_ldyn_interpretation.md` and the C2b section of the runbook. |
+| N11 | Mechanism writeup: why `b_shared + phi_task` beats CKA mixture, plus C2 task-8 read | A & B | shipped (2026-05-14) | See `docs/2026-05-14_mechanism_qa.md`. Decomposed critic escapes the actor-argmax + InfoNCE-softmax null space because `phi_task(s,a)` is state-and-action-dependent. C2 task-8 climb is "too early to claim" — 25 evaluator steps vs C0's 159. |
 
 ---
 
