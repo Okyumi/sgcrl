@@ -191,6 +191,15 @@ flags.DEFINE_float('dyn_aux_weight', 1.0,
                    'Weight on the masked-dynamics auxiliary loss (mu) when '
                    'critic_mode="decomposed". 0.0 disables L_dyn (used for '
                    'the regression-check cell N5). Plan section 6.')
+flags.DEFINE_float('dyn_aux_after_task0', -1.0,
+                   'If non-negative, override dyn_aux_weight to this value '
+                   'starting at task 1 (the base task k=0 still uses '
+                   '--dyn_aux_weight). Default -1.0 means "do nothing". '
+                   'Used by the C2b ablation cell: dyn_aux_weight=1.0 at '
+                   'k=0 only, 0.0 afterward, to test whether the dynamics '
+                   'auxiliary contributes anything beyond the task-0 '
+                   'initialiser role identified in '
+                   'docs/2026-05-14_c2_ldyn_interpretation.md.')
 flags.DEFINE_integer('phi_task_width', 256,
                      'Width of the per-task additive encoder phi_task '
                      '(critic_mode="decomposed" only). Smaller than the '
@@ -233,22 +242,42 @@ FIXED_GOALS = {
 # ---- checkpoint utilities ------------------------------------------------
 
 def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
-               use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
+               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
+               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None):
   """Checkpoint path keyed by all ablation-relevant config.
 
-  Structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
-  This ensures different ablation configurations never share checkpoints.
+  Base structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
+
+  When ``critic_mode == 'decomposed'`` AND all three decomposed-specific
+  arguments are provided, the directory key is extended with
+  ``_dyn{w:.3f}_pt{W}x{D}`` so that different ``dyn_aux_weight`` /
+  ``phi_task_width`` / ``phi_task_depth`` sweeps do NOT silently
+  overwrite each other's checkpoints.
+
+  Existing decomposed checkpoints written before 2026-05-14 sit under
+  the un-extended path; callers should be prepared to print a
+  migration notice if the new path is missing but the old path exists.
+
+  Persistent / cka paths are unchanged.
   """
   config_key = (f'actor_{actor_mode}_critic_{critic_mode}'
                 f'_tid_{use_task_id}_heads_{adapt_heads_only}')
+  if critic_mode == 'decomposed' and all(
+      v is not None for v in (dyn_aux_weight, phi_task_width, phi_task_depth)):
+    config_key += (f'_dyn{float(dyn_aux_weight):.3f}'
+                   f'_pt{int(phi_task_width)}x{int(phi_task_depth)}')
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
 
 def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
-              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
+              use_task_id=True, adapt_heads_only=True, actor_mode='cka',
+              dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
-                     adapt_heads_only, actor_mode)
+                     adapt_heads_only, actor_mode,
+                     dyn_aux_weight=dyn_aux_weight,
+                     phi_task_width=phi_task_width,
+                     phi_task_depth=phi_task_depth)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_util.tree_map(
@@ -260,10 +289,32 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
 
 
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
-              use_task_id=True, adapt_heads_only=True, actor_mode='cka'):
+              use_task_id=True, adapt_heads_only=True, actor_mode='cka',
+              dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
-                     adapt_heads_only, actor_mode)
+                     adapt_heads_only, actor_mode,
+                     dyn_aux_weight=dyn_aux_weight,
+                     phi_task_width=phi_task_width,
+                     phi_task_depth=phi_task_depth)
   if not os.path.exists(path):
+    # Migration notice: check whether a legacy (pre-2026-05-14)
+    # un-disambiguated decomposed checkpoint exists at the OLD path.
+    if critic_mode == 'decomposed':
+      legacy_path = _ckpt_path(
+          ckpt_dir, task_id, seed, critic_mode, use_task_id,
+          adapt_heads_only, actor_mode,
+          dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None)
+      if os.path.exists(legacy_path):
+        raise FileNotFoundError(
+            f'No checkpoint at the disambiguated path {path}, but a '
+            f'legacy un-disambiguated checkpoint exists at {legacy_path}. '
+            f'This file was written before the 2026-05-14 ckpt-path fix '
+            f'and is ambiguous: it could correspond to any '
+            f'(dyn_aux_weight, phi_task_width, phi_task_depth) configuration. '
+            f'To recover, move it to the new path manually if you remember '
+            f'the original config:\n'
+            f'  mv {legacy_path} {path}\n'
+            f'Otherwise re-run from task 0.')
     raise FileNotFoundError(
         f'No checkpoint found at {path}. Make sure the previous run used '
         f'the same configuration (seed={seed}, actor_mode={actor_mode}, '
@@ -969,7 +1020,10 @@ def train_single_task(
       probe_path = os.path.join(
           os.path.dirname(_ckpt_path(
               FLAGS.checkpoint_dir, task_id, seed, critic_mode,
-              FLAGS.use_task_id, adapt_heads_only, actor_mode)),
+              FLAGS.use_task_id, adapt_heads_only, actor_mode,
+              dyn_aux_weight=FLAGS.dyn_aux_weight,
+              phi_task_width=FLAGS.phi_task_width,
+              phi_task_depth=FLAGS.phi_task_depth)),
           f'probe_data_task{task_id}_seed{seed}.npz',
       )
       os.makedirs(os.path.dirname(probe_path), exist_ok=True)
@@ -1118,7 +1172,10 @@ def train_single_task(
       mat_path = os.path.join(
           os.path.dirname(_ckpt_path(
               FLAGS.checkpoint_dir, task_id, seed, critic_mode,
-              FLAGS.use_task_id, adapt_heads_only, actor_mode)),
+              FLAGS.use_task_id, adapt_heads_only, actor_mode,
+              dyn_aux_weight=FLAGS.dyn_aux_weight,
+              phi_task_width=FLAGS.phi_task_width,
+              phi_task_depth=FLAGS.phi_task_depth)),
           f'pool_cosine_actor_task{task_id}.npy',
       )
       os.makedirs(os.path.dirname(mat_path), exist_ok=True)
@@ -1166,7 +1223,10 @@ def train_single_task(
         mat_path = os.path.join(
             os.path.dirname(_ckpt_path(
                 FLAGS.checkpoint_dir, task_id, seed, critic_mode,
-                FLAGS.use_task_id, adapt_heads_only, actor_mode)),
+                FLAGS.use_task_id, adapt_heads_only, actor_mode,
+                dyn_aux_weight=FLAGS.dyn_aux_weight,
+                phi_task_width=FLAGS.phi_task_width,
+                phi_task_depth=FLAGS.phi_task_depth)),
             f'pool_cosine_critic_task{task_id}.npy',
         )
         os.makedirs(os.path.dirname(mat_path), exist_ok=True)
@@ -1344,7 +1404,10 @@ def main(_):
           critic_mode=FLAGS.critic_mode,
           use_task_id=FLAGS.use_task_id,
           adapt_heads_only=FLAGS.adapt_heads_only,
-          actor_mode=FLAGS.actor_mode)
+          actor_mode=FLAGS.actor_mode,
+          dyn_aux_weight=FLAGS.dyn_aux_weight,
+          phi_task_width=FLAGS.phi_task_width,
+          phi_task_depth=FLAGS.phi_task_depth)
       if os.path.exists(probe_path):
         start_task = probe_tid + 1  # resume from the NEXT task
         print(f'  [auto-resume] Found checkpoint for task {probe_tid} '
@@ -1363,7 +1426,10 @@ def main(_):
                       critic_mode=FLAGS.critic_mode,
                       use_task_id=FLAGS.use_task_id,
                       adapt_heads_only=FLAGS.adapt_heads_only,
-                      actor_mode=FLAGS.actor_mode)
+                      actor_mode=FLAGS.actor_mode,
+                      dyn_aux_weight=FLAGS.dyn_aux_weight,
+                      phi_task_width=FLAGS.phi_task_width,
+                      phi_task_depth=FLAGS.phi_task_depth)
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
@@ -1388,11 +1454,22 @@ def main(_):
     env_name = task_sequence[task_id]
     params['env_name'] = env_name
 
+    # Per-task override for the dynamics auxiliary weight.
+    # If --dyn_aux_after_task0 is set (>= 0) and task_id >= 1, use that
+    # value instead of --dyn_aux_weight. This is the C2b ablation
+    # (dynamics aux only at task 0, off afterward). See
+    # docs/2026-05-14_c2_ldyn_interpretation.md.
+    if FLAGS.dyn_aux_after_task0 >= 0.0 and task_id >= 1:
+      effective_dyn_aux_weight = FLAGS.dyn_aux_after_task0
+    else:
+      effective_dyn_aux_weight = FLAGS.dyn_aux_weight
+    continual_cfg.dyn_aux_weight = effective_dyn_aux_weight
+
     print(f'\n{"="*60}', flush=True)
     print(f'Task {task_id}/{num_tasks - 1}: {env_name}', flush=True)
     phase = 'BASE' if task_id == 0 else 'CONTINUAL'
     steps = continual_cfg.base_steps if task_id == 0 else continual_cfg.steps_per_task
-    print(f'Phase: {phase} | Steps: {steps} | Pool: {len(pool)}/{continual_cfg.k_max}', flush=True)
+    print(f'Phase: {phase} | Steps: {steps} | Pool: {len(pool)}/{continual_cfg.k_max} | dyn_aux_weight={effective_dyn_aux_weight}', flush=True)
     print(f'Critic: {FLAGS.critic_mode} | Task ID: {FLAGS.use_task_id} | '
           f'Heads only: {FLAGS.adapt_heads_only} | '
           f'Encoder base: {FLAGS.encoder_from_base}', flush=True)
@@ -1409,7 +1486,9 @@ def main(_):
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
           project='continual_gcrl_paper',
-          group="measure_similarityof_vk",
+          # group="C0: CKA-failure diagnostic",
+          # group="C1: decomposed regression check and baseline",
+          group="C2: decomposed single-cell sanity",
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'critic_mode': FLAGS.critic_mode,
@@ -1539,7 +1618,10 @@ def main(_):
     save_ckpt(FLAGS.checkpoint_dir, task_id, seed, ckpt_data,
               critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
               adapt_heads_only=FLAGS.adapt_heads_only,
-              actor_mode=FLAGS.actor_mode)
+              actor_mode=FLAGS.actor_mode,
+              dyn_aux_weight=FLAGS.dyn_aux_weight,
+              phi_task_width=FLAGS.phi_task_width,
+              phi_task_depth=FLAGS.phi_task_depth)
 
     # ---- cross-task evaluation (forgetting measurement) ------------------
     if FLAGS.eval_episodes > 0:

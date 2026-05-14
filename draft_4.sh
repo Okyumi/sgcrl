@@ -4,12 +4,12 @@
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=48GB
+#SBATCH --mem=32GB
 #SBATCH --partition=nvidia
-#SBATCH --output=/scratch/zd662/sgcrl/logs/continual/%A_%a.out
-#SBATCH --error=/scratch/zd662/sgcrl/logs/continual/%A_%a.err
+#SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%A_%a.out
+#SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
-#SBATCH --array=0-2
+#SBATCH --array=0-22
 
 # ==========================================================================
 # Continual Goal-Conditioned Contrastive RL – Batch SLURM Launcher
@@ -59,7 +59,7 @@ EVAL_EPISODES="${EVAL_EPISODES:-10}"
 INTRA_EVAL_PREVIOUS="${INTRA_EVAL_PREVIOUS:-false}"
 LOG_RL_METRICS="${LOG_RL_METRICS:-true}"
 K_SAMPLE_K="${K_SAMPLE_K:-0}"
-ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-false}"
+ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
 ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
 USE_20_TASKS="${USE_20_TASKS:-false}"
 
@@ -86,6 +86,7 @@ NEG_BANK_MAX_TASKS="${NEG_BANK_MAX_TASKS:-20}"
 # Per-cell overrides come from experiment_configs.py via the eval line
 # below; cells that don't set these get the dataclass / flag defaults.
 DYN_AUX_WEIGHT="${DYN_AUX_WEIGHT:-1.0}"
+DYN_AUX_AFTER_TASK0="${DYN_AUX_AFTER_TASK0:--1.0}"
 PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
 PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-4}"
 LOG_POOL_COSINE="${LOG_POOL_COSINE:-true}"
@@ -93,9 +94,9 @@ LOG_MIXTURE_NORM="${LOG_MIXTURE_NORM:-false}"
 LOG_PROBE_DATA="${LOG_PROBE_DATA:-false}"
 
 # Directories (all on scratch to avoid home quota issues)
-LOG_DIR="${LOG_DIR:-/scratch/zd662/sgcrl/logs/continual}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/zd662/sgcrl/logs/continual_checkpoints}"
-REPO_DIR="/scratch/zd662/sgcrl"
+LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
+REPO_DIR="/scratch/yd2247/sgcrl"
 
 # ---- environment setup (identical to draft_3.sh — do not modify) ----------
 module purge
@@ -118,9 +119,9 @@ export TF_CPP_MIN_VLOG_LEVEL=3
 export PYTHONUNBUFFERED=1
 
 # Scratch-based caches
-export XDG_CACHE_HOME=/scratch/zd662/.cache
-export PIP_CACHE_DIR=/scratch/zd662/.cache/pip
-export TMPDIR=/scratch/zd662/tmp
+export XDG_CACHE_HOME=/scratch/yd2247/.cache
+export PIP_CACHE_DIR=/scratch/yd2247/.cache/pip
+export TMPDIR=/scratch/yd2247/tmp
 mkdir -p "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
 
 # Conda
@@ -246,6 +247,7 @@ build_flags() {
   # surrounding shell environment so per-cell overrides from
   # experiment_configs.py take effect.
   _FLAGS="$_FLAGS --dyn_aux_weight=$DYN_AUX_WEIGHT"
+  _FLAGS="$_FLAGS --dyn_aux_after_task0=$DYN_AUX_AFTER_TASK0"
   _FLAGS="$_FLAGS --phi_task_width=$PHI_TASK_WIDTH"
   _FLAGS="$_FLAGS --phi_task_depth=$PHI_TASK_DEPTH"
   if [ "$LOG_POOL_COSINE" = "true" ]; then
@@ -354,7 +356,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "Single task    : ${SINGLE_TASK:-none}"
     echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
     echo "Neg bank       : mode=$NEG_BANK_MODE (M=$NEG_BANK_N_PER_STEP, pool=$NEG_BANK_CANDIDATE_POOL, weight=$NEG_BANK_WEIGHT)"
-    echo "Decomp critic  : dyn_aux_weight=$DYN_AUX_WEIGHT phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
+    echo "Decomp critic  : dyn_aux_weight=$DYN_AUX_WEIGHT (after_task0=$DYN_AUX_AFTER_TASK0) phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
     echo "Diagnostics    : log_pool_cosine=$LOG_POOL_COSINE log_mixture_norm=$LOG_MIXTURE_NORM log_probe_data=$LOG_PROBE_DATA"
     echo "Log dir        : $LOG_DIR"
     echo "Checkpoint dir : $CHECKPOINT_DIR"
