@@ -516,6 +516,12 @@ class ContinualDecomposedLearner(acme.Learner):
   def step(self):
     sample = next(self._iterator)
     transitions = types.Transition(*sample.data)
+
+    # Cache the last batch for external use (e.g., rl_metrics in
+    # run_continual_contrastive.py:852). Mirrors the equivalent line
+    # in ContinualContrastiveLearner.step().
+    self._last_transitions = transitions
+
     self._state, metrics = self._update_step(self._state, transitions)
 
     timestamp = time.time()
@@ -555,6 +561,30 @@ class ContinualDecomposedLearner(acme.Learner):
   # Accessors mirroring ContinualContrastiveLearner so the orchestrator
   # can checkpoint and continue without branching.
   # ------------------------------------------------------------------
+
+  @property
+  def last_metrics(self):
+    """Last metrics dict from the most recent step() call."""
+    return getattr(self, '_last_metrics', {})
+
+  @property
+  def last_transitions(self):
+    """Last preprocessed batch of transitions from the most recent step()."""
+    return getattr(self, '_last_transitions', None)
+
+  @property
+  def q_params(self):
+    """Compatibility shim: return ``None`` so callers (e.g., the runner's
+    rl_metrics block) can detect that this learner uses the decomposed
+    critic layout and skip code paths that expect a single monolithic
+    ``q_params`` pytree with ``sa_encoder`` / ``g_encoder`` modules.
+
+    Use the individual accessors (``b_shared_params``, ``h_phi_params``,
+    ``phi_task_params``, ``psi_params``, ``h_dyn_params``) for the
+    decomposed groups, or ``get_variables(['critic'])[0]`` for the
+    bundle dict.
+    """
+    return None
 
   @property
   def b_shared_params(self):

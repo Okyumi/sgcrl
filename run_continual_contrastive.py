@@ -850,6 +850,23 @@ def train_single_task(
 
       try:
         transitions = learner.last_transitions
+        # The decomposed learner intentionally returns None for q_params
+        # (its critic has 4 separate parameter groups, not a single
+        # pytree with sa_encoder/g_encoder modules). rl_metrics.compute_all_metrics
+        # only knows the persistent layout, so we skip it for decomposed
+        # runs and log a one-time notice instead of repeated warnings.
+        if transitions is not None and learner.q_params is None:
+          # Use a private attribute to remember we already logged the notice.
+          if not getattr(learner, '_rl_metrics_skipped_logged', False):
+            print('  [rl_metrics] skipped: decomposed-critic layout is '
+                  'not supported by rl_metrics.compute_all_metrics. '
+                  'Track this as a follow-up if you want decomposed '
+                  'rl_metrics.', flush=True)
+            try:
+              setattr(learner, '_rl_metrics_skipped_logged', True)
+            except Exception:
+              pass
+          transitions = None  # short-circuit the rest of this block
         if transitions is not None:
           current_actor = learner.get_variables(['policy'])[0]
           current_critic = learner.q_params
