@@ -1,0 +1,54 @@
+wandb: [wandb.Api()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+<stdin>:67: ConstantInputWarning: An input array is constant; the correlation coefficient is not defined.
+<stdin>:68: ConstantInputWarning: An input array is constant; the correlation coefficient is not defined.
+ task_id                      env  seed  actor_alpha_scale_end  critic_alpha_scale_end  best_success  end_success  mean_success
+       2      sawyer_faucet_close     7               1.000000                1.000000           0.7          0.2      0.335849
+       2      sawyer_faucet_close     5               1.000000                1.000000           0.6          0.1      0.255346
+       2      sawyer_faucet_close     6               1.000000                1.000000           0.9          0.2      0.354717
+       3         sawyer_push_back     7               0.535042                0.866198           1.0          0.9      0.702516
+       3         sawyer_push_back     6               1.169986                0.636084           1.0          0.9      0.457862
+       3         sawyer_push_back     5               0.001512                0.749598           1.0          1.0      0.663522
+       4        sawyer_stick_pull     7               0.596908                0.603339           1.0          0.3      0.411321
+       4        sawyer_stick_pull     6               0.588079                0.577505           1.0          0.7      0.509434
+       4        sawyer_stick_pull     5               0.893960                0.583387           1.0          0.3      0.535849
+       5 sawyer_handle_press_side     7               0.454087                1.586914           0.2          0.0      0.006289
+       5 sawyer_handle_press_side     6               0.549244                1.260835           0.1          0.0      0.003145
+       5 sawyer_handle_press_side     5               0.534256                1.387226           0.2          0.0      0.013208
+       6              sawyer_push     7               1.336440                1.491986           1.0          0.6      0.393711
+       6              sawyer_push     5               1.937371                1.340852           1.0          0.1      0.363522
+       6              sawyer_push     6               0.442981                1.405370           1.0          0.0      0.275472
+       7       sawyer_shelf_place     7               0.895286                1.056298           0.9          0.7      0.128302
+       7       sawyer_shelf_place     5               0.725083                1.209639           0.9          0.6      0.353459
+       7       sawyer_shelf_place     6               1.580586                1.421275           1.0          0.5      0.554088
+       8      sawyer_window_close     7               1.376613                1.980670           0.5          0.0      0.042767
+       8      sawyer_window_close     5               0.539775                1.631248           0.3          0.0      0.047799
+       8      sawyer_window_close     6               0.381605                2.036021           0.5          0.0      0.044654
+       9   sawyer_peg_unplug_side     7               0.274949                1.112724           0.8          0.1      0.260377
+       9   sawyer_peg_unplug_side     5               1.214401                1.065122           0.7          0.5      0.240881
+       9   sawyer_peg_unplug_side     6               0.376337                1.053984           0.6          0.4      0.211950
+
+===== Across all (task, seed) pairs (n=24) =====
+  actor_alpha_scale_end        -> best_success  : Pearson=+0.269 (p=0.204)  Spearman=+0.245 (p=0.248)
+  actor_alpha_scale_end        -> end_success   : Pearson=-0.006 (p=0.978)  Spearman=+0.158 (p=0.461)
+  actor_alpha_scale_end        -> mean_success  : Pearson=+0.111 (p=0.606)  Spearman=+0.198 (p=0.355)
+  critic_alpha_scale_end       -> best_success  : Pearson=-0.539 (p=0.007)  Spearman=-0.510 (p=0.011)
+  critic_alpha_scale_end       -> end_success   : Pearson=-0.592 (p=0.002)  Spearman=-0.639 (p=0.001)
+  critic_alpha_scale_end       -> mean_success  : Pearson=-0.669 (p=0.000)  Spearman=-0.617 (p=0.001)
+
+===== Within-task across-seed predictions =====
+  k=2   actor_alpha_scale_end        -> best_success: Pearson=+nan  Spearman=+nan  (n=3)
+  k=2   critic_alpha_scale_end       -> best_success: Pearson=+nan  Spearman=+nan  (n=3)
+  k=3   actor_alpha_scale_end        -> best_success: Pearson=+nan  Spearman=+nan  (n=3)
+  k=3   critic_alpha_scale_end       -> best_success: Pearson=+nan  Spearman=+nan  (n=3)
+  k=4   actor_alpha_scale_end        -> best_success: Pearson=+nan  Spearman=+nan  (n=3)
+  k=4   critic_alpha_scale_end       -> best_success: Pearson=+nan  Spearman=+nan  (n=3)
+  k=5   actor_alpha_scale_end        -> best_success: Pearson=-0.621  Spearman=-0.866  (n=3)
+  k=5   critic_alpha_scale_end       -> best_success: Pearson=+0.794  Spearman=+0.866  (n=3)
+  k=6   actor_alpha_scale_end        -> best_success: Pearson=+nan  Spearman=+nan  (n=3)
+  k=6   critic_alpha_scale_end       -> best_success: Pearson=+nan  Spearman=+nan  (n=3)
+  k=7   actor_alpha_scale_end        -> best_success: Pearson=+0.982  Spearman=+0.866  (n=3)
+  k=7   critic_alpha_scale_end       -> best_success: Pearson=+0.908  Spearman=+0.866  (n=3)
+  k=8   actor_alpha_scale_end        -> best_success: Pearson=+0.366  Spearman=+0.000  (n=3)
+  k=8   critic_alpha_scale_end       -> best_success: Pearson=+0.992  Spearman=+0.866  (n=3)
+  k=9   actor_alpha_scale_end        -> best_success: Pearson=-0.098  Spearman=-0.500  (n=3)
+  k=9   critic_alpha_scale_end       -> best_success: Pearson=+0.941  Spearman=+1.000  (n=3)

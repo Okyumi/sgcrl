@@ -150,7 +150,28 @@ similar magnitude, ruled out.
 
 In order of (low cost, high information):
 
-### Step 1 (today, ~1 hour of W&B + analysis): test H3 and H5(a)
+### Step 1 (ran 2026-05-14, see `2026-05-14_h3_logsumexp_test.md`): tested H3
+
+**Verdict: H3 conditionally supported.** Spearman correlation between
+`critic_alpha_scale` and `learner/logsumexp` per (task, seed) is
+negative (-0.62 on k=5, -0.43 on k=8) only on tasks where InfoNCE
+logits spike. On stable-numerics tasks the correlation is near zero.
+The critic mixture is a **symptom of InfoNCE logit instability**, not
+a knowledge channel.
+
+### Step 1.5 (ran 2026-05-14, see `2026-05-14_h1_h2_alpha_predicts_failure.md`): tested H1/H2 cross-run
+
+**Verdict: H1 supported, H2 indirectly disproved.** Across 24 (task,
+seed) pairs, end-of-task `critic_alpha_scale` is anti-correlated with
+this-task `best_success` (Pearson r = -0.54, p = 0.007). End-of-task
+`actor_alpha_scale` has no significant correlation with anything
+(p > 0.2). The critic mixture is alive but anti-predictive of success;
+the actor mixture is dead. H2 is moot because the critic has nothing
+useful to be decoupled from.
+
+---
+
+### (was) Step 1 plan, kept for record
 
 Run the gradient-correlation / logsumexp analysis. This needs no
 new training:
@@ -164,9 +185,9 @@ new training:
 Expected outcome: either H3 holds (logsumexp is tracking α_scale)
 or it doesn't. Either way we narrow the search.
 
-### Step 2 (next 2 days): test H1 and H2
+### Step 2 (deferred but reduced in priority after Step 1.5)
 
-Write a new offline-eval script that:
+The original Step 2 was a full offline α_scale ablation:
 
 1. Loads a C0 checkpoint at task 9.
 2. Mutates `α_scale` (set to 0, 1, 2, ...) and re-evaluates on
@@ -176,12 +197,19 @@ Write a new offline-eval script that:
 4. Optionally swaps the actor between a C0 checkpoint and a C2
    checkpoint.
 
-This is the most direct test of "is the mixture actually being
-used?" and "is the actor / critic decoupling the issue?".
+With the H1 / H3' results in `2026-05-14_h1_h2_alpha_predicts_failure.md`,
+the cross-run correlation evidence is already strong: the critic
+mixture is anti-predictive of success. The offline ablation is still
+worth doing if you want the **cleanest counterfactual claim** for a
+reviewer ("we manually set α_scale = 0 at eval and success didn't
+change"), but it is no longer load-bearing for the paper narrative.
 
 Cost: one ~200-line script that reuses `evaluate_on_task` from
-`run_continual_contrastive.py`. Estimated 1-2 days to write,
-test, and produce a small table of results. **No re-training.**
+`run_continual_contrastive.py`. Estimated 1-2 days to write, test,
+and produce a small table. **No re-training.** Requires cluster access
+to the saved checkpoints under `/scratch/yd2247/sgcrl/logs/continual_checkpoints/`.
+
+Recommended only after the C1/C2 task-1 and task-8 reruns have landed.
 
 ### Step 3 (deferred, conditional on Step 2): H4 fix
 

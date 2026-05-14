@@ -1,0 +1,56 @@
+wandb: [wandb.Api()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+/usr/local/lib/python3.13/site-packages/numpy/lib/_function_base_impl.py:3065: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/usr/local/lib/python3.13/site-packages/numpy/lib/_function_base_impl.py:3066: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/usr/local/lib/python3.13/site-packages/pandas/core/nanops.py:1632: ConstantInputWarning: An input array is constant; the correlation coefficient is not defined.
+  return spearmanr(a, b)[0]
+/usr/local/lib/python3.13/site-packages/numpy/lib/_function_base_impl.py:3065: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/usr/local/lib/python3.13/site-packages/numpy/lib/_function_base_impl.py:3066: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/usr/local/lib/python3.13/site-packages/pandas/core/nanops.py:1632: ConstantInputWarning: An input array is constant; the correlation coefficient is not defined.
+  return spearmanr(a, b)[0]
+/usr/local/lib/python3.13/site-packages/numpy/lib/_function_base_impl.py:3065: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/usr/local/lib/python3.13/site-packages/numpy/lib/_function_base_impl.py:3066: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/usr/local/lib/python3.13/site-packages/pandas/core/nanops.py:1632: ConstantInputWarning: An input array is constant; the correlation coefficient is not defined.
+  return spearmanr(a, b)[0]
+===== Per-(task, seed) Pearson and Spearman correlation between critic_alpha_scale and logsumexp =====
+ task_id                      env  seed  n_rows   pearson  spearman  alpha_scale_start  alpha_scale_end  alpha_scale_delta  logsumexp_start  logsumexp_end  logsumexp_delta  critic_mixture_end
+       2      sawyer_faucet_close     5     500       NaN       NaN           1.000000         1.000000           0.000000         2.296585       1.701674        -0.594911            0.838969
+       2      sawyer_faucet_close     6     500       NaN       NaN           1.000000         1.000000           0.000000         2.418948       1.505049        -0.913899            0.811034
+       2      sawyer_faucet_close     7     500       NaN       NaN           1.000000         1.000000           0.000000         2.040380       1.570566        -0.469815            0.847883
+       3         sawyer_push_back     5     500  0.601528  0.576402           1.036807         0.749598          -0.287210         2.047814       1.038731        -1.009083            0.665669
+       3         sawyer_push_back     6     500  0.308787  0.599828           0.833382         0.636084          -0.197298         1.912016       1.427483        -0.484533            0.682162
+       3         sawyer_push_back     7     500 -0.042160 -0.149415           0.985917         0.866198          -0.119719         2.065874       1.917575        -0.148299            0.722795
+       4        sawyer_stick_pull     5     500  0.361259 -0.195336           0.888190         0.583387          -0.304802         1.946188       1.714918        -0.231270            0.530486
+       4        sawyer_stick_pull     6     500  0.096823 -0.289906           0.856327         0.577505          -0.278822         2.021684       1.715850        -0.305834            0.533130
+       4        sawyer_stick_pull     7     500  0.793649  0.077398           0.741208         0.603339          -0.137869         1.971202       1.442069        -0.529133            0.551842
+       5 sawyer_handle_press_side     5     500 -0.105216 -0.696471           1.092459         1.387226           0.294767         2.509846       0.555105        -1.954741            1.271769
+       5 sawyer_handle_press_side     6     500 -0.053432 -0.619876           1.112520         1.260835           0.148315         1.412872       0.596327        -0.816544            1.250923
+       5 sawyer_handle_press_side     7     500 -0.026278 -0.556892           1.142274         1.586914           0.444640         1.290686       1.419141         0.128455            1.313631
+       6              sawyer_push     5     500 -0.285788 -0.410730           1.279030         1.340852           0.061822         1.676211       1.867232         0.191021            0.481355
+       6              sawyer_push     6     500 -0.318840  0.000826           1.363950         1.405370           0.041420         1.779901       1.589821        -0.190080            0.472174
+       6              sawyer_push     7     500 -0.308589  0.013355           1.446395         1.491986           0.045591         1.620450       1.469323        -0.151128            0.494690
+       7       sawyer_shelf_place     5     500 -0.126315 -0.340404           1.339628         1.209639          -0.129989         1.788333       1.491979        -0.296353            0.450479
+       7       sawyer_shelf_place     6     500 -0.397974 -0.084095           1.398640         1.421275           0.022635         1.402489       1.539384         0.136896            0.466100
+       7       sawyer_shelf_place     7     500  0.827565  0.724276           1.478862         1.056298          -0.422564         1.764955       1.244886        -0.520070            0.442539
+       8      sawyer_window_close     5     500 -0.081346 -0.418957           1.256741         1.631248           0.374508         2.122575       1.414407        -0.708168            0.644580
+       8      sawyer_window_close     6     500 -0.055225 -0.372932           1.511073         2.036021           0.524948         1.921738       1.224325        -0.697413            0.640751
+       8      sawyer_window_close     7     500 -0.000713 -0.507369           1.402538         1.980670           0.578132         2.210164       2.768059         0.557895            0.709135
+       9   sawyer_peg_unplug_side     5     500  0.154872  0.048989           1.308411         1.065122          -0.243289         2.118117       1.788506        -0.329611            0.408388
+       9   sawyer_peg_unplug_side     6     500  0.059981  0.128708           1.374316         1.053984          -0.320331         2.383223       2.003337        -0.379886            0.394593
+       9   sawyer_peg_unplug_side     7     500  0.242330  0.210842           1.355467         1.112724          -0.242743         2.253308       1.625443        -0.627865            0.412653
+
+===== Aggregated across seeds (per task) =====
+  Task |  pearson (mean, sem)  |  spearman (mean, sem)  | a_scale Δ | logsumexp Δ | critic_mix_end
+  k=2  |  +nan ± nan    |  +nan ± nan     | +0.000   | -0.660     | 0.833
+  k=3  |  +0.289 ± 0.186    |  +0.342 ± 0.246     | -0.201   | -0.547     | 0.690
+  k=4  |  +0.417 ± 0.203    |  -0.136 ± 0.110     | -0.240   | -0.355     | 0.538
+  k=5  |  -0.062 ± 0.023    |  -0.624 ± 0.040     | +0.296   | -0.881     | 1.279
+  k=6  |  -0.304 ± 0.010    |  -0.132 ± 0.139     | +0.050   | -0.050     | 0.483
+  k=7  |  +0.101 ± 0.372    |  +0.100 ± 0.321     | -0.177   | -0.227     | 0.453
+  k=8  |  -0.046 ± 0.024    |  -0.433 ± 0.039     | +0.493   | -0.283     | 0.665
+  k=9  |  +0.152 ± 0.053    |  +0.130 ± 0.047     | -0.269   | -0.446     | 0.405
