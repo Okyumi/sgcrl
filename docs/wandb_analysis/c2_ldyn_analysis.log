@@ -1,0 +1,11 @@
+wandb: [wandb.Api()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+===== L_dyn trajectory per task (3 seeds averaged) =====
+task  env                          init       final      drop_ratio max        min       
+k=0   sawyer_hammer                0.00040    0.00013    3.14       0.00076    0.00009   
+k=1   sawyer_push_wall             0.00009    0.00011    0.77       0.00017    0.00006   
+k=2   sawyer_faucet_close          0.00009    0.00014    0.62       0.00019    0.00007   
+k=3   sawyer_push_back             0.00009    0.00008    1.12       0.00017    0.00004   
+k=4   sawyer_stick_pull            0.00009    0.00011    0.83       0.00015    0.00006   
+k=5   sawyer_handle_press_side     0.00009    0.00007    1.22       0.00015    0.00005   
+k=6   sawyer_push                  0.00016    0.00010    1.57       0.00030    0.00006   
+k=7   sawyer_shelf_place           0.00008    0.00011    0.73       0.00021    0.00006   
