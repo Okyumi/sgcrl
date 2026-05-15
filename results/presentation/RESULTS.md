@@ -36,7 +36,7 @@ We first instantiate the additive knowledge-vector decomposition of prior contin
 
 **Reading.** Where the InfoNCE $\mathrm{logsumexp}$ statistic spikes ($k=5$, $k=8$), $s_\alpha^{\mathrm{critic}}$ climbs in lock-step. Spearman $\rho = -0.62$ and $-0.43$ within those tasks. On well-behaved tasks ($k=3$, $k=9$) both are quiet. The mixture is responding to numerical instability in the partition function, not to any transferable cross-task structure. Source CSV: `docs/wandb_analysis/csv/h3_logsumexp_correlation.csv`.
 
-### Why this happens, in one line
+### Why this happens
 
 The CKA-style decomposition adds the same vector $\sum_j \alpha_{k,j} v_j$ to every state-action pair. The actor argmax over actions and the InfoNCE softmax over goals are both invariant to a uniform additive shift of $\mathrm{sa\_repr}(s, a)$, so the gradient that this mixture term can carry through either loss is in their joint null space modulo a numerical-stability response. The diagnosis above is what that null-space situation looks like empirically.
 
