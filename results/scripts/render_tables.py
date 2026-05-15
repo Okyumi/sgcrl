@@ -38,6 +38,7 @@ CELL_ORDER = [
     "actor=persistent-critic=cka",
     "actor=cka-critic=persistent",
     "actor=cka-critic=cka",
+    "actor=reset-critic=decomposed",
 ]
 
 # Routing rule from the project spec:
@@ -59,8 +60,12 @@ CKA_ACTOR_CELLS = {
     "actor=cka-critic=persistent",
     "actor=cka-critic=cka",
 }
+DECOMPOSED_CELLS = {
+    "actor=reset-critic=decomposed",
+}
 GCRL_GROUPS = ("for_real",)
 CKA_GROUPS = ("real1", "real2")
+DECOMPOSED_GROUPS = ("c2_decomposed",)
 
 
 def _routed_groups(cell: str) -> tuple[str, ...]:
@@ -68,6 +73,8 @@ def _routed_groups(cell: str) -> tuple[str, ...]:
         return GCRL_GROUPS
     if cell in CKA_ACTOR_CELLS:
         return CKA_GROUPS
+    if cell in DECOMPOSED_CELLS:
+        return DECOMPOSED_GROUPS
     # actor != cka but critic == cka: fall back to for_real.
     return GCRL_GROUPS
 
