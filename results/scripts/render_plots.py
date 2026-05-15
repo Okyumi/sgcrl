@@ -187,15 +187,16 @@ def plot_delta_per_task(df: pd.DataFrame, save_to: Path) -> None:
     ax.set_ylabel("Δ best mean success rate")
     ax.set_title("Decomposed minus Reset/Reset (unpaired mean difference)",
                  loc="left", pad=14)
-    ax.set_ylim(-0.1, 0.32)
+    ax.set_ylim(-0.12, 0.40)
     ax.yaxis.grid(True, color="#e2e8f0", lw=0.8, zorder=0)
     ax.set_axisbelow(True)
-    # Annotate the big wins.
+    # Annotate the big wins -- place the label clear of the error-bar cap.
     for k in (5, 8):
+        top = delta[k] + se[k] + 0.025
         ax.annotate(f"+{delta[k]:.2f}",
-                    xy=(k, delta[k]),
-                    xytext=(k, delta[k] + 0.035),
-                    ha="center", color=ROSE, fontsize=12, fontweight="bold")
+                    xy=(k, top),
+                    ha="center", va="bottom",
+                    color=ROSE, fontsize=12, fontweight="bold")
     fig.savefig(save_to, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
