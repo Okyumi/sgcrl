@@ -17,3 +17,4 @@ Each column averages the per-task mean of the named metric across the 10 tasks. 
 | actor=persistent-critic=cka | 0.761 | 0.446 | 0.394 | 0.395 | 0.492 | for_real | 5 | 46 |
 | actor=cka-critic=persistent | 0.797 | 0.458 | 0.374 | 0.374 | 0.488 | real1+real2 | 4 | 41 |
 | actor=cka-critic=cka | 0.781 | 0.409 | 0.379 | 0.380 | 0.428 | real1+real2 | 4 | 39 |
+| actor=reset-critic=decomposed | 0.873 | 0.450 | 0.482 | 0.484 | 0.479 | c2_decomposed | 3 | 30 |

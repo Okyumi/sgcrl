@@ -3,9 +3,10 @@
   "groups": [
     "for_real",
     "real1",
-    "real2"
+    "real2",
+    "c2_decomposed"
   ],
   "reference_cell": "actor=reset-critic=reset",
-  "n_history_rows": 113049,
-  "n_cells": 9
+  "n_history_rows": 117819,
+  "n_cells": 10
 }

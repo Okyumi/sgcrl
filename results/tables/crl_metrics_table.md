@@ -19,3 +19,4 @@ BWT / forgetting is NOT computable from these runs because ``intra_eval_previous
 | actor=persistent-critic=cka | 0.761 | -0.078 ± 0.026 (n=41) | 0.492 | for_real | 5 | 46 |
 | actor=cka-critic=persistent | 0.797 | -0.041 ± 0.024 (n=34) | 0.488 | real1+real2 | 5 | 41 |
 | actor=cka-critic=cka | 0.781 | -0.068 ± 0.029 (n=34) | 0.428 | real1+real2 | 5 | 39 |
+| actor=reset-critic=decomposed | 0.873 | -- | 0.479 | c2_decomposed | 3 | 30 |
