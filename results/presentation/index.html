@@ -6,7 +6,7 @@
 <title>Decomposed Contrastive Critics for Continual GCRL</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
 <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
 <style>
   :root {
@@ -17,11 +17,10 @@
     --paper:      #fbfaf7;
     --paper-2:    #f3f1ec;
     --rule:       #e6e1d7;
-    --accent:     #be123c; /* rose-700 -- the method colour */
+    --accent:     #be123c;
+    --accent-soft:#fff5f7;
     --accent-2:   #fecdd3;
     --slate:      #94a3b8;
-    --indigo:     #4338ca;
-    --amber:      #d97706;
 
     --text-xs:   clamp(0.75rem, 0.70rem + 0.20vw, 0.875rem);
     --text-sm:   clamp(0.875rem, 0.80rem + 0.35vw, 1rem);
@@ -30,9 +29,9 @@
     --text-xl:   clamp(1.5rem,  1.20rem + 1.10vw, 2.0rem);
     --text-2xl:  clamp(2rem,    1.20rem + 2.5vw,  3.5rem);
 
-    --space-1: .25rem; --space-2: .5rem; --space-3: .75rem;
-    --space-4: 1rem;   --space-6: 1.5rem; --space-8: 2rem;
-    --space-12: 3rem;  --space-16: 4rem;  --space-24: 6rem;
+    --s-1: .25rem; --s-2: .5rem; --s-3: .75rem;
+    --s-4: 1rem;   --s-6: 1.5rem; --s-8: 2rem;
+    --s-12: 3rem;  --s-16: 4rem;
   }
 
   * { box-sizing: border-box; }
@@ -43,31 +42,50 @@
     color: var(--ink);
     font-family: 'Inter', system-ui, sans-serif;
     font-size: var(--text-base);
-    line-height: 1.6;
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
   }
   a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
   a:hover { border-color: var(--accent); }
-
   code, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
-  .serif { font-family: 'Newsreader', Georgia, serif; }
 
-  /* layout */
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 var(--space-6); }
-  .narrow { max-width: 720px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 var(--s-6); }
 
+  /* nav */
+  nav.toc {
+    position: sticky; top: 0; z-index: 30;
+    background: rgba(251, 250, 247, 0.95);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--rule);
+    padding: var(--s-3) 0;
+    font-size: var(--text-xs);
+  }
+  nav.toc ol {
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-wrap: wrap; gap: var(--s-4);
+    counter-reset: toc;
+  }
+  nav.toc li { counter-increment: toc; }
+  nav.toc li::before {
+    content: counter(toc, decimal-leading-zero) " ";
+    color: var(--accent); margin-right: var(--s-1);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  nav.toc a { color: var(--ink-3); border: none; }
+  nav.toc a:hover { color: var(--accent); }
+
+  /* header */
   header.cover {
     border-bottom: 1px solid var(--rule);
-    background:
-      linear-gradient(180deg, var(--paper) 0%, var(--paper-2) 100%);
-    padding: var(--space-16) 0 var(--space-12);
+    background: linear-gradient(180deg, var(--paper) 0%, var(--paper-2) 100%);
+    padding: var(--s-12) 0 var(--s-8);
   }
   .eyebrow {
     font-size: var(--text-xs);
     letter-spacing: .12em;
     text-transform: uppercase;
     color: var(--ink-3);
-    margin: 0 0 var(--space-4);
+    margin: 0 0 var(--s-3);
   }
   h1.title {
     font-family: 'Newsreader', Georgia, serif;
@@ -75,26 +93,17 @@
     font-size: var(--text-2xl);
     line-height: 1.07;
     letter-spacing: -0.015em;
-    margin: 0 0 var(--space-4);
+    margin: 0 0 var(--s-3);
     max-width: 22ch;
-    color: var(--ink);
   }
   h1.title em { font-style: italic; color: var(--accent); }
-  .subtitle {
-    font-family: 'Newsreader', Georgia, serif;
-    font-style: italic;
-    font-weight: 400;
-    font-size: var(--text-lg);
-    color: var(--ink-3);
-    max-width: 64ch;
-    margin: 0 0 var(--space-6);
-  }
   .meta {
-    display: flex; flex-wrap: wrap; gap: var(--space-6);
+    display: flex; flex-wrap: wrap; gap: var(--s-6);
     font-size: var(--text-xs);
     color: var(--ink-4);
     text-transform: uppercase;
     letter-spacing: .08em;
+    margin-top: var(--s-6);
   }
   .meta span strong {
     display: block; color: var(--ink-2);
@@ -103,192 +112,245 @@
   }
 
   /* sections */
-  section { padding: var(--space-16) 0; border-bottom: 1px solid var(--rule); }
-  section.tight { padding: var(--space-12) 0; }
+  section { padding: var(--s-12) 0; border-bottom: 1px solid var(--rule); }
   h2 {
     font-family: 'Newsreader', Georgia, serif;
     font-weight: 500;
     font-size: var(--text-xl);
-    margin: 0 0 var(--space-2);
+    margin: 0 0 var(--s-6);
     letter-spacing: -0.01em;
   }
   h2 .num {
     font-family: 'JetBrains Mono', monospace;
     color: var(--accent);
-    font-size: 0.75em;
-    font-weight: 400;
-    margin-right: var(--space-3);
-    vertical-align: 0.18em;
+    font-size: 0.7em;
+    font-weight: 500;
+    margin-right: var(--s-3);
+    vertical-align: 0.22em;
   }
-  h3 {
-    font-size: var(--text-lg);
-    font-weight: 600;
-    margin: var(--space-8) 0 var(--space-2);
-    letter-spacing: -0.005em;
-  }
-  h4 {
-    font-size: var(--text-base);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    font-size: var(--text-xs);
-    color: var(--ink-3);
-    margin: var(--space-6) 0 var(--space-2);
-  }
-  p { margin: 0 0 var(--space-4); max-width: 64ch; color: var(--ink-2); }
-  .lead {
-    font-size: var(--text-lg);
-    line-height: 1.55;
-    color: var(--ink-2);
-    max-width: 60ch;
-  }
+  p { margin: 0 0 var(--s-3); max-width: 64ch; color: var(--ink-2); }
+  .micro { font-size: var(--text-xs); color: var(--ink-4); max-width: 70ch; }
 
-  /* callouts and quotes */
-  .pull {
-    border-left: 2px solid var(--accent);
-    padding: 0 var(--space-4);
-    margin: var(--space-6) 0;
-    font-family: 'Newsreader', serif;
-    font-style: italic;
-    font-size: var(--text-lg);
-    color: var(--ink-2);
-  }
-  .callout {
+  /* compact math line */
+  .problem-card {
     background: white;
     border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
     border-radius: 4px;
-    padding: var(--space-4) var(--space-6);
-    margin: var(--space-6) 0;
+    padding: var(--s-4) var(--s-6);
+    margin: var(--s-4) 0;
   }
-  .callout.method { border-left: 3px solid var(--accent); }
-  .callout h4 { margin-top: 0; }
-
-  /* equations: MathJax renders block math; we just style the container */
-  .eq {
-    background: white;
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    padding: var(--space-3) var(--space-6);
-    margin: var(--space-4) 0;
-    overflow-x: auto;
-    font-size: 1.05em;
-  }
-  .eq + .eqlabel {
-    margin-top: -10px; margin-bottom: var(--space-4);
-    font-size: var(--text-xs); color: var(--ink-4); text-align: right;
-  }
-
-  /* figure */
-  figure { margin: var(--space-8) 0; }
-  figure img {
-    width: 100%; height: auto;
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    background: white;
-  }
-  figcaption {
-    margin-top: var(--space-3);
+  .problem-card .row { display: flex; align-items: baseline; gap: var(--s-4); margin: var(--s-2) 0; }
+  .problem-card .row .key {
+    font-family: 'JetBrains Mono', monospace;
     font-size: var(--text-xs);
     color: var(--ink-4);
-    max-width: 70ch;
-    line-height: 1.55;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    min-width: 9ch;
   }
-  figcaption strong { color: var(--ink-2); font-weight: 600; }
+  .problem-card .row .val { flex: 1; color: var(--ink); font-size: var(--text-sm); }
 
-  /* tables */
-  .tbl-scroll { overflow-x: auto; margin: var(--space-6) 0; }
-  .tbl-scroll > .tbl { margin: 0; min-width: 640px; }
-  .tbl {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: var(--text-sm);
-    margin: var(--space-6) 0;
+  /* ===== ARCHITECTURE: interactive ===== */
+  .arch-wrap {
     background: white;
     border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: var(--s-6) var(--s-6);
+    margin: var(--s-6) 0;
   }
-  .tbl th, .tbl td {
-    padding: var(--space-2) var(--space-4);
-    text-align: left;
+  .arch-controls {
+    display: flex; gap: var(--s-2);
+    margin-bottom: var(--s-4);
+    flex-wrap: wrap;
+  }
+  .arch-controls button {
+    appearance: none;
+    background: white;
+    color: var(--ink-2);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: var(--s-2) var(--s-4);
+    font: 500 var(--text-xs) 'Inter', sans-serif;
+    letter-spacing: .04em;
+    cursor: pointer;
+    transition: all .15s ease;
+    text-transform: uppercase;
+  }
+  .arch-controls button:hover { border-color: var(--ink-4); color: var(--ink); }
+  .arch-controls button.active {
+    background: var(--ink);
+    color: white;
+    border-color: var(--ink);
+  }
+  .arch-controls .legend {
+    display: inline-flex; align-items: center; gap: var(--s-2);
+    margin-left: auto;
+    font-size: var(--text-xs); color: var(--ink-4);
+  }
+  .arch-controls .legend .dot {
+    display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    border: 1px solid var(--ink-2);
+  }
+  .arch-controls .legend .dot.shared  { background: white; }
+  .arch-controls .legend .dot.reset   { background: var(--accent-soft); border-color: var(--accent); }
+  .arch-controls .legend .dot.loss    { background: #fdf6e3; border-color: #d97706; }
+
+  .arch {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: var(--s-6);
+    align-items: start;
+  }
+  @media (max-width: 880px) { .arch { grid-template-columns: 1fr; } }
+
+  .arch-stage {
+    position: relative;
+    background: var(--paper);
+    border-radius: 4px;
+    padding: var(--s-3);
+  }
+  .arch-stage svg { width: 100%; height: auto; display: block; cursor: default; }
+
+  /* SVG node styling */
+  .node rect {
+    transition: filter .15s ease, stroke-width .15s ease;
+  }
+  .node:hover rect, .node.selected rect { filter: drop-shadow(0 2px 8px rgba(15, 23, 42, 0.18)); }
+  .node text { pointer-events: none; }
+  .node.shared rect { fill: white; stroke: #1f2937; stroke-width: 1.4; }
+  .node.reset rect  { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+  .node.loss rect   { fill: #fdf6e3; stroke: #d97706; stroke-width: 1.2; }
+  .node.io rect     { fill: var(--paper-2); stroke: var(--ink-4); stroke-width: 1.0; stroke-dasharray: 4 3; }
+  .node.op circle   { fill: white; stroke: #1f2937; stroke-width: 1.4; transition: filter .15s ease; }
+  .node.op:hover circle, .node.op.selected circle { filter: drop-shadow(0 2px 8px rgba(15, 23, 42, 0.18)); }
+  .node .ntitle { font: 600 14px 'Inter', sans-serif; fill: var(--ink); }
+  .node.reset .ntitle { fill: var(--accent); }
+  .node .nsub   { font: 400 11px 'Inter', sans-serif; fill: var(--ink-4); }
+  .node.reset .nsub { fill: #9f1239; }
+  .node .nop    { font: 600 18px 'JetBrains Mono', monospace; fill: var(--ink); }
+  .node { cursor: pointer; }
+  .node.selected .ntitle, .node:hover .ntitle { fill: var(--accent); }
+
+  .edge {
+    fill: none; stroke: var(--ink-3); stroke-width: 1.4;
+    transition: stroke .2s ease, stroke-width .2s ease, opacity .2s ease;
+  }
+  .edge.grad {
+    stroke: var(--accent); stroke-width: 2.4;
+    stroke-dasharray: 6 5;
+    animation: dashflow 1.4s linear infinite;
+  }
+  .edge.dim { opacity: 0.15; }
+
+  @keyframes dashflow {
+    to { stroke-dashoffset: -22; }
+  }
+
+  /* info panel */
+  .arch-info {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: var(--s-4);
+    min-height: 280px;
+    position: sticky; top: 70px;
+  }
+  .arch-info .hint {
+    font-size: var(--text-xs); color: var(--ink-4);
+    font-style: italic;
+  }
+  .arch-info h4 {
+    margin: 0 0 var(--s-2);
+    font: 600 var(--text-sm) 'JetBrains Mono', monospace;
+    color: var(--ink);
+  }
+  .arch-info .tag {
+    display: inline-block;
+    font: 500 10px 'Inter', sans-serif;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-right: var(--s-1);
+    margin-bottom: var(--s-2);
+  }
+  .arch-info .tag.shared { background: var(--paper-2); color: var(--ink-2); border: 1px solid var(--rule); }
+  .arch-info .tag.reset  { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-2); }
+  .arch-info .tag.loss   { background: #fdf6e3; color: #92400e; border: 1px solid #fcd34d; }
+  .arch-info p { font-size: var(--text-sm); color: var(--ink-2); margin: var(--s-2) 0; }
+  .arch-info dl {
+    display: grid; grid-template-columns: auto 1fr; gap: var(--s-1) var(--s-3);
+    margin: var(--s-3) 0 0; font-size: var(--text-xs);
+  }
+  .arch-info dt { font-family: 'JetBrains Mono', monospace; color: var(--ink-4); }
+  .arch-info dd { margin: 0; color: var(--ink-2); }
+
+  /* PSEUDOCODE */
+  .algo {
+    background: white;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: var(--s-6) var(--s-8);
+    margin: var(--s-4) 0;
+    font: 500 14px 'JetBrains Mono', monospace;
+    line-height: 1.7;
+    color: var(--ink);
+    counter-reset: line;
+    overflow-x: auto;
+  }
+  .algo .ahead {
+    font: 600 13px 'Inter', sans-serif;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 var(--s-3);
+    padding-bottom: var(--s-2);
     border-bottom: 1px solid var(--rule);
   }
-  .tbl th {
-    background: var(--paper-2);
-    font-weight: 600;
-    color: var(--ink-3);
-    text-transform: uppercase;
-    font-size: var(--text-xs);
-    letter-spacing: .06em;
+  .algo .ahead .name { color: var(--ink); }
+  .algo .line {
+    display: block;
+    white-space: pre;
+    counter-increment: line;
   }
-  .tbl td.num, .tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .tbl tr:last-child td { border-bottom: 0; }
-  .tbl tr.highlight td { background: #fff5f7; font-weight: 600; color: var(--ink); }
-  .tbl tr.highlight td.num { color: var(--accent); }
-  .tbl tr.total td { background: var(--paper-2); font-weight: 600; }
-  .tbl small { color: var(--ink-4); font-weight: 400; }
+  .algo .line::before {
+    content: counter(line, decimal-leading-zero);
+    display: inline-block;
+    width: 2.6em;
+    margin-right: var(--s-3);
+    color: var(--slate);
+    font-weight: 400;
+    user-select: none;
+  }
+  .algo .kw { color: var(--accent); font-weight: 600; }
+  .algo .var { color: var(--ink-2); }
+  .algo .com { color: var(--ink-4); font-style: italic; font-weight: 400; }
+  .algo .acc { color: var(--accent); }
+  .algo .num { color: #1d4ed8; }
+  .algo .ind1 { padding-left: 1.5em; display: inline-block; }
+  .algo .ind2 { padding-left: 3.0em; display: inline-block; }
+  .algo .ind3 { padding-left: 4.5em; display: inline-block; }
 
-  /* pipeline diagram */
-  .pipe {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: var(--space-3);
-    margin: var(--space-6) 0 var(--space-8);
-  }
-  .pipe .stage {
-    background: white;
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    padding: var(--space-3) var(--space-4);
-    position: relative;
-    font-size: var(--text-xs);
-    color: var(--ink-3);
-  }
-  .pipe .stage strong {
-    display: block; color: var(--ink);
-    font-size: var(--text-sm); font-weight: 600;
-    margin-bottom: var(--space-1);
-  }
-  .pipe .stage code { font-size: 0.85em; color: var(--ink-3); }
-  @media (max-width: 720px) {
-    .pipe { grid-template-columns: 1fr; }
-  }
-
-  /* architecture diagram */
-  .arch {
-    background: white;
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    padding: var(--space-6) var(--space-6);
-    margin: var(--space-6) 0;
-  }
-  .arch svg { width: 100%; max-width: 900px; height: auto; display: block; margin: 0 auto; }
-
-  /* contributions list */
-  .grid-2 {
-    display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-8);
-    margin: var(--space-6) 0;
-  }
-  @media (max-width: 760px) { .grid-2 { grid-template-columns: 1fr; } }
-
-  /* stats row */
+  /* stats */
   .stats {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: var(--space-3);
-    margin: var(--space-8) 0;
+    gap: var(--s-3);
+    margin: var(--s-6) 0;
   }
   .stat {
     background: white;
     border: 1px solid var(--rule);
     border-radius: 4px;
-    padding: var(--space-4);
+    padding: var(--s-4);
   }
   .stat .value {
     font-family: 'Newsreader', serif;
     font-size: var(--text-2xl);
     font-weight: 500;
-    color: var(--ink);
     line-height: 1;
-    margin-bottom: var(--space-2);
+    margin-bottom: var(--s-2);
   }
   .stat.win .value { color: var(--accent); }
   .stat .label {
@@ -297,420 +359,445 @@
     text-transform: uppercase;
     letter-spacing: .08em;
   }
-  @media (max-width: 720px) {
-    .stats { grid-template-columns: 1fr 1fr; }
-  }
+  @media (max-width: 720px) { .stats { grid-template-columns: 1fr 1fr; } }
 
-  /* nav */
-  nav.toc {
-    position: sticky; top: 0; z-index: 10;
-    background: rgba(251, 250, 247, 0.95);
-    backdrop-filter: blur(8px);
+  /* tables */
+  .tbl-scroll { overflow-x: auto; margin: var(--s-4) 0; }
+  .tbl-scroll > .tbl { margin: 0; min-width: 640px; }
+  .tbl {
+    width: 100%; border-collapse: collapse;
+    font-size: var(--text-sm);
+    background: white;
+    border: 1px solid var(--rule);
+  }
+  .tbl th, .tbl td {
+    padding: var(--s-2) var(--s-4);
+    text-align: left;
     border-bottom: 1px solid var(--rule);
-    padding: var(--space-3) 0;
-    font-size: var(--text-xs);
   }
-  nav.toc ol {
-    list-style: none; margin: 0; padding: 0;
-    display: flex; flex-wrap: wrap; gap: var(--space-4);
-    counter-reset: toc;
+  .tbl th {
+    background: var(--paper-2);
+    font-weight: 600; color: var(--ink-3);
+    text-transform: uppercase; font-size: var(--text-xs);
+    letter-spacing: .06em;
   }
-  nav.toc li { counter-increment: toc; }
-  nav.toc li::before {
-    content: counter(toc, decimal-leading-zero) " ";
-    color: var(--accent); margin-right: var(--space-1);
-    font-family: 'JetBrains Mono', monospace;
-  }
-  nav.toc a { color: var(--ink-3); border: none; }
-  nav.toc a:hover { color: var(--accent); }
+  .tbl td.num, .tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tbl tr:last-child td { border-bottom: 0; }
+  .tbl tr.highlight td { background: var(--accent-soft); font-weight: 600; }
+  .tbl tr.highlight td.num { color: var(--accent); }
+  .tbl tr.total td { background: var(--paper-2); font-weight: 600; }
 
-  /* footer */
-  footer { padding: var(--space-12) 0; color: var(--ink-4); font-size: var(--text-xs); border-top: 1px solid var(--rule); }
-  footer p { color: var(--ink-4); }
+  /* figures */
+  figure { margin: var(--s-6) 0; }
+  figure img { width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 4px; background: white; }
+  figcaption { margin-top: var(--s-2); font-size: var(--text-xs); color: var(--ink-4); max-width: 70ch; }
+
+  footer { padding: var(--s-8) 0; color: var(--ink-4); font-size: var(--text-xs); border-top: 1px solid var(--rule); }
 
   ::selection { background: var(--accent-2); color: var(--ink); }
 </style>
 </head>
 <body>
 
-<nav class="toc">
-  <div class="wrap">
-    <ol>
-      <li><a href="#problem">Problem</a></li>
-      <li><a href="#algorithm">Algorithm</a></li>
-      <li><a href="#pipeline">Training pipeline</a></li>
-      <li><a href="#headline">Headline result</a></li>
-      <li><a href="#per-task">Per-task results</a></li>
-      <li><a href="#trajectories">Trajectories</a></li>
-      <li><a href="#caveats">Caveats</a></li>
-    </ol>
+<nav class="toc"><div class="wrap"><ol>
+  <li><a href="#setup">Setup</a></li>
+  <li><a href="#architecture">Architecture</a></li>
+  <li><a href="#pseudocode">Pseudocode</a></li>
+  <li><a href="#results">Results</a></li>
+</ol></div></nav>
+
+<header class="cover"><div class="wrap">
+  <p class="eyebrow">Continual Goal-Conditioned RL · 2026-05-15</p>
+  <h1 class="title">Decomposed Contrastive Critics for <em>Continual</em> Goal-Conditioned RL</h1>
+  <div class="meta">
+    <span>Benchmark<strong>Continual World V2 · 10 Sawyer tasks</strong></span>
+    <span>Reward<strong>Sparse · terminal indicator</strong></span>
+    <span>Critic<strong>Contrastive · InfoNCE</strong></span>
+    <span>Compute<strong>3 seeds · 8M steps / task</strong></span>
   </div>
-</nav>
+</div></header>
 
-<header class="cover">
-  <div class="wrap">
-    <p class="eyebrow">Continual Goal-Conditioned RL · Working Note · 2026-05-15</p>
-    <h1 class="title">Decomposed Contrastive Critics for <em>Continual</em> Goal-Conditioned RL</h1>
-    <p class="subtitle">A small structural change to a contrastive critic — a shared body plus a per-task encoder, regularised by a masked-dynamics auxiliary — yields the strongest cell of a 9-cell ablation grid on the ten-task Continual World V2 Sawyer sequence.</p>
-    <div class="meta">
-      <span>Benchmark<strong>Continual World V2 · 10 Sawyer tasks</strong></span>
-      <span>Reward<strong>Sparse (terminal only)</strong></span>
-      <span>Critic<strong>Contrastive (InfoNCE)</strong></span>
-      <span>Compute<strong>3 seeds · 8M env steps / task</strong></span>
-    </div>
+<!-- ============================== SETUP ============================== -->
+<section id="setup"><div class="wrap">
+  <h2><span class="num">01</span>Setup</h2>
+
+  <div class="problem-card">
+    <div class="row"><span class="key">Sequence</span><span class="val mathjax">\(\mathcal{M}^{(1)}, \mathcal{M}^{(2)}, \ldots, \mathcal{M}^{(K)}\) with \(K = 10\); each MDP has shared \(\mathcal{S}, \mathcal{A}\), task-specific \(P^{(k)}, \mathcal{G}^{(k)}\).</span></div>
+    <div class="row"><span class="key">Reward</span><span class="val mathjax">\(r_g(s_t, a_t) \;=\; (1-\gamma)\, p\!\left(s_{t+1} = g \,\middle|\, s_t, a_t\right)\) — sparse goal-reaching only.</span></div>
+    <div class="row"><span class="key">Goal</span><span class="val mathjax">\(\max_{\theta}\;\mathbb{E}_{k}\,\mathbb{E}_{g \sim \mathcal{G}^{(k)}}\,\mathbb{E}_{\tau \sim \pi_{\theta}^{(k)}}\!\left[ \sum_{t=0}^{T} \gamma^{t}\, \mathbf{1}[s_{t+1}=g] \right]\) after observing \(\mathcal{M}^{(1..k)}\) in order.</span></div>
+    <div class="row"><span class="key">Critic</span><span class="val mathjax">Contrastive InfoNCE on \((s, a, g)\) with hindsight relabelling and in-batch negatives.</span></div>
   </div>
-</header>
+</div></section>
 
-<section id="problem">
-  <div class="wrap">
-    <h2><span class="num">01</span>The problem</h2>
-    <p class="lead">A single agent must solve a sequence of <strong>K = 10</strong> manipulation tasks under a curriculum, with the only learning signal being a terminal success indicator. No dense reward, no hand-shaped potential. Each task is seen for 8M environment steps and then the agent is advanced. The critic must carry enough representational structure across tasks for later tasks to be solvable; if the representation collapses, sparse rewards leave the agent with no gradient to recover.</p>
+<!-- ============================== ARCHITECTURE ============================== -->
+<section id="architecture"><div class="wrap">
+  <h2><span class="num">02</span>Architecture</h2>
+  <p style="font-size: var(--text-sm); color: var(--ink-3); max-width: 60ch;">
+    Click a node to inspect. Toggle a loss to highlight its gradient path.
+  </p>
 
-    <div class="grid-2">
-      <div>
-        <h4>Sparse goal-reaching reward</h4>
-        <p>Reward is delivered only at the end of an episode: <code>r = 1</code> if the achieved state equals the commanded goal, <code>0</code> otherwise. Up to a factor of <code>(1 − γ)</code> this is equivalent to the discounted indicator that the next state equals the goal, which is what a contrastive goal-conditioned critic naturally models.</p>
-      </div>
-      <div>
-        <h4>Why this is hard for continual RL</h4>
-        <p>Most prior continual-RL benchmarks supply a dense per-step scalar that pulls representations towards each task's goal. Removing that crutch isolates the representation channel: an algorithm that survives a curriculum here is an algorithm whose representation carries genuine cross-task reachability information, not one that is buoyed by reward shaping.</p>
-      </div>
+  <div class="arch-wrap">
+    <div class="arch-controls">
+      <button data-grad="" class="active">Forward pass</button>
+      <button data-grad="nce">∇ L<sub>NCE</sub></button>
+      <button data-grad="dyn">∇ L<sub>dyn</sub></button>
+      <button data-grad="boundary">Task boundary</button>
+      <span class="legend">
+        <span class="dot shared"></span> shared
+        <span class="dot reset" style="margin-left: 8px;"></span> reset at boundary
+        <span class="dot loss" style="margin-left: 8px;"></span> loss
+      </span>
     </div>
 
-    <h3>The 9-cell baseline grid</h3>
-    <p>Every prior method we compare against is one of nine cells: at each task boundary, the actor and the critic are each placed independently in one of three carryover modes — <strong>reset</strong> (reinitialise), <strong>persistent</strong> (carry forward unchanged), or <strong>CKA</strong> (the additive knowledge-vector decomposition adapted from prior continual-RL work). The reset/reset cell is the natural from-scratch baseline. None of the nine cells beats the from-scratch baseline by more than 0.01 on average best success; the persistent-critic family is consistently worse than starting from scratch.</p>
-  </div>
-</section>
-
-<section id="algorithm">
-  <div class="wrap">
-    <h2><span class="num">02</span>The proposed algorithm</h2>
-    <p class="lead">We keep the actor in the <code>reset</code> mode of the 9-cell grid and modify only the critic. The state–action encoder of the contrastive critic is split into three pieces — a shared body, a small per-task encoder, and a dynamics head — with one auxiliary loss tying the body to a task-invariant subspace of the state.</p>
-
-    <h3>Architecture</h3>
-    <p>The state–action representation is the sum of a body-and-head projection and a per-task residual:</p>
-
-    <div class="eq">
-      \[
-        \mathrm{sa\_repr}(s, a) \;=\; h_{\phi}\!\bigl(b_{\mathrm{shared}}(s, a)\bigr) \;+\; \phi_{\mathrm{task}}(s, a).
-      \]
-    </div>
-
-    <div class="grid-2">
-      <div class="callout method">
-        <h4><span style="color: var(--accent);">b<sub>shared</sub>(s, a)</span> — the body</h4>
-        <p>A residual MLP of width 1024 and depth 4, shared across all tasks and carried forward unchanged at every task boundary. The body is the <strong>only continual transfer channel</strong> on the critic side. It is regularised by the masked-dynamics auxiliary below.</p>
-      </div>
-      <div class="callout method">
-        <h4><span style="color: var(--accent);">φ<sub>task</sub>(s, a)</span> — the per-task encoder</h4>
-        <p>A small residual MLP of width 256 and depth 4 that produces a state-and-action-dependent additive contribution. <strong>Re-initialised at every task boundary.</strong> Unlike a state-independent linear mixture, its contribution varies with both <code>s</code> and <code>a</code>, so the gradient it carries through the downstream losses is not in their joint null space.</p>
-      </div>
-    </div>
-
-    <h3>Masked-dynamics auxiliary</h3>
-    <p>The body must be predictive of the components of the next state that are <em>invariant across tasks</em>. On the Sawyer manipulation sequence the natural choice is the four-dimensional end-effector pose plus the gripper, indexed by <code>M = {0, 1, 2, 3}</code>: those four coordinates are geometrically defined the same way no matter which task is current. A small dynamics head predicts them from the body's output and the squared error is added to the critic loss:</p>
-
-    <div class="eq">
-      \[
-        \mathcal{L}_{\mathrm{dyn}} \;=\; \mathbb{E}_{(s,a,s')}\,\bigl\|\, h_{\mathrm{dyn}}\!\bigl(b_{\mathrm{shared}}(s, a)\bigr) \;-\; s'_{M} \,\bigr\|_{2}^{2}.
-      \]
-    </div>
-
-    <div class="eq">
-      \[
-        \mathcal{L}_{\mathrm{critic}} \;=\; \mathcal{L}_{\mathrm{NCE}} \;+\; \mu \cdot \mathcal{L}_{\mathrm{dyn}}, \qquad \mu = 1.
-      \]
-    </div>
-
-    <p>No task one-hot is supplied to any head: the body must learn shared dynamics without knowing which task is current.</p>
-
-    <h3>Architecture diagram</h3>
     <div class="arch">
-      <svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Architecture of the decomposed contrastive critic.">
-        <defs>
-          <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto">
-            <path d="M 0 0 L 8 4 L 0 8 Z" fill="#475569"></path>
-          </marker>
-        </defs>
-        <style>
-          .lbl { font: 500 13px 'Inter', sans-serif; fill: #0f172a; }
-          .sublbl { font: 400 11px 'Inter', sans-serif; fill: #64748b; }
-          .ax { stroke: #475569; stroke-width: 1.4; fill: none; }
-          .body { fill: #fff; stroke: #1f2937; stroke-width: 1.2; }
-          .accent { fill: #fff5f7; stroke: #be123c; stroke-width: 1.4; }
-          .head { fill: #f3f1ec; stroke: #475569; stroke-width: 1.0; }
-          .loss { fill: #fdf6e3; stroke: #d97706; stroke-width: 1.0; }
-          .eq { font: 500 13px 'JetBrains Mono', monospace; fill: #0f172a; }
-        </style>
-        <!-- inputs -->
-        <rect class="body" x="20" y="30"  width="86" height="34" rx="3"></rect>
-        <text class="lbl" x="63" y="52" text-anchor="middle">state s</text>
-        <rect class="body" x="20" y="80"  width="86" height="34" rx="3"></rect>
-        <text class="lbl" x="63" y="102" text-anchor="middle">action a</text>
-        <rect class="body" x="20" y="160" width="86" height="34" rx="3"></rect>
-        <text class="lbl" x="63" y="182" text-anchor="middle">goal g</text>
-        <rect class="body" x="20" y="240" width="86" height="34" rx="3"></rect>
-        <text class="lbl" x="63" y="262" text-anchor="middle">s′[M]</text>
-        <text class="sublbl" x="63" y="282" text-anchor="middle">target for L_dyn</text>
+      <div class="arch-stage">
+        <svg viewBox="0 0 880 460" xmlns="http://www.w3.org/2000/svg" id="archsvg"
+             role="img" aria-label="Decomposed contrastive critic architecture.">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+              <path d="M 0 0 L 10 5 L 0 10 Z" fill="currentColor" />
+            </marker>
+            <marker id="arrow-acc" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+              <path d="M 0 0 L 10 5 L 0 10 Z" fill="#be123c" />
+            </marker>
+            <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#fbfaf7"/>
+              <stop offset="100%" stop-color="#f3f1ec"/>
+            </linearGradient>
+          </defs>
 
-        <!-- b_shared -->
-        <rect class="body" x="200" y="40" width="160" height="70" rx="4"></rect>
-        <text class="lbl" x="280" y="68" text-anchor="middle">b_shared(s, a)</text>
-        <text class="sublbl" x="280" y="86" text-anchor="middle">ResMLP · w=1024 · d=4</text>
-        <text class="sublbl" x="280" y="100" text-anchor="middle">carried forward across tasks</text>
+          <!-- subtle band labels -->
+          <text x="20"  y="22"  class="micro" fill="#94a3b8" font-size="11" font-family="JetBrains Mono">inputs</text>
+          <text x="220" y="22"  class="micro" fill="#94a3b8" font-size="11" font-family="JetBrains Mono">encoders</text>
+          <text x="510" y="22"  class="micro" fill="#94a3b8" font-size="11" font-family="JetBrains Mono">heads</text>
+          <text x="715" y="22"  class="micro" fill="#94a3b8" font-size="11" font-family="JetBrains Mono">losses</text>
 
-        <!-- phi_task -->
-        <rect class="accent" x="200" y="135" width="160" height="70" rx="4"></rect>
-        <text class="lbl" x="280" y="163" text-anchor="middle" style="fill: #be123c;">φ_task(s, a)</text>
-        <text class="sublbl" x="280" y="181" text-anchor="middle">ResMLP · w=256 · d=4</text>
-        <text class="sublbl" x="280" y="195" text-anchor="middle">RE-INIT at task boundary</text>
+          <!-- EDGES (drawn first so nodes overlap them cleanly) -->
+          <!-- s -> b_shared, phi_task -->
+          <path id="e_s_b"    class="edge" d="M 120 90  C 170 90, 180 120, 220 130" marker-end="url(#arrow)"/>
+          <path id="e_a_b"    class="edge" d="M 120 145 C 170 140, 180 135, 220 138" marker-end="url(#arrow)"/>
+          <path id="e_s_phi"  class="edge" d="M 120 90  C 170 200, 190 240, 220 250" marker-end="url(#arrow)"/>
+          <path id="e_a_phi"  class="edge" d="M 120 145 C 170 200, 190 245, 220 258" marker-end="url(#arrow)"/>
+          <path id="e_g_psi"  class="edge" d="M 120 380 C 170 380, 190 360, 220 360" marker-end="url(#arrow)"/>
+          <!-- b_shared -> h_phi -->
+          <path id="e_b_hphi" class="edge" d="M 380 130 C 440 130, 460 90, 510 90" marker-end="url(#arrow)"/>
+          <!-- b_shared -> h_dyn -->
+          <path id="e_b_hdyn" class="edge" d="M 380 160 C 440 160, 460 180, 510 180" marker-end="url(#arrow)"/>
+          <!-- h_phi -> SUM -->
+          <path id="e_hphi_sum" class="edge" d="M 610 90  C 640 90,  640 200, 668 218" marker-end="url(#arrow)"/>
+          <!-- phi_task -> SUM -->
+          <path id="e_phi_sum"  class="edge" d="M 380 260 C 500 250, 600 240, 668 232" marker-end="url(#arrow)"/>
+          <!-- psi -> DOT -->
+          <path id="e_psi_dot"  class="edge" d="M 380 360 C 500 360, 600 350, 668 340" marker-end="url(#arrow)"/>
+          <!-- SUM -> DOT -->
+          <path id="e_sum_dot"  class="edge" d="M 700 252 L 700 308" marker-end="url(#arrow)"/>
+          <!-- DOT -> L_NCE -->
+          <path id="e_dot_nce"  class="edge" d="M 732 328 C 770 328, 780 320, 800 320" marker-end="url(#arrow)"/>
+          <!-- h_dyn -> L_dyn -->
+          <path id="e_hdyn_ldyn" class="edge" d="M 610 180 C 700 180, 740 180, 800 180" marker-end="url(#arrow)"/>
+          <!-- s'[M] -> L_dyn (target) -->
+          <path id="e_sM_ldyn" class="edge" d="M 120 220 C 200 220, 700 220, 800 200" marker-end="url(#arrow)"/>
 
-        <!-- psi (goal) -->
-        <rect class="body" x="200" y="230" width="160" height="56" rx="4"></rect>
-        <text class="lbl" x="280" y="254" text-anchor="middle">ψ(g)</text>
-        <text class="sublbl" x="280" y="272" text-anchor="middle">ResMLP · w=1024 · d=4</text>
+          <!-- ============== NODES ============== -->
+          <!-- Inputs (dashed) -->
+          <g class="node io" data-id="s" tabindex="0">
+            <rect x="30" y="70" width="90" height="40" rx="4"/>
+            <text class="ntitle" x="75" y="93" text-anchor="middle">s</text>
+            <text class="nsub"   x="75" y="106" text-anchor="middle">state</text>
+          </g>
+          <g class="node io" data-id="a" tabindex="0">
+            <rect x="30" y="125" width="90" height="40" rx="4"/>
+            <text class="ntitle" x="75" y="148" text-anchor="middle">a</text>
+            <text class="nsub"   x="75" y="161" text-anchor="middle">action</text>
+          </g>
+          <g class="node io" data-id="sM" tabindex="0">
+            <rect x="30" y="200" width="90" height="40" rx="4"/>
+            <text class="ntitle" x="75" y="222" text-anchor="middle">s′[M]</text>
+            <text class="nsub"   x="75" y="234" text-anchor="middle">target · L_dyn</text>
+          </g>
+          <g class="node io" data-id="g" tabindex="0">
+            <rect x="30" y="360" width="90" height="40" rx="4"/>
+            <text class="ntitle" x="75" y="382" text-anchor="middle">g</text>
+            <text class="nsub"   x="75" y="395" text-anchor="middle">goal</text>
+          </g>
 
-        <!-- h_phi -->
-        <rect class="head" x="430" y="20" width="120" height="48" rx="4"></rect>
-        <text class="lbl" x="490" y="42" text-anchor="middle">h_φ</text>
-        <text class="sublbl" x="490" y="58" text-anchor="middle">linear → ℝ^64</text>
+          <!-- Encoders -->
+          <g class="node shared" data-id="bshared" tabindex="0">
+            <rect x="220" y="105" width="160" height="60" rx="5"/>
+            <text class="ntitle" x="300" y="129" text-anchor="middle">b_shared(s, a)</text>
+            <text class="nsub"   x="300" y="146" text-anchor="middle">ResMLP 1024 × 4</text>
+            <text class="nsub"   x="300" y="160" text-anchor="middle">shared, carried fwd</text>
+          </g>
+          <g class="node reset" data-id="phitask" tabindex="0">
+            <rect x="220" y="225" width="160" height="60" rx="5"/>
+            <text class="ntitle" x="300" y="249" text-anchor="middle">φ_task(s, a)</text>
+            <text class="nsub"   x="300" y="266" text-anchor="middle">ResMLP 256 × 4</text>
+            <text class="nsub"   x="300" y="280" text-anchor="middle">RE-INIT each task</text>
+          </g>
+          <g class="node shared" data-id="psi" tabindex="0">
+            <rect x="220" y="340" width="160" height="50" rx="5"/>
+            <text class="ntitle" x="300" y="362" text-anchor="middle">ψ(g)</text>
+            <text class="nsub"   x="300" y="378" text-anchor="middle">ResMLP 1024 × 4</text>
+          </g>
 
-        <!-- h_dyn -->
-        <rect class="head" x="430" y="86" width="120" height="48" rx="4"></rect>
-        <text class="lbl" x="490" y="108" text-anchor="middle">h_dyn</text>
-        <text class="sublbl" x="490" y="124" text-anchor="middle">MLP → ℝ^|M|</text>
+          <!-- Heads -->
+          <g class="node shared" data-id="hphi" tabindex="0">
+            <rect x="510" y="62" width="100" height="48" rx="5"/>
+            <text class="ntitle" x="560" y="85" text-anchor="middle">h_φ</text>
+            <text class="nsub"   x="560" y="100" text-anchor="middle">linear → ℝ⁶⁴</text>
+          </g>
+          <g class="node shared" data-id="hdyn" tabindex="0">
+            <rect x="510" y="152" width="100" height="48" rx="5"/>
+            <text class="ntitle" x="560" y="175" text-anchor="middle">h_dyn</text>
+            <text class="nsub"   x="560" y="190" text-anchor="middle">MLP → ℝ⁴</text>
+          </g>
 
-        <!-- sum -->
-        <circle cx="630" cy="120" r="22" class="body"></circle>
-        <text class="eq" x="630" y="125" text-anchor="middle">+</text>
-        <text class="sublbl" x="630" y="160" text-anchor="middle">sa_repr</text>
+          <!-- Ops: SUM and DOT -->
+          <g class="node op" data-id="sum" tabindex="0">
+            <circle cx="700" cy="225" r="26"/>
+            <text class="nop" x="700" y="232" text-anchor="middle">+</text>
+            <text class="nsub" x="700" y="270" text-anchor="middle">sa_repr</text>
+          </g>
+          <g class="node op" data-id="dot" tabindex="0">
+            <circle cx="700" cy="325" r="22"/>
+            <text class="nop" x="700" y="332" text-anchor="middle">·</text>
+            <text class="nsub" x="700" y="368" text-anchor="middle">score</text>
+          </g>
 
-        <!-- dot product -->
-        <circle cx="780" cy="180" r="22" class="body"></circle>
-        <text class="eq" x="780" y="185" text-anchor="middle">·</text>
-        <text class="sublbl" x="780" y="220" text-anchor="middle">critic score</text>
-
-        <!-- losses -->
-        <rect class="loss" x="710" y="20" width="170" height="44" rx="4"></rect>
-        <text class="lbl" x="795" y="40" text-anchor="middle">L_NCE</text>
-        <text class="sublbl" x="795" y="56" text-anchor="middle">InfoNCE over goals</text>
-
-        <rect class="loss" x="710" y="86" width="170" height="44" rx="4"></rect>
-        <text class="lbl" x="795" y="106" text-anchor="middle">L_dyn (μ=1)</text>
-        <text class="sublbl" x="795" y="122" text-anchor="middle">‖ h_dyn ‖² on M only</text>
-
-        <!-- arrows -->
-        <path class="ax" d="M106 47 L196 65"   marker-end="url(#arrow)"></path>
-        <path class="ax" d="M106 97 L196 80"   marker-end="url(#arrow)"></path>
-        <path class="ax" d="M106 47 L196 155"  marker-end="url(#arrow)"></path>
-        <path class="ax" d="M106 97 L196 170"  marker-end="url(#arrow)"></path>
-        <path class="ax" d="M106 177 L196 252" marker-end="url(#arrow)"></path>
-
-        <path class="ax" d="M360 65  L426 40"  marker-end="url(#arrow)"></path>
-        <path class="ax" d="M360 95  L426 110" marker-end="url(#arrow)"></path>
-        <path class="ax" d="M360 170 L608 118" marker-end="url(#arrow)"></path>
-        <path class="ax" d="M550 42  L608 110" marker-end="url(#arrow)"></path>
-
-        <path class="ax" d="M652 124 L758 170" marker-end="url(#arrow)"></path>
-        <path class="ax" d="M360 258 L758 192" marker-end="url(#arrow)"></path>
-
-        <path class="ax" d="M550 110 L708 102" marker-end="url(#arrow)"></path>
-        <path class="ax" d="M780 158 L780 70"  marker-end="url(#arrow)"></path>
-        <path class="ax" d="M106 257 L708 110" marker-end="url(#arrow)"></path>
-      </svg>
-    </div>
-    <p style="font-size: var(--text-xs); color: var(--ink-4); max-width: 70ch;">Solid black: shared, carried forward across the task curriculum. Rose: re-initialised at every task boundary. Beige: losses. The state–action representation is the sum of <code>h_φ(b_shared)</code> and <code>φ_task</code>; the goal representation is <code>ψ(g)</code>; the critic score is their inner product. The dynamics head trains the body alone on the masked-coordinate prediction.</p>
-  </div>
-</section>
-
-<section id="pipeline">
-  <div class="wrap">
-    <h2><span class="num">03</span>Training pipeline</h2>
-    <p class="lead">Per task <code>k</code>, the agent alternates one episode of environment interaction with one inner gradient block. Every transition is hindsight-relabelled and fed to the contrastive critic; every gradient step on the critic is a step on <code>L_NCE + μ·L_dyn</code>. The actor follows the SAC dual-update entropy schedule and reads value only from the target critic. Task boundaries reset <code>φ_task</code> while preserving everything else.</p>
-
-    <div class="pipe">
-      <div class="stage">
-        <strong>Rollout</strong>
-        Single episode in the current Sawyer task under the actor. Action ∈ [−1,1]<sup>4</sup>, episode capped at <code>T=500</code> steps.
+          <!-- Losses -->
+          <g class="node loss" data-id="ldyn" tabindex="0">
+            <rect x="800" y="160" width="60" height="42" rx="5"/>
+            <text class="ntitle" x="830" y="181" text-anchor="middle">L_dyn</text>
+            <text class="nsub"   x="830" y="195" text-anchor="middle">‖·‖² · μ=1</text>
+          </g>
+          <g class="node loss" data-id="lnce" tabindex="0">
+            <rect x="800" y="300" width="60" height="42" rx="5"/>
+            <text class="ntitle" x="830" y="321" text-anchor="middle">L_NCE</text>
+            <text class="nsub"   x="830" y="335" text-anchor="middle">softmax</text>
+          </g>
+        </svg>
       </div>
-      <div class="stage">
-        <strong>HER relabel</strong>
-        Future-strategy hindsight relabelling builds positive (s, a, g) triples; in-batch goals form negatives for the InfoNCE softmax.
-      </div>
-      <div class="stage">
-        <strong>Inner block</strong>
-        <code>lax.scan</code> over N<sub>sgd</sub> mini-batches: one gradient step on <code>L_NCE + μ·L_dyn</code>; one gradient step on the actor under the target critic.
-      </div>
-      <div class="stage">
-        <strong>Target update</strong>
-        Polyak averaging on (b<sub>shared</sub>, h<sub>φ</sub>, φ<sub>task</sub>, ψ). The actor reads only target encoders.
-      </div>
-      <div class="stage">
-        <strong>Task boundary</strong>
-        After 8M env steps: re-init <code>φ_task</code>, carry forward <code>b_shared</code>, <code>h_φ</code>, <code>h_dyn</code>, <code>ψ</code>. Reset replay buffer.
-      </div>
-    </div>
 
-    <h3>What flows where across tasks</h3>
-    <div class="tbl-scroll"><table class="tbl">
-      <thead>
-        <tr><th>Component</th><th>Role</th><th>At task boundary k → k+1</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><code>b_shared</code></td><td>shared state-action body (the transfer channel)</td><td><strong>carried forward</strong></td></tr>
-        <tr><td><code>h_φ</code></td><td>linear projection to ℝ<sup>64</sup></td><td>carried forward</td></tr>
-        <tr><td><code>h_dyn</code></td><td>dynamics head for the auxiliary</td><td>carried forward</td></tr>
-        <tr><td><code>ψ</code></td><td>goal encoder</td><td>carried forward</td></tr>
-        <tr style="background: #fff5f7;"><td><code>φ_task</code></td><td>per-task additive residual on (s, a)</td><td><strong>re-initialised</strong></td></tr>
-        <tr><td>actor</td><td>π<sub>θ</sub>(a | s, g)</td><td>re-initialised (same as the 9-cell <code>reset</code> mode)</td></tr>
-        <tr><td>replay buffer</td><td>per-task transitions for HER + InfoNCE</td><td>cleared</td></tr>
-      </tbody>
-    </table></div>
-
-    <h3>Code paths</h3>
-    <p>The construction is implemented in JAX + Haiku on top of <a href="https://github.com/MichalBortkiewicz/JaxGCRL">JaxGCRL</a>. Live in the project repository on the <code>section3_done</code> branch:</p>
-    <ul style="font-size: var(--text-sm); color: var(--ink-2); max-width: 64ch;">
-      <li><code>contrastive/decomposed_networks.py</code> — the b_shared / h_φ / h_dyn / φ_task construction.</li>
-      <li><code>contrastive/continual_learning_decomposed.py</code> — the inner-loop trainer.</li>
-      <li><code>run_continual_contrastive.py</code> — the curriculum runner; <code>--critic_mode=decomposed</code> activates this cell.</li>
-      <li><code>experiment_configs.py</code> + <code>DRAFT.sh</code>, <code>draft_3.sh</code>, <code>draft_4.sh</code> — SLURM-side cell sweep.</li>
-      <li><code>results/scripts/{fetch_wandb_runs,compute_metrics,render_plots}.py</code> — the reproducible analysis pipeline the figures on this page are built from.</li>
-    </ul>
-  </div>
-</section>
-
-<section id="headline">
-  <div class="wrap">
-    <h2><span class="num">04</span>Headline result</h2>
-    <p class="lead">With every cell scored on its best mean success per task and then averaged across the ten tasks, the proposed decomposed critic is the strongest cell of the grid by a margin larger than the spread of the other nine cells.</p>
-
-    <div class="stats">
-      <div class="stat win">
-        <div class="value">0.873</div>
-        <div class="label">Decomposed (ours) · avg best · 3 seeds</div>
-      </div>
-      <div class="stat">
-        <div class="value">0.832</div>
-        <div class="label">Reset / Reset from-scratch · 5 seeds</div>
-      </div>
-      <div class="stat win">
-        <div class="value">+0.27</div>
-        <div class="label">Δ on k=8 window-close · vs reset/reset</div>
-      </div>
-      <div class="stat win">
-        <div class="value">+0.16</div>
-        <div class="label">Δ on k=5 handle-press-side · vs reset/reset</div>
-      </div>
+      <aside class="arch-info" id="archinfo" aria-live="polite">
+        <p class="hint">Hover or click any node to see its role, shape, and what happens to it at a task boundary.</p>
+      </aside>
     </div>
 
-    <figure>
-      <img src="img/avg_best_bar.png" alt="Bar chart of average best success across the 10 Sawyer tasks for all 10 cells, with the decomposed-critic cell highest at 0.873." />
-      <figcaption><strong>Average best success across the ten Sawyer tasks, per cell.</strong> R = reset, P = persistent, C = CKA. The proposed decomposed cell sits at <strong>0.873</strong>, ahead of the next-best cell (CKA / R at 0.841) by 0.032 and ahead of the from-scratch reset/reset baseline by 0.041. The 9-cell baseline spread (0.761 → 0.841) is smaller than the gap from the best baseline cell to ours. GCRL cells pool 5 seeds from <code>for_real</code>; CKA-actor cells pool 4–5 seeds from <code>real1+real2</code>; the decomposed cell pools 3 seeds from <code>C2: decomposed single-cell sanity</code>.</figcaption>
-    </figure>
-  </div>
-</section>
-
-<section id="per-task">
-  <div class="wrap">
-    <h2><span class="num">05</span>Per-task results across all ten tasks</h2>
-    <p class="lead">The gain over the from-scratch baseline is concentrated on the three hardest tasks of the sequence: <code>handle-press-side</code> (k=5), <code>window-close</code> (k=8), and <code>peg-unplug-side</code> (k=9). Easy tasks (k=0,1,3,4,6) are at ceiling for every cell.</p>
-
-    <figure>
-      <img src="img/bar_per_task.png" alt="Grouped bar chart of per-task best mean success for Reset/Reset, Persistent/Persistent, CKA/Reset, and the proposed Decomposed critic across the ten tasks." />
-      <figcaption><strong>Per-task best mean success</strong> (mean ± sample standard deviation across seeds). Four cells shown: the from-scratch baseline (R/R), the worst persistent cell (P/P), the best non-decomposed cell (CKA/R), and the proposed decomposed critic. Decomposed leads on k=5, k=8, k=9; matches the field on all other tasks.</figcaption>
-    </figure>
-
-    <figure>
-      <img src="img/delta_per_task.png" alt="Bar chart of per-task differences in best mean success between decomposed and reset/reset; positive for hard tasks, small or zero elsewhere." />
-      <figcaption><strong>Decomposed minus Reset/Reset per task</strong> (unpaired mean difference). Bars in rose are positive (decomposed wins); bars in slate are negative. Error bars are propagated standard errors of the mean difference. The gain is concentrated on k=5 (+0.16) and k=8 (+0.27); k=9 trends positive but with overlapping error bars; k=2 trends slightly negative with overlapping error bars; everything else is within seed noise of zero.</figcaption>
-    </figure>
-
-    <h3>The full per-task table</h3>
-    <p>This is the complete numerical record for the four cells highlighted above. The full 10-cell table is in <code>results/tables/per_task_table.md</code>.</p>
-    <div class="tbl-scroll"><table class="tbl">
-      <thead>
-        <tr>
-          <th>k</th>
-          <th>task</th>
-          <th class="num">Reset/Reset</th>
-          <th class="num">Persistent/Persistent</th>
-          <th class="num">CKA/Reset</th>
-          <th class="num">Decomposed (ours)</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>0</td><td>hammer</td>            <td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td></tr>
-        <tr><td>1</td><td>push-wall</td>          <td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td></tr>
-        <tr><td>2</td><td>faucet-close</td>       <td class="num">0.920 ± 0.084</td><td class="num">0.880 ± 0.084</td><td class="num">0.920 ± 0.045</td><td class="num">0.867 ± 0.058</td></tr>
-        <tr><td>3</td><td>push-back</td>          <td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td></tr>
-        <tr><td>4</td><td>stick-pull</td>         <td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">0.980 ± 0.045</td><td class="num">1.000 ± 0.000</td></tr>
-        <tr class="highlight"><td>5</td><td>handle-press-side</td><td class="num">0.240 ± 0.089</td><td class="num">0.200 ± 0.122</td><td class="num">0.260 ± 0.055</td><td class="num">0.400 ± 0.100</td></tr>
-        <tr><td>6</td><td>push</td>               <td class="num">0.980 ± 0.045</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td></tr>
-        <tr><td>7</td><td>shelf-place</td>        <td class="num">0.980 ± 0.045</td><td class="num">0.660 ± 0.385</td><td class="num">0.980 ± 0.045</td><td class="num">0.967 ± 0.058</td></tr>
-        <tr class="highlight"><td>8</td><td>window-close</td>      <td class="num">0.367 ± 0.058</td><td class="num">0.367 ± 0.153</td><td class="num">0.400 ± 0.000</td><td class="num">0.633 ± 0.058</td></tr>
-        <tr><td>9</td><td>peg-unplug-side</td>    <td class="num">0.833 ± 0.058</td><td class="num">0.800 ± 0.100</td><td class="num">0.867 ± 0.153</td><td class="num">0.867 ± 0.153</td></tr>
-        <tr class="total">
-          <td colspan="2">avg best (over 10 tasks)</td>
-          <td class="num">0.832</td><td class="num">0.791</td><td class="num">0.841</td><td class="num"><strong>0.873</strong></td>
-        </tr>
-        <tr class="total">
-          <td colspan="2">seeds (median)</td>
-          <td class="num">5</td><td class="num">5</td><td class="num">5</td><td class="num">3</td>
-        </tr>
-      </tbody>
-    </table></div>
-    <p style="font-size: var(--text-xs); color: var(--ink-4); max-width: 70ch;">Each cell shows <em>best mean success</em>: the max over the per-step <code>evaluator/success_rate</code> trajectory during training of that task, averaged across seeds. Standard deviation is sample standard deviation across seeds. <strong>Highlighted</strong> rows are the three hardest tasks. Decomposed seeds (5, 6, 7) do not overlap with the GCRL-cell seeds (97–101), so paired forward-transfer numbers are not directly comparable; we report the unpaired mean difference instead.</p>
-  </div>
-</section>
-
-<section id="trajectories">
-  <div class="wrap">
-    <h2><span class="num">06</span>Trajectories on the hardest tasks</h2>
-    <p class="lead">The per-task best is an end-of-trajectory summary; the trajectories show how the policy gets there. On the two tasks where the decomposed critic wins, it does so by maintaining a higher success rate across the entire 8M-step training window, not just spiking at the end.</p>
-
-    <figure>
-      <img src="img/trajectories_hard.png" alt="Three side-by-side line plots of evaluator success rate vs env steps for the four cells on k=5, k=8, and k=9. The decomposed-critic curve is above the others on k=5 and k=8 and is competitive on k=9." />
-      <figcaption><strong>Per-step evaluator success rate, smoothed across seeds.</strong> Mean across seeds bold; per-seed curves dim. The decomposed cell stays around <strong>2× the baseline</strong> across the full 8M steps of <code>window-close</code> (k=8), where the previous-best cell (CKA / Reset) is essentially at the from-scratch baseline. On <code>handle-press-side</code> (k=5) the absolute level is low for every cell, but the decomposed cell stays consistently above the others. On <code>peg-unplug-side</code> (k=9) the four cells converge to ≈ 0.4 success.</figcaption>
-    </figure>
-
-    <div class="pull">
-      "Decomposed (ours)" is the only cell whose <code>window-close</code> trajectory does not collapse: the previous-best baselines sit near 0.05 from the start of the task, while the decomposed cell holds 0.15–0.20 across the full 8M steps.
-    </div>
-  </div>
-</section>
-
-<section id="caveats">
-  <div class="wrap">
-    <h2><span class="num">07</span>What the table does not tell you</h2>
-    <div class="grid-2">
-      <div>
-        <h4>Sample size and overlap</h4>
-        <p>The decomposed-critic numbers are from <strong>3 seeds</strong> (5, 6, 7) in the W&amp;B group <code>C2: decomposed single-cell sanity</code>. The 9-cell baselines are from <strong>4–5 seeds</strong> (97–101 and re-runs) in <code>for_real</code> + <code>real1</code> + <code>real2</code>. Seeds do not overlap between the two pools, so forward transfer is reported as an unpaired mean difference rather than a paired one. Five-seed runs for the proposed cell are queued; the camera-ready will report tighter intervals.</p>
-      </div>
-      <div>
-        <h4>Backward transfer</h4>
-        <p>None of the runs that feed this page were launched with cross-task evaluation enabled (<code>intra_eval_previous_tasks = False</code>), so we cannot directly compute classical backward transfer or catastrophic forgetting. What we report instead is a within-task stability ratio (<code>end / best</code>) per cell, which sits at ≈ 0.48 for every cell — including ours. A proper backward-transfer pass is on the camera-ready list.</p>
-      </div>
-      <div>
-        <h4>One single hyperparameter setting</h4>
-        <p>All decomposed-critic numbers on this page are at <code>μ = 1</code>, <code>phi_task_width = 256</code>, <code>phi_task_depth = 4</code>, masked indices <code>M = {0, 1, 2, 3}</code>. We have not yet swept any of these. A small ablation cell <code>dyn_aux_after_task0 = 0</code> (keep the auxiliary only at task 0, where the body's masked-dynamics loss converges) is queued to test whether the auxiliary is acting as a one-shot initialiser or as a continual regulariser.</p>
-      </div>
-      <div>
-        <h4>One benchmark, one embodiment</h4>
-        <p>This is one curriculum on one robot (Sawyer 7-DoF arm), one task family (manipulation), one observation modality (state-based). The geometric argument for why a state-and-action-dependent residual outperforms a state-independent additive mixture is benchmark-agnostic, but the empirical claim of "+0.04 avg best, +0.27 on window-close" is specific to this curriculum.</p>
+    <!-- Math under the diagram -->
+    <div style="margin-top: var(--s-6);">
+      <div class="mathjax" style="font-size: 1.05em; padding: var(--s-3) var(--s-4); background: var(--paper); border-left: 2px solid var(--ink-4); border-radius: 0 4px 4px 0;">
+        \[
+          \mathrm{sa\_repr}(s, a) \;=\; \underbrace{h_{\phi}\!\bigl(b_{\mathrm{shared}}(s,a)\bigr)}_{\text{transfer}} \;+\; \underbrace{\phi_{\mathrm{task}}(s,a)}_{\text{per-task}}, \qquad
+          \mathcal{L}_{\mathrm{critic}} \;=\; \mathcal{L}_{\mathrm{NCE}} \;+\; \mu\,\mathcal{L}_{\mathrm{dyn}}, \qquad \mu = 1.
+        \]
       </div>
     </div>
-
-    <h3>Pointers</h3>
-    <p>For the formal write-up and the broader 9-cell story see the workshop submission at <a href="https://github.com/Okyumi/CGCRL---RLC-workshop-2026">Okyumi/CGCRL---RLC-workshop-2026</a>. The code lives at <a href="https://github.com/Okyumi/sgcrl">Okyumi/sgcrl</a> on the <code>section3_done</code> branch; the analysis pipeline that produced every number and every figure on this page is in <code>results/</code>.</p>
   </div>
-</section>
+</div></section>
 
-<footer>
-  <div class="wrap">
-    <p>Working note · prepared for internal review · 2026-05-15. Figures regenerate from W&amp;B project <code>nyuad_mmvc/continual_gcrl_paper</code> via <code>results/scripts/{fetch_wandb_runs.py, compute_metrics.py, render_plots.py}</code>.</p>
+<!-- ============================== PSEUDOCODE ============================== -->
+<section id="pseudocode"><div class="wrap">
+  <h2><span class="num">03</span>Training pipeline</h2>
+
+  <div class="algo" aria-label="Pseudocode of the training pipeline">
+    <div class="ahead">Algorithm 1 <span class="name">— Continual contrastive GCRL with a decomposed critic</span></div>
+
+<span class="line"><span class="kw">input</span>  tasks <span class="var">M⁽¹⁾..M⁽ᴷ⁾</span>; budget <span class="var">N</span> per task; aux weight <span class="var">μ</span>; mask <span class="var">M ⊆ dim(S)</span></span>
+<span class="line"><span class="kw">init</span>   shared (<span class="var">b_shared, h_φ, h_dyn, ψ</span>) ← random; targets ← params</span>
+<span class="line"></span>
+<span class="line"><span class="kw">for</span>  <span class="var">k = 1, …, K</span>:                                          <span class="com"># task curriculum</span></span>
+<span class="line"><span class="ind1"></span><span class="acc">φ_task ← random</span>;  <span class="var">π_θ ← random</span>;  <span class="var">D_k ← ∅</span>                <span class="com"># reset task-local state</span></span>
+<span class="line"><span class="ind1"></span><span class="kw">while</span> <span class="var">env_steps_k &lt; N</span>:</span>
+<span class="line"><span class="ind2"></span><span class="com">────── rollout ──────</span></span>
+<span class="line"><span class="ind2"></span><span class="var">τ ← rollout(π_θ, M⁽ᵏ⁾)</span></span>
+<span class="line"><span class="ind2"></span><span class="var">D_k ← D_k ∪ HER_relabel(τ)</span>                                <span class="com"># future-strategy</span></span>
+<span class="line"></span>
+<span class="line"><span class="ind2"></span><span class="com">────── inner block (lax.scan over N_sgd mini-batches) ──────</span></span>
+<span class="line"><span class="ind2"></span><span class="kw">for</span> <span class="var">i = 1, …, N_sgd</span>:</span>
+<span class="line"><span class="ind3"></span>{(<span class="var">s, a, g, s′</span>)} ~ <span class="var">D_k</span></span>
+<span class="line"><span class="ind3"></span><span class="var">u  = h_φ(b_shared(s, a)) + <span class="acc">φ_task(s, a)</span></span>      <span class="com"># sa_repr</span></span>
+<span class="line"><span class="ind3"></span><span class="var">v  = ψ(g)</span></span>
+<span class="line"><span class="ind3"></span><span class="var">L_NCE  = − log softmax(uᵀv)</span>                              <span class="com"># diag positives, batch negatives</span></span>
+<span class="line"><span class="ind3"></span><span class="var">L_dyn  = ‖ h_dyn(b_shared(s, a)) − s′[M] ‖²</span></span>
+<span class="line"><span class="ind3"></span><span class="var">θ_critic ← Adam.step(θ_critic, ∇(L_NCE + μ·L_dyn))</span></span>
+<span class="line"><span class="ind3"></span><span class="var">θ_actor  ← Adam.step(θ_actor, ∇L_actor(target critic))</span>   <span class="com"># SAC dual update</span></span>
+<span class="line"><span class="ind3"></span><span class="var">targets ← polyak(targets, params)</span></span>
+<span class="line"></span>
+<span class="line"><span class="ind1"></span><span class="com">────── task boundary k → k+1 ──────</span></span>
+<span class="line"><span class="ind1"></span><span class="kw">save</span>  shared (<span class="var">b_shared, h_φ, h_dyn, ψ</span>);  <span class="kw">drop</span>  <span class="acc">φ_task</span>, <span class="var">π_θ</span>, <span class="var">D_k</span></span>
   </div>
-</footer>
+
+  <p class="micro">Only <span class="acc"><strong>φ_task</strong></span>, the actor π<sub>θ</sub>, and the replay buffer D<sub>k</sub> reset at the task boundary. Everything else — the shared body b<sub>shared</sub>, the heads h<sub>φ</sub> and h<sub>dyn</sub>, the goal encoder ψ — carries forward. Polyak target updates run on the shared components only.</p>
+</div></section>
+
+<!-- ============================== RESULTS ============================== -->
+<section id="results"><div class="wrap">
+  <h2><span class="num">04</span>Results</h2>
+
+  <div class="stats">
+    <div class="stat win"><div class="value">0.873</div><div class="label">Decomposed · avg best · 3 seeds</div></div>
+    <div class="stat"><div class="value">0.832</div><div class="label">Reset / Reset · 5 seeds</div></div>
+    <div class="stat win"><div class="value">+0.27</div><div class="label">Δ on k=8 window-close</div></div>
+    <div class="stat win"><div class="value">+0.16</div><div class="label">Δ on k=5 handle-press-side</div></div>
+  </div>
+
+  <figure>
+    <img src="img/avg_best_bar.png" alt="Bar chart of average best success across 10 tasks; decomposed at 0.873 highest." />
+    <figcaption>Avg best success across the 10 tasks. R = reset, P = persistent, C = CKA.</figcaption>
+  </figure>
+
+  <figure>
+    <img src="img/delta_per_task.png" alt="Per-task delta of decomposed minus reset/reset; +0.16 on k=5 and +0.27 on k=8." />
+    <figcaption>Decomposed minus Reset/Reset per task (unpaired). Error bars are propagated SE of the difference. Decomposed seeds (5,6,7) do not overlap with baseline seeds (97–101); paired forward transfer is not directly comparable.</figcaption>
+  </figure>
+
+  <figure>
+    <img src="img/trajectories_hard.png" alt="Three trajectory plots on the hardest tasks; decomposed above baselines on k=5 and k=8." />
+    <figcaption>Per-step evaluator success rate, mean across seeds bold, per-seed dim.</figcaption>
+  </figure>
+
+  <div class="tbl-scroll"><table class="tbl">
+    <thead>
+      <tr>
+        <th>k</th><th>task</th>
+        <th class="num">R / R</th><th class="num">P / P</th><th class="num">C / R</th>
+        <th class="num">Decomposed</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>0</td><td>hammer</td>            <td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td></tr>
+      <tr><td>1</td><td>push-wall</td>          <td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td></tr>
+      <tr><td>2</td><td>faucet-close</td>       <td class="num">0.920 ± 0.084</td><td class="num">0.880 ± 0.084</td><td class="num">0.920 ± 0.045</td><td class="num">0.867 ± 0.058</td></tr>
+      <tr><td>3</td><td>push-back</td>          <td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td></tr>
+      <tr><td>4</td><td>stick-pull</td>         <td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">0.980 ± 0.045</td><td class="num">1.000 ± 0.000</td></tr>
+      <tr class="highlight"><td>5</td><td>handle-press-side</td><td class="num">0.240 ± 0.089</td><td class="num">0.200 ± 0.122</td><td class="num">0.260 ± 0.055</td><td class="num">0.400 ± 0.100</td></tr>
+      <tr><td>6</td><td>push</td>               <td class="num">0.980 ± 0.045</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td><td class="num">1.000 ± 0.000</td></tr>
+      <tr><td>7</td><td>shelf-place</td>        <td class="num">0.980 ± 0.045</td><td class="num">0.660 ± 0.385</td><td class="num">0.980 ± 0.045</td><td class="num">0.967 ± 0.058</td></tr>
+      <tr class="highlight"><td>8</td><td>window-close</td>      <td class="num">0.367 ± 0.058</td><td class="num">0.367 ± 0.153</td><td class="num">0.400 ± 0.000</td><td class="num">0.633 ± 0.058</td></tr>
+      <tr><td>9</td><td>peg-unplug-side</td>    <td class="num">0.833 ± 0.058</td><td class="num">0.800 ± 0.100</td><td class="num">0.867 ± 0.153</td><td class="num">0.867 ± 0.153</td></tr>
+      <tr class="total">
+        <td colspan="2">avg best</td>
+        <td class="num">0.832</td><td class="num">0.791</td><td class="num">0.841</td><td class="num"><strong>0.873</strong></td>
+      </tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<footer><div class="wrap">
+  <p>nyuad_mmvc/continual_gcrl_paper · Okyumi/sgcrl@section3_done · Okyumi/CGCRL---RLC-workshop-2026</p>
+</div></footer>
+
+<!-- ============================== INTERACTIVITY ============================== -->
+<script>
+(function() {
+  const NODES = {
+    s:       { tag: 'INPUT',  name: 's',           role: 'State observation',                role_long: 'End-effector pose, gripper, object pose, task context. Continuous.', dim: 'ℝ^|S|' },
+    a:       { tag: 'INPUT',  name: 'a',           role: 'Action',                            role_long: 'Δ end-effector + gripper actuation, in [−1, 1]⁴.', dim: 'ℝ⁴' },
+    g:       { tag: 'INPUT',  name: 'g',           role: 'Goal',                              role_long: 'Last three position coordinates of the canonical goal, sampled from G⁽ᵏ⁾.', dim: 'ℝ^|G|' },
+    sM:      { tag: 'TARGET', name: "s'[M]",       role: 'Target for L_dyn',                  role_long: 'Components of the next state on the task-invariant subspace M = {EE_x, EE_y, EE_z, gripper}.', dim: 'ℝ⁴' },
+    bshared: { tag: 'SHARED', name: 'b_shared(s, a)', role: 'Shared body',                    role_long: 'Pre-norm residual MLP. The ONLY continual transfer channel on the critic side. Carried forward across every task boundary.', dim: 'ℝ^1024', params: '≈ 17 M' },
+    phitask: { tag: 'RE-INIT',name: 'φ_task(s, a)',  role: 'Per-task residual encoder',       role_long: 'Small residual MLP. State-and-action dependent. Re-initialised at every task boundary — escapes the null space that a state-independent additive mixture lives in.', dim: 'ℝ^64', params: '≈ 0.3 M' },
+    psi:     { tag: 'SHARED', name: 'ψ(g)',         role: 'Goal encoder',                    role_long: 'Pre-norm residual MLP. Shared across tasks.', dim: 'ℝ^64', params: '≈ 17 M' },
+    hphi:    { tag: 'SHARED', name: 'h_φ',          role: 'Contrastive head',                role_long: 'Linear projection from the body width to the embedding dimension. Shared across tasks.', dim: 'ℝ^64' },
+    hdyn:    { tag: 'SHARED', name: 'h_dyn',        role: 'Dynamics head',                   role_long: 'Small MLP that maps the body output to the masked next-state coordinates. Trained only by L_dyn.', dim: 'ℝ^4' },
+    sum:     { tag: 'OP',     name: '+',            role: 'sa_repr = h_φ(b) + φ_task',       role_long: 'Element-wise sum producing the state-action representation. Both operands depend on (s, a).', dim: 'ℝ^64' },
+    dot:     { tag: 'OP',     name: '·',            role: 'Critic score',                    role_long: 'Inner product of state-action and goal representations. Logit for the InfoNCE softmax.', dim: 'ℝ' },
+    lnce:    { tag: 'LOSS',   name: 'L_NCE',        role: 'Contrastive loss',                role_long: 'Softmax over in-batch goals with hindsight-relabelled positives. Trains b_shared, h_φ, φ_task, ψ jointly.', dim: 'ℝ' },
+    ldyn:    { tag: 'LOSS',   name: 'L_dyn',        role: 'Masked-dynamics auxiliary',       role_long: 'Squared error between h_dyn(b_shared(s, a)) and s′[M] on the task-invariant subspace. Trains b_shared and h_dyn only. Weight μ = 1.', dim: 'ℝ' },
+  };
+
+  const PATHS = {
+    nce: ['e_s_b','e_a_b','e_s_phi','e_a_phi','e_g_psi','e_b_hphi','e_hphi_sum','e_phi_sum','e_psi_dot','e_sum_dot','e_dot_nce'],
+    dyn: ['e_s_b','e_a_b','e_b_hdyn','e_sM_ldyn','e_hdyn_ldyn'],
+  };
+  const ALL_PATHS = new Set(Object.values(PATHS).flat()
+    .concat(['e_s_b','e_a_b','e_s_phi','e_a_phi','e_g_psi','e_b_hphi','e_b_hdyn','e_hphi_sum','e_phi_sum','e_psi_dot','e_sum_dot','e_dot_nce','e_hdyn_ldyn','e_sM_ldyn']));
+
+  const svg = document.getElementById('archsvg');
+  const info = document.getElementById('archinfo');
+  const controls = document.querySelector('.arch-controls');
+
+  function showInfo(id) {
+    const n = NODES[id];
+    if (!n) {
+      info.innerHTML = '<p class="hint">Hover or click any node to see its role, shape, and what happens to it at a task boundary.</p>';
+      return;
+    }
+    const tagClass = (n.tag === 'SHARED' || n.tag === 'INPUT' || n.tag === 'TARGET' || n.tag === 'OP')
+                       ? 'shared'
+                       : n.tag === 'RE-INIT' ? 'reset' : 'loss';
+    const boundary = n.tag === 'RE-INIT'
+                       ? 'Re-initialised at every task boundary.'
+                       : (n.tag === 'INPUT' || n.tag === 'TARGET' || n.tag === 'OP')
+                         ? '—'
+                         : 'Carried forward across every task boundary.';
+    info.innerHTML = `
+      <span class="tag ${tagClass}">${n.tag}</span>
+      <h4>${n.name}</h4>
+      <p style="font-weight: 500; color: var(--ink);">${n.role}</p>
+      <p>${n.role_long}</p>
+      <dl>
+        <dt>shape</dt><dd>${n.dim || '—'}</dd>
+        ${n.params ? `<dt>params</dt><dd>${n.params}</dd>` : ''}
+        <dt>boundary</dt><dd>${boundary}</dd>
+      </dl>
+    `;
+  }
+
+  // Hover + click + keyboard.
+  svg.querySelectorAll('.node').forEach(g => {
+    const id = g.getAttribute('data-id');
+    g.addEventListener('mouseenter', () => showInfo(id));
+    g.addEventListener('focus',      () => showInfo(id));
+    g.addEventListener('click', () => {
+      svg.querySelectorAll('.node.selected').forEach(x => x.classList.remove('selected'));
+      g.classList.add('selected');
+      showInfo(id);
+    });
+  });
+  svg.addEventListener('mouseleave', () => {
+    if (!svg.querySelector('.node.selected')) showInfo(null);
+  });
+
+  // Gradient-path toggle.
+  function setGrad(mode) {
+    ALL_PATHS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.remove('grad','dim');
+    });
+    svg.querySelectorAll('.node').forEach(n => n.style.opacity = '');
+    if (mode === '' || mode === 'boundary') {
+      if (mode === 'boundary') {
+        // Highlight only the reset modules.
+        svg.querySelectorAll('.node').forEach(n => {
+          n.style.opacity = n.classList.contains('reset') ? '1' : '0.32';
+        });
+        showInfo('phitask');
+      } else {
+        showInfo(null);
+      }
+      return;
+    }
+    const wanted = new Set(PATHS[mode] || []);
+    ALL_PATHS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (wanted.has(id)) el.classList.add('grad');
+      else el.classList.add('dim');
+    });
+    showInfo(mode === 'nce' ? 'lnce' : 'ldyn');
+  }
+
+  controls.querySelectorAll('button').forEach(b => {
+    b.addEventListener('click', () => {
+      controls.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      setGrad(b.getAttribute('data-grad') || '');
+    });
+  });
+})();
+</script>
 
 </body>
 </html>
