@@ -24,7 +24,8 @@ OUT.mkdir(parents=True, exist_ok=True)
 INK = "#0f172a"
 INK_LIGHT = "#475569"
 GRID = "#e2e8f0"
-SLATE = "#94a3b8"
+# Darkened slate so the from-scratch line reads against white.
+SLATE = "#64748b"
 TEAL = "#0d9488"
 AMBER = "#d97706"
 ROSE = "#be123c"
