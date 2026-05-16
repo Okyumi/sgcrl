@@ -225,8 +225,11 @@ def fig_trajectories(save_to):
 def fig_representation_analysis(save_to):
     """Two-panel: actor feature_rank (left) and actor dormant_ratio
     (right) at end-of-task for each of the four baseline cells across
-    the 10 tasks. Decomposed has no rl_metrics so it is absent; the
-    panel is a 'why baselines fail' figure, not a head-to-head.
+    the 10 tasks. Decomposed has no rl_metrics so it is absent.
+
+    Uses error BARS (not shaded bands) to avoid the overlapping-band
+    muddiness that the previous version had, and uses standard error
+    of the mean rather than std so the bars don't dominate the plot.
     """
     rl = load_rl_metrics()
     rl = rl.sort_values("rl_metrics/env_steps").drop_duplicates(
@@ -234,31 +237,37 @@ def fig_representation_analysis(save_to):
 
     cells = [c for c in CELLS if c != "actor=reset-critic=decomposed"]
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 3.4))
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 3.8))
     metric_cols = [
-        ("rl_metrics/actor/feature_rank", "Effective rank of actor representation"),
-        ("rl_metrics/actor/dormant_ratio", "Dormant-neuron ratio (actor)"),
+        ("rl_metrics/actor/feature_rank", "Effective rank (actor)", 140),
+        ("rl_metrics/actor/dormant_ratio", "Dormant-neuron ratio (actor)", 0.45),
     ]
-    for ax, (mcol, ylab) in zip(axes, metric_cols):
-        for cell in cells:
+    n_cells = len(cells)
+    dx = 0.10   # small horizontal offset per series
+    for ax, (mcol, ylab, ymax_hard) in zip(axes, metric_cols):
+        for i, cell in enumerate(cells):
             _, label, color = CELLS[cell]
             sub = rl[rl["cell"] == cell]
             g = sub.groupby("task_idx")[mcol].agg(["mean", "std", "count"]).reindex(range(10))
-            x = np.arange(10)
-            means = g["mean"].fillna(0).to_numpy()
-            stds = g["std"].fillna(0).to_numpy()
-            ax.plot(x, means, color=color, lw=2.0, marker="o", ms=4.5,
+            means = g["mean"].to_numpy()
+            stds = g["std"].to_numpy()
+            counts = g["count"].fillna(0).to_numpy()
+            sem = np.where(counts > 1, stds / np.sqrt(np.maximum(counts, 1)), 0)
+            offset = (i - (n_cells - 1) / 2) * dx
+            x = np.arange(10) + offset
+            ax.plot(x, means, color=color, lw=1.8, marker="o", ms=5,
                     label=label, zorder=5)
-            ax.fill_between(x, means - stds, means + stds, color=color,
-                            alpha=0.12, zorder=2)
-        ymax = max(1.05 * np.nanmax(g["mean"] + g["std"]) if mcol.endswith("rank") else 0.5, 1.05)
-        setup_ax(ax, ymax=ymax)
+            ax.errorbar(x, means, yerr=sem, fmt="none", ecolor=color,
+                        alpha=0.65, capsize=2.5, lw=1.0, zorder=4)
+        setup_ax(ax, ymax=ymax_hard)
         task_xticks(ax)
         ax.set_ylabel(ylab)
         for k in (5, 8, 9):
             ax.axvspan(k - 0.45, k + 0.45, color="#fff8f0", zorder=0)
 
-    axes[1].legend(loc="upper right", fontsize=9)
+    axes[0].legend(loc="upper right", fontsize=9)
+    # Tighten the layout so the y-axis title doesn't get clipped on save.
+    fig.subplots_adjust(left=0.07, right=0.99, bottom=0.22, top=0.92, wspace=0.22)
     fig.savefig(save_to)
     plt.close(fig)
 
