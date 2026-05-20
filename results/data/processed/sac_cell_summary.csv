@@ -1,0 +1,3 @@
+actor_mode,critic_mode,step_penalty_reward,avg_best_success_mean,avg_best_success_std,n_tasks
+persistent,persistent,True,0.4367,0.3656,10
+reset,reset,True,0.4167,0.4330,10
