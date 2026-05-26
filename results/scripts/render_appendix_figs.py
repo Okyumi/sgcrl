@@ -24,7 +24,8 @@ OUT.mkdir(parents=True, exist_ok=True)
 INK = "#0f172a"
 INK_LIGHT = "#475569"
 GRID = "#e2e8f0"
-SLATE = "#94a3b8"
+# Darkened slate so the from-scratch line reads against white.
+SLATE = "#64748b"
 TEAL = "#0d9488"
 AMBER = "#d97706"
 ROSE = "#be123c"
@@ -214,8 +215,8 @@ def fig_nrc_panel(save_to):
 
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2))
     metrics = [
-        ("rl_metrics/critic_sa/nrc1", "NRC1 (within-class)\nlower = more collapsed"),
-        ("rl_metrics/critic_sa/nrc2", "NRC2 (between-class)\nhigher = more separated"),
+        ("rl_metrics/critic_sa/nrc1", "NRC1\nlower = more collapsed"),
+        ("rl_metrics/critic_sa/nrc2", "NRC2\nhigher = more separated"),
     ]
     cells = list(CELLS_FULL.keys())
     n_cells = len(cells)

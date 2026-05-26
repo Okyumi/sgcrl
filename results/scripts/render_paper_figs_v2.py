@@ -247,7 +247,7 @@ def fig3_representation():
 
     metrics = [
         ("rl_metrics/actor/feature_rank", "Effective rank (actor)"),
-        ("rl_metrics/actor/dormant_ratio", "Dormant-neuron ratio (actor)"),
+        ("rl_metrics/actor/weight_norm", "Weight norm (actor)"),
     ]
     n = len(cells)
     dx = 0.08
