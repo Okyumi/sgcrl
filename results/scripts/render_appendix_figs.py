@@ -215,8 +215,8 @@ def fig_nrc_panel(save_to):
 
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2))
     metrics = [
-        ("rl_metrics/critic_sa/nrc1", "NRC1 (within-class)\nlower = more collapsed"),
-        ("rl_metrics/critic_sa/nrc2", "NRC2 (between-class)\nhigher = more separated"),
+        ("rl_metrics/critic_sa/nrc1", "NRC1\nlower = more collapsed"),
+        ("rl_metrics/critic_sa/nrc2", "NRC2\nhigher = more separated"),
     ]
     cells = list(CELLS_FULL.keys())
     n_cells = len(cells)
