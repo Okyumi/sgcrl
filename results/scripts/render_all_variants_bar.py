@@ -1,15 +1,14 @@
-"""Wide bar figure: best mean success across the 10 Sawyer tasks for every variant.
-
-Numbers come straight from the appendix tables (per-task avg row) so the figure
-is consistent with the combined table in app:full-grid.
-"""
+"""Wide bar figure: avg best-during-training success across the 10 Sawyer
+tasks for every variant. SAC on the left, contrastive 9-cell grid in the
+middle, proposed Decomposed Contrastive Critic D on the right."""
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Patch
 
 OUT_PAPER = Path("/tmp/paper_rlc/figs")
 OUT_PAPER.mkdir(parents=True, exist_ok=True)
-OUT_ARCH = Path("/home/user/workspace/sgcrl/results/presentation/img/paper") 
+OUT_ARCH = Path("/home/user/workspace/sgcrl/results/presentation/img/paper")
 OUT_ARCH.mkdir(parents=True, exist_ok=True)
 
 # (label, avg_success, family)
@@ -55,21 +54,18 @@ ax.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
 ax.set_axisbelow(True)
 ax.spines[["top", "right"]].set_visible(False)
 
-# Legend
-from matplotlib.patches import Patch
 legend_handles = [
+    Patch(facecolor=COLORS["sac"], edgecolor="black",
+          label="Goal-conditioned SAC"),
     Patch(facecolor=COLORS["contrastive"], edgecolor="black",
           label="Contrastive baseline grid (9 cells)"),
     Patch(facecolor=COLORS["proposed"], edgecolor="black",
           label="Decomposed Contrastive Critic (proposed)"),
-    Patch(facecolor=COLORS["sac"], edgecolor="black",
-          label="Goal-conditioned SAC"),
 ]
 ax.legend(handles=legend_handles, loc="lower center",
           bbox_to_anchor=(0.5, 1.02), ncol=3,
           frameon=False, fontsize=10)
 
-# Vertical separators between SAC, the 9-cell grid, and D.
 ax.axvline(1.5, color="black", linewidth=0.5, alpha=0.4, linestyle="--")
 ax.axvline(10.5, color="black", linewidth=0.5, alpha=0.4, linestyle="--")
 
