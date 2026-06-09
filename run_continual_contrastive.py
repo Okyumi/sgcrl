@@ -209,6 +209,18 @@ flags.DEFINE_integer('phi_task_depth', 4,
                      '(critic_mode="decomposed" only). Must be a positive '
                      'multiple of 4 when use_residual=True (one residual '
                      'block at depth=4). Plan section 6.')
+flags.DEFINE_string('combine_mode', 'add',
+                    'How z_shared and z_task are combined inside z_sa. '
+                    '"add" (default) | "concat". When "concat", a learnable '
+                    'Linear projection is automatically attached to the goal '
+                    'side so the contrastive score is taken in matching '
+                    '2*repr_dim space.')
+flags.DEFINE_string('goal_encoder_mode', 'shared',
+                    'Goal-encoder mode for the decomposed critic. '
+                    '"shared" (default; single psi reused across tasks) | '
+                    '"projected" (adds a Linear projection on top of psi(g) '
+                    'regardless of combine_mode; useful ablation for '
+                    'isolating the contribution of the projection itself).')
 flags.DEFINE_bool('log_pool_cosine', True,
                   'Log per-task pool cosine-similarity matrices on the '
                   'actor / critic CKA pools. Cheap host-side metric. '
@@ -524,6 +536,9 @@ def train_single_task(
         phi_task_depth=getattr(continual_cfg, 'phi_task_depth', 4),
         energy_fn=config.energy_fn,
         repr_norm=config.repr_norm,
+        combine_mode=getattr(continual_cfg, 'combine_mode', 'add'),
+        goal_encoder_mode=getattr(
+            continual_cfg, 'goal_encoder_mode', 'shared'),
     )
 
   # ---- replay buffer (reverb) -------------------------------------------
@@ -901,34 +916,58 @@ def train_single_task(
 
       try:
         transitions = learner.last_transitions
-        # The decomposed learner intentionally returns None for q_params
-        # (its critic has 4 separate parameter groups, not a single
-        # pytree with sa_encoder/g_encoder modules). rl_metrics.compute_all_metrics
-        # only knows the persistent layout, so we skip it for decomposed
-        # runs and log a one-time notice instead of repeated warnings.
-        if transitions is not None and learner.q_params is None:
-          # Use a private attribute to remember we already logged the notice.
-          if not getattr(learner, '_rl_metrics_skipped_logged', False):
-            print('  [rl_metrics] skipped: decomposed-critic layout is '
-                  'not supported by rl_metrics.compute_all_metrics. '
-                  'Track this as a follow-up if you want decomposed '
-                  'rl_metrics.', flush=True)
-            try:
-              setattr(learner, '_rl_metrics_skipped_logged', True)
-            except Exception:
-              pass
-          transitions = None  # short-circuit the rest of this block
+        # Two layouts:
+        #   (a) persistent / CKA / reset critic: learner.q_params is the
+        #       monolithic q-network pytree with sa_encoder / g_encoder
+        #       modules. rl_metrics.compute_all_metrics consumes it via
+        #       ``networks.repr_fn`` and ``networks.critic_hidden_repr_fn``.
+        #   (b) decomposed critic: learner.q_params is None; the critic
+        #       lives in five (or four when h_dyn is disabled) separate
+        #       param groups. We build a tiny networks shim whose
+        #       ``repr_fn(params, obs, action)`` calls
+        #       decomp_nets.apply_score's component pieces, and we hand
+        #       compute_all_metrics the bundle dict from
+        #       ``learner.get_variables(['critic'])[0]``. The hidden-
+        #       feature path (critic NRC2 / dormancy on hidden) is set to
+        #       None so the function silently skips those entries on the
+        #       decomposed critic.
         if transitions is not None:
           current_actor = learner.get_variables(['policy'])[0]
-          current_critic = learner.q_params
-          # Use the last preprocessed batch from the learner (already has
-          # goal relabeling applied). The batch has shape [B*N, ...] where
-          # B=batch_size and N=num_sgd_steps_per_step. Take the first B.
           bs = config.batch_size
           obs_sample = jnp.array(transitions.observation[:bs])
           act_sample = jnp.array(transitions.action[:bs])
+
+          if learner.q_params is not None:
+            metrics_networks = networks
+            current_critic = learner.q_params
+          else:
+            # Decomposed layout: build / cache a shim.
+            if not hasattr(learner, '_dcc_metrics_networks'):
+              from types import SimpleNamespace
+              _decomp = decomp_nets  # captured from enclosing scope
+              def _repr_fn(params, obs, action, hidden=None):
+                z_sa = _decomp.apply_sa_repr(
+                    params['b_shared'], params['h_phi'],
+                    params['phi_task'], obs, action)
+                # ``params['psi']`` is either the bare psi params or the
+                # bundle dict {psi, psi_proj}; decomp.apply_psi handles
+                # both.
+                z_g = _decomp.apply_psi(params['psi'], obs)
+                return z_sa, z_g, None
+              shim = SimpleNamespace(
+                  repr_fn=_repr_fn,
+                  critic_hidden_repr_fn=None,
+                  actor_repr_fn=networks.actor_repr_fn,
+              )
+              try:
+                setattr(learner, '_dcc_metrics_networks', shim)
+              except Exception:
+                pass
+            metrics_networks = getattr(
+                learner, '_dcc_metrics_networks', networks)
+            current_critic = learner.get_variables(['critic'])[0]
           m = rl_metrics.compute_all_metrics(
-              networks, current_actor, current_critic,
+              metrics_networks, current_actor, current_critic,
               obs_sample, act_sample, obs_dim=obs_dim, level=level)
           if FLAGS.use_wandb and wandb is not None:
             wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
@@ -1314,6 +1353,8 @@ def main(_):
       dyn_aux_weight=FLAGS.dyn_aux_weight,
       phi_task_width=FLAGS.phi_task_width,
       phi_task_depth=FLAGS.phi_task_depth,
+      combine_mode=FLAGS.combine_mode,
+      goal_encoder_mode=FLAGS.goal_encoder_mode,
       log_pool_cosine=FLAGS.log_pool_cosine,
       log_mixture_norm=FLAGS.log_mixture_norm,
       log_probe_data=FLAGS.log_probe_data,

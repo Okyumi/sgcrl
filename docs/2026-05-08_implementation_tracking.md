@@ -142,3 +142,18 @@ These feed the negative-result figure in the paper's analysis section.
   workstream unless a result here motivates an appendix experiment.
 - `Okyumi/NeurIPS-2026---RL` `main`: paper repo. Updated when method
   / experiments sections need to reflect new content.
+
+## 2026-06-09 — DCC ablation flags + rl_metrics fix
+
+- Added `--combine_mode` (add | concat) and `--goal_encoder_mode`
+  (shared | projected). Plumbed through `continual_config` →
+  `make_decomposed_networks`. When the goal projection is active,
+  `psi_params` becomes the bundle dict `{psi, psi_proj}` so the existing
+  `DecomposedTrainingState` shape is preserved.
+- Fixed the rl_metrics short-circuit on the decomposed-critic learner.
+  When `learner.q_params is None` we now build a SimpleNamespace shim
+  whose `repr_fn` calls `decomp_nets.apply_sa_repr` /
+  `decomp_nets.apply_psi`, and pass
+  `learner.get_variables(['critic'])[0]` as the critic params.
+  Persistent / CKA / reset paths are bit-identical.
+- Documented in `docs/2026-06-09_dcc_ablation_flags_and_rl_metrics_fix.md`.
