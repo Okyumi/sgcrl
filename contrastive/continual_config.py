@@ -61,6 +61,21 @@ class ContinualConfig:
   phi_task_width: int = 256             # smaller than the shared body
   phi_task_depth: int = 4               # one residual block (block_size=4)
 
+  # -- Embedding combination & goal-encoder mode (DCC ablation handles) -----
+  # `combine_mode='add'` is the default (z_sa = h_phi(b_shared) + phi_task);
+  # `combine_mode='concat'` switches to z_sa = [h_phi(b_shared); phi_task],
+  # automatically attaching a learnable Linear projection on top of psi(g)
+  # so the contrastive score is taken in matching 2*repr_dim space.
+  combine_mode: str = 'add'
+  # `goal_encoder_mode='shared'` reuses a single psi across tasks (current
+  # behaviour). `goal_encoder_mode='projected'` keeps the shared psi but
+  # adds a Linear projection on top, regardless of combine_mode (handy
+  # ablation for testing whether the projection itself is what helps).
+  # The richer variants (task_specific / partial_shared / decomposed) are
+  # exercised on the BuilderBench port; on sgcrl we keep the shared psi
+  # path canonical and rely on the projection knob for ablations.
+  goal_encoder_mode: str = 'shared'
+
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.
   # Off by default so existing runs are bit-for-bit identical. Turn on for

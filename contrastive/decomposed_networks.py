@@ -107,6 +107,8 @@ def make_decomposed_networks(
     phi_task_depth: int = 4,
     energy_fn: str = 'inner_product',
     repr_norm: bool = False,
+    combine_mode: str = 'add',
+    goal_encoder_mode: str = 'shared',
 ) -> DecomposedCriticNetworks:
   """Build the decomposed critic networks for the given spec.
 
@@ -141,6 +143,16 @@ def make_decomposed_networks(
         ``config.energy_fn``.
     repr_norm: if True, L2-normalise sa and g embeddings before scoring,
         matching ``contrastive.networks.make_networks(repr_norm=...)``.
+    combine_mode: 'add' (default; z_sa = h_phi(b_shared) + phi_task) or
+        'concat' (z_sa = [h_phi(b_shared); phi_task]). When 'concat',
+        the goal side passes psi(g) through a learnable Linear projection
+        to the resulting 2*repr_dim space so the scoring function still
+        operates in matched dimensions.
+    goal_encoder_mode: 'shared' (default) or 'projected'. 'projected'
+        adds the Linear projection on top of psi(g) regardless of
+        combine_mode (so combine='add' + goal='projected' is a useful
+        ablation that tests whether the extra goal head matters in the
+        additive case).
 
   Returns:
     A ``DecomposedCriticNetworks`` instance with all init / apply
@@ -151,6 +163,17 @@ def make_decomposed_networks(
   state_dim = obs_dim
   d_M = sm.num_stable_indices()
   hidden_dim = network_width if use_residual else hidden_layer_sizes[-1]
+
+  if combine_mode not in ('add', 'concat'):
+    raise ValueError(
+        f'combine_mode must be add or concat, got {combine_mode!r}')
+  if goal_encoder_mode not in ('shared', 'projected'):
+    raise ValueError(
+        f'goal_encoder_mode must be shared or projected, got '
+        f'{goal_encoder_mode!r}')
+  z_sa_dim = repr_dim if combine_mode == 'add' else 2 * repr_dim
+  use_psi_proj = (combine_mode == 'concat') or (
+      goal_encoder_mode == 'projected')
 
   # ---- b_shared: hidden representation, no final projection ----------------
   def _b_shared_fn(obs, action):
@@ -217,11 +240,17 @@ def make_decomposed_networks(
           name='psi')
       return body(goal)
 
+  # ---- optional psi projector (concat-combine or 'projected' goal mode) ---
+  def _psi_proj_fn(z):
+    return hk.Linear(z_sa_dim, name='psi_proj')(z)
+
   b_shared = hk.without_apply_rng(hk.transform(_b_shared_fn))
   h_phi = hk.without_apply_rng(hk.transform(_h_phi_fn))
   h_dyn = hk.without_apply_rng(hk.transform(_h_dyn_fn))
   phi_task = hk.without_apply_rng(hk.transform(_phi_task_fn))
   psi = hk.without_apply_rng(hk.transform(_psi_fn))
+  psi_proj = (hk.without_apply_rng(hk.transform(_psi_proj_fn))
+              if use_psi_proj else None)
 
   # Dummy inputs for init.
   dummy_action = utils.zeros_like(spec.actions)
@@ -240,27 +269,75 @@ def make_decomposed_networks(
   init_h_phi = lambda key: h_phi.init(key, dummy_hidden)
   init_h_dyn = lambda key: h_dyn.init(key, dummy_hidden)
   init_phi_task = lambda key: phi_task.init(key, dummy_obs, dummy_action)
-  init_psi = lambda key: psi.init(key, dummy_obs)
+  def _init_psi_combined(key):
+    """Single init that returns the goal-encoder param bundle.
+
+    When `psi_proj` exists, the bundle is a dict
+        {'psi': psi_params, 'psi_proj': psi_proj_params}
+    so the rest of the learner can keep a single ``psi_params`` slot in
+    its state. When `psi_proj` is None (the default 'shared' goal mode
+    with combine='add'), the bundle is just the bare psi params for
+    backward compatibility with existing checkpoints.
+    """
+    k1, k2 = jax.random.split(key)
+    p_psi = psi.init(k1, dummy_obs)
+    if psi_proj is None:
+      return p_psi
+    p_proj = psi_proj.init(k2, jnp.zeros((1, repr_dim)))
+    return {'psi': p_psi, 'psi_proj': p_proj}
+  init_psi = _init_psi_combined
 
   def apply_sa_repr(params_b_shared, params_h_phi, params_phi_task,
                     obs, action):
-    """Composed contrastive embedding ``phi_shared + phi_task``."""
+    """Composed contrastive embedding (additive or concatenated)."""
     hidden = b_shared.apply(params_b_shared, obs, action)
     sa_shared = h_phi.apply(params_h_phi, hidden)
     sa_task = phi_task.apply(params_phi_task, obs, action)
-    return sa_shared + sa_task
+    if combine_mode == 'add':
+      return sa_shared + sa_task
+    # 'concat': dim becomes 2*repr_dim, which is z_sa_dim.
+    return jnp.concatenate([sa_shared, sa_task], axis=-1)
+
+  def apply_psi(params_psi_bundle, obs, params_psi_proj=None):
+    """Goal embedding.
+
+    `params_psi_bundle` is either the bare psi params (backward compat,
+    when psi_proj is disabled) or the dict
+    ``{'psi': psi_params, 'psi_proj': psi_proj_params}``.
+    `params_psi_proj` is an explicit override; callers that already have
+    psi_proj params separately can pass it here and the bundle is
+    treated as the bare psi params.
+    """
+    if isinstance(params_psi_bundle, dict) and 'psi' in params_psi_bundle:
+      p_psi = params_psi_bundle['psi']
+      p_proj = params_psi_bundle.get('psi_proj') if params_psi_proj is None \
+          else params_psi_proj
+    else:
+      p_psi = params_psi_bundle
+      p_proj = params_psi_proj
+    g = psi.apply(p_psi, obs)
+    if psi_proj is not None:
+      if p_proj is None:
+        raise ValueError(
+            'goal projection is enabled but psi_proj params were not '
+            'found in the psi bundle or passed explicitly to apply_psi')
+      g = psi_proj.apply(p_proj, g)
+    return g
 
   def apply_score(params_b_shared, params_h_phi, params_phi_task, params_psi,
-                  obs, action):
+                  obs, action, params_psi_proj=None):
     """Full (B, B) critic score matrix.
 
     Mirrors ``_combine_repr`` in ``contrastive.networks``: inner product
     when ``energy_fn='inner_product'`` (the SGCRL default), negative L2
     when ``energy_fn='l2'`` (1000-layer paper).
+
+    `params_psi` may be either the bare psi params (when no projection
+    is used) or the bundle dict described in ``apply_psi``.
     """
     sa = apply_sa_repr(params_b_shared, params_h_phi, params_phi_task,
                        obs, action)
-    g = psi.apply(params_psi, obs)
+    g = apply_psi(params_psi, obs, params_psi_proj)
     if repr_norm:
       sa = sa / jnp.linalg.norm(sa, axis=1, keepdims=True)
       g = g / jnp.linalg.norm(g, axis=1, keepdims=True)
@@ -270,14 +347,23 @@ def make_decomposed_networks(
     # inner_product (SGCRL default)
     return jnp.einsum('ik,jk->ij', sa, g)
 
-  return DecomposedCriticNetworks(
+  bundle = DecomposedCriticNetworks(
       init_b_shared=init_b_shared, apply_b_shared=b_shared.apply,
       init_h_phi=init_h_phi, apply_h_phi=h_phi.apply,
       init_h_dyn=init_h_dyn, apply_h_dyn=h_dyn.apply,
       init_phi_task=init_phi_task, apply_phi_task=phi_task.apply,
-      init_psi=init_psi, apply_psi=psi.apply,
+      init_psi=init_psi, apply_psi=apply_psi,
       obs_dim=obs_dim, state_dim=state_dim, d_M=d_M,
       repr_dim=repr_dim, hidden_dim=hidden_dim_actual,
       apply_sa_repr=apply_sa_repr,
       apply_score=apply_score,
   )
+  # Attach extra fields outside the dataclass field list so older callers
+  # do not have to change.  Access via `bundle.combine_mode` etc.
+  bundle.combine_mode = combine_mode
+  bundle.goal_encoder_mode = goal_encoder_mode
+  bundle.z_sa_dim = z_sa_dim
+  bundle.init_psi_proj = init_psi_proj
+  bundle.apply_psi_proj = (psi_proj.apply if psi_proj is not None else None)
+  bundle.use_psi_proj = use_psi_proj
+  return bundle
