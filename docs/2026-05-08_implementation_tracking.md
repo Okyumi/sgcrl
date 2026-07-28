@@ -157,3 +157,47 @@ These feed the negative-result figure in the paper's analysis section.
   `learner.get_variables(['critic'])[0]` as the critic params.
   Persistent / CKA / reset paths are bit-identical.
 - Documented in `docs/2026-06-09_dcc_ablation_flags_and_rl_metrics_fix.md`.
+
+## 2026-07-28 — Sparse goal-conditioned SAC+HER baseline
+
+Integrated the collaborator's sparse GC-SAC as a continual baseline. A
+paired CRL/SAC run at the same seed and transfer mode isolates **the
+effect of the critic**: environments, wrappers, state/goal layout, HER
+sampling, fixed goals, actor architecture, CKA pool, checkpointing and
+the cross-task eval sweep are all the shared code.
+
+| ID | Item | Status | Notes |
+|----|------|--------|-------|
+| S1 | `sac/` package (`flags`, `tasks`, `her`, `checkpointing`, `metrics`, `networks`, `learning`, `training`) | shipped (2026-07-28) | Split by import weight: `flags`/`tasks`/`her` are absl+numpy only, so `--help` and the tests run without reverb/TF/acme. |
+| S2 | `run_continual_sac.py` entry point | shipped (2026-07-28) | Thin; defers `sac.training` into `main()` and calls `flags.adopt_module_key_flags(sac_flags)` so `--help` lists all 40 flags. |
+| S3 | `experiment_configs_sac.py` + `draft_sac.sh` | shipped (2026-07-28) | Default grid is the R/R and P/P diagonal × seeds 1–3 (6 runs, 2 per GPU). `SMOKE=true` and `SINGLE_RUN=true` paths included. No credentials or netIDs. |
+| S4 | Sparse reward + terminal discount | shipped (2026-07-28) | `sac/her.py`: `r = 1[‖ag(s_{t+1}) − g‖ < τ]`, `discount = (1 − r)·γ`. Backend-parameterised (numpy for tests, `tf` ops in the reverb pipeline). `--her_reward_threshold` (τ=0.05) and `--step_penalty_reward` (`0/−1`, else `+1/0`). |
+| S5 | Twin scalar Q + adaptive alpha | shipped (2026-07-28) | `sac/networks.py`, `sac/learning.py`. Actor loss against `min(Q1,Q2)`; `target_entropy=-2.0` (`-0.5·|A|`, brax/JaxGCRL convention). Actor trunk is byte-identical to CRL's. |
+| S6 | Reward shape in the checkpoint path key | shipped (2026-07-28) | `_rew_{steppen\|sparse01}` suffix. The TD target is trained against one shape, so a cross-shape load is structurally impossible rather than runtime-checked. |
+| S7 | Tests | shipped (2026-07-28) | 197 tests over HER, task sequencing, every flag default, checkpoint/resume, and AST guards on the un-importable driver. All run without reverb/TF. |
+| S8 | Smoke + full runs on the pinned cluster env | **blocked on cluster** | `sac/{training,learning,networks}.py` were never executed: this sandbox has jax 0.10 vs the pinned 0.3.13, and acme 0.4.0 needs the removed `jax.xla.Device`, so every acme importer fails here — `contrastive/{learning,networks}.py` included. Verified statically instead. Run the §3 smoke test before any sweep. |
+
+Out-of-package changes, both behaviour-preserving for CRL/DCC:
+
+- `contrastive/__init__.py` is now lazy (PEP 562). It ran 18 eager
+  imports, so `import contrastive.rl_metrics` dragged in
+  `agents → builder → distributed_layout → launchpad`. Same 14 public
+  names, resolved on first attribute access. This is what lets `sac/*`
+  reuse `contrastive.rl_metrics` / `networks` / `knowledge_pool`
+  without pulling launchpad into a `--help` call.
+- `default.py` gained a `wandb_auto_step` parameter, **default
+  `False`**. The archive deleted the explicit `step=` from
+  `WandbLogger.write` outright, which would have changed CRL
+  behaviour; only the SAC driver opts in, and it pairs that with
+  `wandb.define_metric` declarations so each family keeps its own
+  x-axis. `tests/test_sac_training_wiring.py` asserts the CRL driver
+  never passes it.
+
+No dependency changes. SAC metrics live in `sac/metrics.py` (importing
+the primitives from `contrastive/rl_metrics.py`) rather than being
+appended to the shared module, so the contrastive path is untouched.
+
+Run guide, metric names and the five deliberate departures from the
+archive: `docs/2026-07-28_sparse_sac_integration_and_run_guide.md`.
+The collaborator's own notes are preserved verbatim at
+`doc/reference/SAC_README.md`.

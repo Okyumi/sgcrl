@@ -14,9 +14,20 @@ from acme.utils.loggers import terminal
 class WandbLogger(base.Logger):
   """Logger that sends metrics to Weights & Biases. Use when wandb.init() has already been called."""
 
-  def __init__(self, steps_key: str = 'learner_steps', prefix: Optional[str] = None):
+  def __init__(self, steps_key: str = 'learner_steps', prefix: Optional[str] = None,
+               auto_step: bool = False):
     self._steps_key = steps_key
     self._prefix = prefix  # e.g. 'learner', 'actor', 'evaluator' for namespaced keys
+    # When several WandbLogger instances share one wandb run (actor / learner /
+    # evaluator) their counters advance at very different rates, so the
+    # explicit `step=` values below are non-monotonic across labels and wandb
+    # drops the entries with the smaller step ("user provided step ... is less
+    # than current step ... Dropping entry").  With auto_step=True the explicit
+    # step is omitted: wandb auto-increments the global step and the driver is
+    # expected to declare `wandb.define_metric('<label>/*', step_metric=...)`
+    # so each family is plotted against its own logical x-axis.  Defaults to
+    # False so existing contrastive runs are unchanged.
+    self._auto_step = auto_step
 
   def _to_float(self, v: Any) -> Optional[float]:
     """Convert numeric values (int, float, numpy/jax scalars) to float for wandb."""
@@ -38,7 +49,10 @@ class WandbLogger(base.Logger):
           key = f'{self._prefix}/{k}' if self._prefix else k
           metrics[key] = fv
       if metrics:
-        wandb.log(metrics, step=step)
+        if self._auto_step:
+          wandb.log(metrics)
+        else:
+          wandb.log(metrics, step=step)
     except Exception:  # pylint: disable=broad-except
       pass  # Don't break training if wandb is unavailable or misconfigured
 
@@ -57,6 +71,7 @@ def make_default_logger(
     print_fn: Optional[Callable[[str], None]] = None,
     serialize_fn: Optional[Callable[[Mapping[str, Any]], str]] = base.to_numpy,
     steps_key: str = 'steps',
+    wandb_auto_step: bool = False,
 ) -> base.Logger:
   """Makes a default Acme logger.
 
@@ -70,6 +85,10 @@ def make_default_logger(
     serialize_fn: An optional function to apply to the write inputs before
       passing them to the various loggers.
     steps_key: Key used for step count (e.g. 'learner_steps'); used by WandbLogger when use_wandb=True.
+    wandb_auto_step: Let wandb auto-increment the global step instead of passing
+      an explicit one (see WandbLogger). Requires the caller to declare
+      wandb.define_metric(...) step metrics. Default False keeps the explicit
+      step used by the contrastive driver.
 
   Returns:
     A logger object that responds to logger.write(some_dict).
@@ -84,7 +103,8 @@ def make_default_logger(
     loggers.append(csv.CSVLogger(label=label, directory_or_file = save_dir, add_uid = add_uid))
 
   if use_wandb:
-    loggers.append(WandbLogger(steps_key=steps_key, prefix=label))
+    loggers.append(WandbLogger(steps_key=steps_key, prefix=label,
+                               auto_step=wandb_auto_step))
 
   # Dispatch to all writers and filter Nones and by time.
   logger = aggregators.Dispatcher(loggers, serialize_fn)
