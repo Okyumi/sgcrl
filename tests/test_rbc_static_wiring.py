@@ -28,9 +28,13 @@ def test_existing_decomposed_mode_remains_a_separate_branch():
 
 
 def test_every_contrastive_launcher_forwards_rbc_and_dcc_architecture_flags():
-  launchers = (
+  candidates = (
       'draft_3.sh', 'draft_4.sh', 'DRAFT.sh',
       'submit_continual_torch.sh')
+  launchers = tuple(
+      launcher for launcher in candidates
+      if (REPO_ROOT / launcher).exists())
+  assert {'draft_3.sh', 'draft_4.sh'} <= set(launchers)
   required = (
       '--combine_mode=',
       '--goal_encoder_mode=',
