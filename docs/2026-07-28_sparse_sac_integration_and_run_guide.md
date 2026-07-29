@@ -210,7 +210,7 @@ W&B families and the x-axis each is plotted against (declared with
 
 | Family | x-axis | Keys |
 |---|---|---|
-| `learner/*` | `learner/steps` | `critic_loss`, `actor_loss`, `alpha`, `alpha_loss`, `q_mean`, `q_std`, `target_mean`, `td_error_abs`, `reward_mean`, `reward_pos_rate`, `discount_mean`, `entropy_mean`, `q_pi_mean`, `alpha_weights_max`, `alpha_scale` |
+| `learner/*` | `learner/steps` | `critic_loss`, `actor_loss`, `alpha`, `alpha_loss`, `q_mean`, `q_std`, `target_mean`, `td_error_abs`, `reward_mean`, `her_success_rate`, `discount_mean`, `entropy_mean`, `q_pi_mean`, `alpha_weights_max`, `alpha_scale` |
 | `actor/*` | `actor/steps` | `episode_return`, `episode_length`, `success`, `final_dist`, `steps_per_second` |
 | `evaluator/*` | `evaluator/steps` | same keys, deterministic policy |
 | `rl_metrics/*` | `rl_metrics/env_steps` | `actor/{weight_norm,final_layer_norm,entropy,gini,feature_rank,nrc1,nrc2,dormant_ratio}`, `critic/weight_norm`, `critic_q1/*`, `critic_q2/*` |
@@ -218,7 +218,7 @@ W&B families and the x-axis each is plotted against (declared with
 | `eval/*` | `eval/num_tasks_seen` | post-task sweep over every task seen + `mean_success` — **this is the forgetting/transfer plot** |
 | `actor_reset/*` | `actor_reset/env_steps` | `triggered`, `dormant_ratio_at_reset`, `count` (needs `--actor_auto_reset`) |
 
-Sanity checks on a healthy run: `learner/reward_pos_rate` should climb off zero
+Sanity checks on a healthy run: `learner/her_success_rate` should climb off zero
 once HER starts producing reached goals; `learner/discount_mean` should fall
 below γ=0.99 as terminal transitions appear; `learner/alpha` should decay from
 1.0; `actor/dormant_ratio` should stay low.
