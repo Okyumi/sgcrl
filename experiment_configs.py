@@ -13,6 +13,10 @@ Two sources are concatenated to produce the final list of runs:
    set any subset of:
        actor_mode, critic_mode, seed,
        dyn_aux_weight, phi_task_width, phi_task_depth,
+       combine_mode, goal_encoder_mode,
+       bellman_loss_weight, bellman_residual_l2_weight,
+       bellman_discount, bellman_tau, bellman_hidden_dim,
+       her_reward_threshold, step_penalty_reward,
        log_pool_cosine, log_mixture_norm, log_probe_data,
        (and any other future field that submit scripts know how to
        forward).
@@ -129,6 +133,15 @@ CELLS: list = [
     # G3 dyn-aux weak (dyn_aux_weight=0.1, decomposed), 5 seeds
     # G4 dyn-aux full (dyn_aux_weight=1.0, decomposed), 5 seeds
     # G5 (decomposed body + reset carry) — deferred (N7b plumbing)
+
+    # ---- RBC-DCC staged pilot (leave commented until smoke gates pass) ----
+    # {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 5,
+    #  'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+    #  'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+    #  'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+    #  'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+    #  'log_probe_data': True},
 ]
 
 

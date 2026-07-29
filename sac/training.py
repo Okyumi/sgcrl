@@ -309,7 +309,8 @@ def train_single_task(
   log_dir = os.path.join(
       f.log_dir, f'continual_{config.alg_name}',
       checkpointing.config_key(critic_mode, f.use_task_id, f.adapt_heads_only,
-                               f.actor_mode, f.step_penalty_reward),
+                               f.actor_mode, f.step_penalty_reward,
+                               f.her_reward_threshold),
       f'task{task_id}_{env_name}_s{seed}')
   os.makedirs(log_dir, exist_ok=True)
 
@@ -345,6 +346,7 @@ def train_single_task(
       encoder_from_base=f.encoder_from_base,
       q_base=q_base,
       critic_pool=critic_pool,
+      step_penalty_reward=f.step_penalty_reward,
   )
 
   # ---- behaviour actor ---------------------------------------------------
@@ -645,7 +647,8 @@ def run(flag_values):
   ckpt_kwargs = dict(critic_mode=f.critic_mode, use_task_id=f.use_task_id,
                      adapt_heads_only=f.adapt_heads_only,
                      actor_mode=f.actor_mode,
-                     step_penalty_reward=f.step_penalty_reward)
+                     step_penalty_reward=f.step_penalty_reward,
+                     her_reward_threshold=f.her_reward_threshold)
 
   # ---- resume ------------------------------------------------------------
   start_task = f.start_task

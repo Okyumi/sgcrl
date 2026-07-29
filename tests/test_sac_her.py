@@ -104,3 +104,15 @@ def test_reward_shapes_differ_by_exactly_a_constant_shift():
                              step_penalty_reward=False)
   np.testing.assert_allclose(sparse01, steppen + 1.0)
   np.testing.assert_allclose(disc_a, disc_b)
+
+
+@pytest.mark.parametrize('step_penalty_reward', [True, False])
+def test_reached_mask_is_reward_shape_independent(step_penalty_reward):
+  achieved = np.asarray(
+      [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float32)
+  goal = np.zeros_like(achieved)
+  reward, _ = _reward(
+      achieved, goal, env_discount=[0.99, 0.99],
+      step_penalty_reward=step_penalty_reward)
+  reached = her.reached_from_reward(reward, step_penalty_reward)
+  np.testing.assert_array_equal(reached, [True, False])

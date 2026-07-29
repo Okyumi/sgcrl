@@ -54,6 +54,7 @@ import optax
 
 from contrastive.knowledge_pool import KnowledgePool, _pytree_zeros_like
 from default import make_default_logger
+from sac import her
 
 
 class ContinualSACTrainingState(NamedTuple):
@@ -102,6 +103,7 @@ class ContinualSACLearner(acme.Learner):
       encoder_from_base: bool = False,
       q_base: Optional[networks_lib.Params] = None,
       critic_pool: Optional[KnowledgePool] = None,
+      step_penalty_reward: bool = True,
   ):
     self._task_id = task_id
     self._critic_mode = critic_mode
@@ -111,6 +113,7 @@ class ContinualSACLearner(acme.Learner):
     self._continual_config = continual_config
     self._num_sgd_steps_per_step = config.num_sgd_steps_per_step
     self._obs_dim = config.obs_dim
+    self._step_penalty_reward = bool(step_penalty_reward)
 
     adaptive_entropy = config.entropy_coefficient is None
     self._adaptive_entropy = adaptive_entropy
@@ -119,6 +122,7 @@ class ContinualSACLearner(acme.Learner):
     # ContrastiveConfig.reward_scale (which defaults to 1) so ablations can
     # override it without touching the learner.
     reward_scaling = float(getattr(config, 'reward_scale', 1.0))
+    step_penalty_reward = self._step_penalty_reward
 
     self._pool = pool if pool is not None else KnowledgePool(
         k_max=continual_config.k_max)
@@ -205,7 +209,9 @@ class ContinualSACLearner(acme.Learner):
           'target_mean': jnp.mean(target),
           'td_error_abs': jnp.mean(jnp.abs(q_error)),
           'reward_mean': jnp.mean(transitions.reward),
-          'reward_pos_rate': jnp.mean(transitions.reward > 0.5),
+          'her_success_rate': jnp.mean(
+              her.reached_from_reward(
+                  transitions.reward, step_penalty_reward).astype(jnp.float32)),
           'discount_mean': jnp.mean(transitions.discount),
       }
       return loss, metrics

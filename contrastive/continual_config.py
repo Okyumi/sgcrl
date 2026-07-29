@@ -76,6 +76,15 @@ class ContinualConfig:
   # path canonical and rely on the projection knob for ablations.
   goal_encoder_mode: str = 'shared'
 
+  # -- RBC-DCC Bellman calibration ------------------------------------------
+  bellman_loss_weight: float = 1.0
+  bellman_residual_l2_weight: float = 1e-4
+  bellman_discount: float = 0.99
+  bellman_tau: float = 0.005
+  bellman_hidden_dim: int = 256
+  her_reward_threshold: float = 0.05
+  step_penalty_reward: bool = True
+
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.
   # Off by default so existing runs are bit-for-bit identical. Turn on for
