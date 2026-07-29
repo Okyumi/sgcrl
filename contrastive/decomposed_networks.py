@@ -269,6 +269,13 @@ def make_decomposed_networks(
   init_h_phi = lambda key: h_phi.init(key, dummy_hidden)
   init_h_dyn = lambda key: h_dyn.init(key, dummy_hidden)
   init_phi_task = lambda key: phi_task.init(key, dummy_obs, dummy_action)
+  # Standalone projector init for callers that want psi_proj separately.
+  # ``init_psi`` below already folds this into the combined bundle when
+  # use_psi_proj is True; keep a None sentinel when the projector is off.
+  init_psi_proj = (
+      (lambda key: psi_proj.init(key, jnp.zeros((1, repr_dim))))
+      if psi_proj is not None else None)
+
   def _init_psi_combined(key):
     """Single init that returns the goal-encoder param bundle.
 
