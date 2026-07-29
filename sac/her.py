@@ -79,3 +79,14 @@ def her_reward_and_discount(
   reward = reached - 1.0 if step_penalty_reward else reached
   discount = (1.0 - reached) * ops.to_float(env_discount)
   return reward, discount
+
+
+def reached_from_reward(reward: Any, step_penalty_reward: bool) -> Any:
+  """Recover the HER reached mask from either supported reward shape.
+
+  Comparison operators keep this backend-independent for NumPy, JAX and
+  TensorFlow arrays.
+  """
+  if step_penalty_reward:
+    return reward > -0.5
+  return reward > 0.5

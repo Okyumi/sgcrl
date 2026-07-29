@@ -38,15 +38,16 @@ def test_reward_tag_names_both_shapes():
 def test_config_key_contains_every_ablation_axis():
   key = ckpt.config_key(critic_mode='reset', use_task_id=False,
                         adapt_heads_only=True, actor_mode='persistent',
-                        step_penalty_reward=False)
+                        step_penalty_reward=False,
+                        her_reward_threshold=0.12)
   assert key == ('actor_persistent_critic_reset_tid_False_heads_True'
-                 '_rew_sparse01')
+                 '_rew_sparse01_tau_0p12')
 
 
 def test_ckpt_path_layout_is_config_then_seed_then_task():
   path = ckpt.ckpt_path('/root', task_id=4, seed=3)
   assert path == ('/root/actor_cka_critic_persistent_tid_True_heads_True'
-                  '_rew_steppen/seed_3/task_4.pkl')
+                  '_rew_steppen_tau_0p05/seed_3/task_4.pkl')
 
 
 @pytest.mark.parametrize('kwargs', [
@@ -55,6 +56,7 @@ def test_ckpt_path_layout_is_config_then_seed_then_task():
     {'use_task_id': False},
     {'adapt_heads_only': False},
     {'step_penalty_reward': False},
+    {'her_reward_threshold': 0.12},
 ])
 def test_every_ablation_axis_changes_the_path(kwargs):
   """No two cells may share a checkpoint file."""
@@ -126,6 +128,26 @@ def test_a_checkpoint_cannot_be_loaded_under_the_other_reward_shape(tmp_path):
     ckpt.load_ckpt(str(tmp_path), 0, SEED, step_penalty_reward=False)
 
 
+def test_a_checkpoint_cannot_be_loaded_under_another_her_threshold(tmp_path):
+  ckpt.save_ckpt(str(tmp_path), 0, SEED, {'task_id': 0},
+                 her_reward_threshold=0.05)
+  with pytest.raises(FileNotFoundError):
+    ckpt.load_ckpt(
+        str(tmp_path), 0, SEED, her_reward_threshold=0.12)
+
+
+def test_legacy_checkpoint_is_reported_as_ambiguous(tmp_path):
+  legacy_dir = (
+      tmp_path
+      / 'actor_cka_critic_persistent_tid_True_heads_True_rew_steppen'
+      / f'seed_{SEED}')
+  legacy_dir.mkdir(parents=True)
+  with open(legacy_dir / 'task_0.pkl', 'wb') as handle:
+    pickle.dump({'task_id': 0}, handle)
+  with pytest.raises(FileNotFoundError, match='legacy checkpoint'):
+    ckpt.load_ckpt(str(tmp_path), 0, SEED)
+
+
 # ---- resume -------------------------------------------------------------
 
 def test_no_checkpoints_means_no_resume(tmp_path):
@@ -165,6 +187,7 @@ def test_resume_ignores_other_seeds(tmp_path):
     {'actor_mode': 'reset'},
     {'critic_mode': 'reset'},
     {'step_penalty_reward': False},
+    {'her_reward_threshold': 0.12},
 ])
 def test_resume_ignores_other_ablation_cells(tmp_path, kwargs):
   ckpt.save_ckpt(str(tmp_path), 2, SEED, {'task_id': 2}, **kwargs)

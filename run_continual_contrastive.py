@@ -22,8 +22,10 @@ For a quick test (2 tasks, 10k steps each):
       --alg=contrastive_cpc --k_max=2
 """
 import functools
+import json
 import os
 import pickle
+import subprocess
 import time
 from typing import Optional
 
@@ -61,7 +63,10 @@ from contrastive.continual_learning import (
 from contrastive.continual_learning_decomposed import (
     ContinualDecomposedLearner, DecomposedTrainingState,
 )
+from contrastive.continual_learning_rbc import ContinualRBCDecomposedLearner
 from contrastive.decomposed_networks import make_decomposed_networks
+from contrastive.rbc_networks import make_rbc_networks
+from contrastive import rbc_checkpointing
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
     cosine_matrix_from_vectors,
@@ -69,6 +74,7 @@ from contrastive.knowledge_pool import (
 from contrastive.negative_bank import NegativeBank
 from contrastive import rl_metrics
 from default import make_default_logger
+from sac import her as sac_her
 
 import env_utils
 
@@ -98,7 +104,8 @@ flags.DEFINE_bool('use_task_id', False, 'Append one-hot task ID to state and goa
 flags.DEFINE_string('critic_mode', 'persistent',
                     'Critic evolution across tasks: "persistent" (never reset, carry forward), '
                     '"reset" (reinitialize critic each task), '
-                    '"cka" (CKA-RL style base+vectors for critic too).')
+                    '"cka" (CKA-RL style base+vectors for critic too), '
+                    '"decomposed" (DCC), or "rbc_decomposed" (RBC-DCC).')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Episodes per task for cross-task evaluation (0 to disable).')
 flags.DEFINE_bool('intra_eval_previous_tasks', False,
@@ -221,6 +228,21 @@ flags.DEFINE_string('goal_encoder_mode', 'shared',
                     '"projected" (adds a Linear projection on top of psi(g) '
                     'regardless of combine_mode; useful ablation for '
                     'isolating the contribution of the projection itself).')
+flags.DEFINE_float('bellman_loss_weight', 1.0,
+                   'RBC-DCC weight lambda_Q on the twin scalar TD loss.')
+flags.DEFINE_float('bellman_residual_l2_weight', 1e-4,
+                   'RBC-DCC L2 weight lambda_Delta on residual outputs.')
+flags.DEFINE_float('bellman_discount', 0.99,
+                   'RBC-DCC Bellman bootstrap discount gamma.')
+flags.DEFINE_float('bellman_tau', 0.005,
+                   'RBC-DCC Polyak target update rate.')
+flags.DEFINE_integer('bellman_hidden_dim', 256,
+                     'Hidden width of each resettable RBC Bellman residual.')
+flags.DEFINE_float('her_reward_threshold', 0.05,
+                   'RBC-DCC HER goal-reach radius. Included in checkpoint '
+                   'identity; the same value is used by standalone SAC.')
+flags.DEFINE_bool('step_penalty_reward', True,
+                  'RBC-DCC HER reward shape: -1/0 when true, 0/+1 otherwise.')
 flags.DEFINE_bool('log_pool_cosine', True,
                   'Log per-task pool cosine-similarity matrices on the '
                   'actor / critic CKA pools. Cheap host-side metric. '
@@ -253,9 +275,40 @@ FIXED_GOALS = {
 
 # ---- checkpoint utilities ------------------------------------------------
 
+def _rbc_identity_config():
+  """Resolved RBC settings that must participate in checkpoint identity."""
+  return {
+      'dyn_aux_weight': FLAGS.dyn_aux_weight,
+      'dyn_aux_after_task0': FLAGS.dyn_aux_after_task0,
+      'phi_task_width': FLAGS.phi_task_width,
+      'phi_task_depth': FLAGS.phi_task_depth,
+      'combine_mode': FLAGS.combine_mode,
+      'goal_encoder_mode': FLAGS.goal_encoder_mode,
+      'bellman_loss_weight': FLAGS.bellman_loss_weight,
+      'bellman_residual_l2_weight': FLAGS.bellman_residual_l2_weight,
+      'bellman_discount': FLAGS.bellman_discount,
+      'bellman_tau': FLAGS.bellman_tau,
+      'bellman_hidden_dim': FLAGS.bellman_hidden_dim,
+      'her_reward_threshold': FLAGS.her_reward_threshold,
+      'step_penalty_reward': FLAGS.step_penalty_reward,
+  }
+
+
+def _git_commit_sha():
+  """Best-effort source revision for run manifests."""
+  try:
+    result = subprocess.run(
+        ['git', 'rev-parse', 'HEAD'],
+        check=True, capture_output=True, text=True)
+    return result.stdout.strip()
+  except (OSError, subprocess.SubprocessError):
+    return 'unknown'
+
+
 def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
                use_task_id=True, adapt_heads_only=True, actor_mode='cka',
-               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None):
+               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
+               rbc_config=None):
   """Checkpoint path keyed by all ablation-relevant config.
 
   Base structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
@@ -278,18 +331,25 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
       v is not None for v in (dyn_aux_weight, phi_task_width, phi_task_depth)):
     config_key += (f'_dyn{float(dyn_aux_weight):.3f}'
                    f'_pt{int(phi_task_width)}x{int(phi_task_depth)}')
+  if critic_mode == 'rbc_decomposed':
+    if rbc_config is None:
+      raise ValueError('rbc_config is required for RBC-DCC checkpoints.')
+    config_key += (
+        f'_rbc_{rbc_checkpointing.config_fingerprint(rbc_config)}')
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
 
 def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
-              dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None):
+              dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
+              rbc_config=None):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode,
                      dyn_aux_weight=dyn_aux_weight,
                      phi_task_width=phi_task_width,
-                     phi_task_depth=phi_task_depth)
+                     phi_task_depth=phi_task_depth,
+                     rbc_config=rbc_config)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_util.tree_map(
@@ -302,12 +362,14 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
 
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
-              dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None):
+              dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
+              rbc_config=None):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode,
                      dyn_aux_weight=dyn_aux_weight,
                      phi_task_width=phi_task_width,
-                     phi_task_depth=phi_task_depth)
+                     phi_task_depth=phi_task_depth,
+                     rbc_config=rbc_config)
   if not os.path.exists(path):
     # Migration notice: check whether a legacy (pre-2026-05-14)
     # un-disambiguated decomposed checkpoint exists at the OLD path.
@@ -430,7 +492,7 @@ def train_single_task(
     q_base: Optional[networks_lib.Params] = None,
     critic_pool: Optional[KnowledgePool] = None,
     neg_bank=None,
-    # ---- decomposed-critic carry (only used when critic_mode='decomposed') ---
+    # ---- shared DCC carry (used by decomposed and rbc_decomposed) ----------
     prev_b_shared_params: Optional[networks_lib.Params] = None,
     prev_b_shared_opt_state=None,
     prev_h_phi_params: Optional[networks_lib.Params] = None,
@@ -442,7 +504,8 @@ def train_single_task(
 ):
   """Train on a single task and return (theta_base, learner) for the next task.
 
-  When ``critic_mode == 'decomposed'``, the actor / pool plumbing is
+  When ``critic_mode`` is ``decomposed`` or ``rbc_decomposed``, the actor /
+  pool plumbing is
   bypassed and the decomposed critic state is carried through the
   ``prev_b_shared_*`` / ``prev_h_phi_*`` / ``prev_h_dyn_*`` /
   ``prev_psi_*`` arguments instead. The returned tuple's actor/pool
@@ -452,36 +515,50 @@ def train_single_task(
 
   np.random.seed(seed + task_id)
 
-  # ---- early guards: incompatible flags for critic_mode='decomposed' ----
+  # ---- early guards: incompatible flags for decomposed critic modes ------
   # Fail fast before booting the replay server. The decomposed learner
   # also raises on use_td/twin_q internally, but failing here keeps the
   # error attributable to a single source.
-  if critic_mode == 'decomposed':
+  if critic_mode in ('decomposed', 'rbc_decomposed'):
     if config.use_td:
       raise ValueError(
-          "critic_mode='decomposed' requires use_td=False (no TD path).")
+          f"critic_mode={critic_mode!r} requires use_td=False; RBC uses its "
+          "own scalar Bellman path.")
     if config.twin_q:
       raise ValueError(
-          "critic_mode='decomposed' requires twin_q=False.")
+          f"critic_mode={critic_mode!r} requires legacy twin_q=False.")
     if config.use_image_obs:
       raise ValueError(
-          "critic_mode='decomposed' does not support use_image_obs=True.")
+          f"critic_mode={critic_mode!r} does not support use_image_obs=True.")
     if config.entropy_coefficient is not None:
       raise ValueError(
-          "critic_mode='decomposed' requires adaptive entropy "
+          f"critic_mode={critic_mode!r} requires adaptive entropy "
           "(config.entropy_coefficient=None).")
     if FLAGS.neg_bank_mode != 'off':
       raise ValueError(
-          "critic_mode='decomposed' does not support neg_bank_mode != 'off'.")
+          f"critic_mode={critic_mode!r} does not support "
+          "neg_bank_mode != 'off'.")
     if actor_mode == 'cka':
       raise ValueError(
-          "critic_mode='decomposed' is incompatible with actor_mode='cka' "
+          f"critic_mode={critic_mode!r} is incompatible with actor_mode='cka' "
           "(proposal 1 keeps the actor reset; use actor_mode='reset').")
     if FLAGS.k_sample_k > 0:
       raise ValueError(
-          "critic_mode='decomposed' does not currently support k_sample_k>0 "
+          f"critic_mode={critic_mode!r} does not currently support "
+          "k_sample_k>0 "
           "in cross-task evaluation; the decomposed critic exposes a "
           "5-tuple bundle, not a single q_params pytree.")
+  if critic_mode == 'rbc_decomposed':
+    if actor_mode != 'reset':
+      raise ValueError(
+          "critic_mode='rbc_decomposed' v1 requires actor_mode='reset'.")
+    if getattr(continual_cfg, 'combine_mode', 'add') != 'add':
+      raise ValueError(
+          "critic_mode='rbc_decomposed' v1 requires combine_mode='add'.")
+    if getattr(continual_cfg, 'goal_encoder_mode', 'shared') != 'shared':
+      raise ValueError(
+          "critic_mode='rbc_decomposed' v1 requires "
+          "goal_encoder_mode='shared'.")
 
   # ---- environment -------------------------------------------------------
   # Task ID is appended to both state and goal at the gym level
@@ -525,6 +602,7 @@ def train_single_task(
       energy_fn=config.energy_fn)
 
   decomp_nets = None
+  rbc_nets = None
   if critic_mode == 'decomposed':
     decomp_nets = make_decomposed_networks(
         env_spec, obs_dim=obs_dim,
@@ -540,6 +618,24 @@ def train_single_task(
         goal_encoder_mode=getattr(
             continual_cfg, 'goal_encoder_mode', 'shared'),
     )
+  elif critic_mode == 'rbc_decomposed':
+    rbc_nets = make_rbc_networks(
+        env_spec, obs_dim=obs_dim,
+        repr_dim=config.repr_dim,
+        use_residual=config.use_residual,
+        network_width=config.network_width,
+        critic_depth=config.critic_depth,
+        phi_task_width=getattr(continual_cfg, 'phi_task_width', 256),
+        phi_task_depth=getattr(continual_cfg, 'phi_task_depth', 4),
+        energy_fn=config.energy_fn,
+        repr_norm=config.repr_norm,
+        combine_mode=getattr(continual_cfg, 'combine_mode', 'add'),
+        goal_encoder_mode=getattr(
+            continual_cfg, 'goal_encoder_mode', 'shared'),
+        bellman_hidden_dim=getattr(
+            continual_cfg, 'bellman_hidden_dim', 256),
+    )
+    decomp_nets = rbc_nets.decomposed
 
   # ---- replay buffer (reverb) -------------------------------------------
   # A fresh replay buffer is created per task so that experience from
@@ -563,6 +659,10 @@ def train_single_task(
   replay_client = reverb.Client(f'localhost:{replay_server.port}')
 
   # ---- dataset iterator --------------------------------------------------
+  her_ops = (
+      sac_her.tensorflow_ops()
+      if critic_mode == 'rbc_decomposed' else None)
+
   @tf.function
   def flatten_fn(sample):
     seq_len = tf.shape(sample.data.observation)[0]
@@ -580,9 +680,27 @@ def train_single_task(
     goal = tf.gather(goal, goal_index[:-1])
     new_obs = tf.concat([state, goal], axis=1)
     new_next_obs = tf.concat([next_state, goal], axis=1)
+
+    replay_reward = sample.data.reward[:-1]
+    replay_discount = sample.data.discount[:-1]
+    if critic_mode == 'rbc_decomposed':
+      achieved_next = contrastive_utils.obs_to_goal_2d(
+          next_state,
+          start_index=config.start_index,
+          end_index=config.end_index)
+      replay_reward, replay_discount = sac_her.her_reward_and_discount(
+          achieved_next,
+          goal,
+          sample.data.discount[:-1],
+          threshold=float(
+              getattr(continual_cfg, 'her_reward_threshold', 0.05)),
+          step_penalty_reward=bool(
+              getattr(continual_cfg, 'step_penalty_reward', True)),
+          ops=her_ops)
+
     transition = types.Transition(
         observation=new_obs, action=sample.data.action[:-1],
-        reward=sample.data.reward[:-1], discount=sample.data.discount[:-1],
+        reward=replay_reward, discount=replay_discount,
         next_observation=new_next_obs,
         extras={'next_action': sample.data.action[1:]})
     shift = tf.random.uniform((), 0, seq_len, tf.int32)
@@ -630,10 +748,25 @@ def train_single_task(
   # ---- learner -----------------------------------------------------------
   config_tag = (f'actor_{FLAGS.actor_mode}_critic_{critic_mode}'
                 f'_tid_{FLAGS.use_task_id}_heads_{FLAGS.adapt_heads_only}')
+  if critic_mode == 'rbc_decomposed':
+    config_tag += (
+        f'_rbc_{rbc_checkpointing.config_fingerprint(_rbc_identity_config())}')
   log_dir = os.path.join(
       FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
       f'task{task_id}_{env_name}_s{seed}')
   os.makedirs(log_dir, exist_ok=True)
+  if critic_mode == 'rbc_decomposed':
+    manifest = {
+        'git_commit': _git_commit_sha(),
+        'critic_mode': critic_mode,
+        'actor_mode': actor_mode,
+        'task_id': task_id,
+        'env_name': env_name,
+        'seed': seed,
+        **_rbc_identity_config(),
+    }
+    with open(os.path.join(log_dir, 'resolved_config.json'), 'w') as handle:
+      json.dump(manifest, handle, indent=2, sort_keys=True, default=str)
 
   learner_logger = make_default_logger(
       'learner', save_data=True, save_dir=log_dir,
@@ -656,6 +789,28 @@ def train_single_task(
     # are untouched.
     learner = ContinualDecomposedLearner(
         decomp_nets=decomp_nets,
+        policy_network=networks.policy_network,
+        sample_fn=networks.sample,
+        log_prob_fn=networks.log_prob,
+        rng=rng,
+        iterator=iterator,
+        counter=counting.Counter(),
+        logger=learner_logger,
+        config=config,
+        continual_config=continual_cfg,
+        task_id=task_id,
+        prev_b_shared_params=prev_b_shared_params,
+        prev_b_shared_opt_state=prev_b_shared_opt_state,
+        prev_h_phi_params=prev_h_phi_params,
+        prev_h_phi_opt_state=prev_h_phi_opt_state,
+        prev_h_dyn_params=prev_h_dyn_params,
+        prev_h_dyn_opt_state=prev_h_dyn_opt_state,
+        prev_psi_params=prev_psi_params,
+        prev_psi_opt_state=prev_psi_opt_state,
+    )
+  elif critic_mode == 'rbc_decomposed':
+    learner = ContinualRBCDecomposedLearner(
+        rbc_nets=rbc_nets,
         policy_network=networks.policy_network,
         sample_fn=networks.sample,
         log_prob_fn=networks.log_prob,
@@ -1062,7 +1217,10 @@ def train_single_task(
               FLAGS.use_task_id, adapt_heads_only, actor_mode,
               dyn_aux_weight=FLAGS.dyn_aux_weight,
               phi_task_width=FLAGS.phi_task_width,
-              phi_task_depth=FLAGS.phi_task_depth)),
+              phi_task_depth=FLAGS.phi_task_depth,
+              rbc_config=(
+                  _rbc_identity_config()
+                  if critic_mode == 'rbc_decomposed' else None))),
           f'probe_data_task{task_id}_seed{seed}.npz',
       )
       os.makedirs(os.path.dirname(probe_path), exist_ok=True)
@@ -1078,7 +1236,7 @@ def train_single_task(
   _dump_probe_data()
 
   # ---- extract state for next task ---------------------------------------
-  if critic_mode == 'decomposed':
+  if critic_mode in ('decomposed', 'rbc_decomposed'):
     # The decomposed actor is reset every task: there is no v_k pool to
     # extract, no theta_base to fold, no critic CKA pool to update. The
     # only carry is the four shared critic groups (b_shared / h_phi /
@@ -1101,7 +1259,7 @@ def train_single_task(
     out_psi_params = learner.psi_params
     out_psi_opt_state = learner.psi_opt_state
     print(
-        f'  [decomposed] Carrying b_shared / h_phi / h_dyn / psi to task '
+        f'  [{critic_mode}] Carrying b_shared / h_phi / h_dyn / psi to task '
         f'{task_id + 1}; phi_task and actor reinitialised next task.',
         flush=True,
     )
@@ -1355,6 +1513,13 @@ def main(_):
       phi_task_depth=FLAGS.phi_task_depth,
       combine_mode=FLAGS.combine_mode,
       goal_encoder_mode=FLAGS.goal_encoder_mode,
+      bellman_loss_weight=FLAGS.bellman_loss_weight,
+      bellman_residual_l2_weight=FLAGS.bellman_residual_l2_weight,
+      bellman_discount=FLAGS.bellman_discount,
+      bellman_tau=FLAGS.bellman_tau,
+      bellman_hidden_dim=FLAGS.bellman_hidden_dim,
+      her_reward_threshold=FLAGS.her_reward_threshold,
+      step_penalty_reward=FLAGS.step_penalty_reward,
       log_pool_cosine=FLAGS.log_pool_cosine,
       log_mixture_norm=FLAGS.log_mixture_norm,
       log_probe_data=FLAGS.log_probe_data,
@@ -1448,7 +1613,10 @@ def main(_):
           actor_mode=FLAGS.actor_mode,
           dyn_aux_weight=FLAGS.dyn_aux_weight,
           phi_task_width=FLAGS.phi_task_width,
-          phi_task_depth=FLAGS.phi_task_depth)
+          phi_task_depth=FLAGS.phi_task_depth,
+          rbc_config=(
+              _rbc_identity_config()
+              if FLAGS.critic_mode == 'rbc_decomposed' else None))
       if os.path.exists(probe_path):
         start_task = probe_tid + 1  # resume from the NEXT task
         print(f'  [auto-resume] Found checkpoint for task {probe_tid} '
@@ -1470,7 +1638,10 @@ def main(_):
                       actor_mode=FLAGS.actor_mode,
                       dyn_aux_weight=FLAGS.dyn_aux_weight,
                       phi_task_width=FLAGS.phi_task_width,
-                      phi_task_depth=FLAGS.phi_task_depth)
+                      phi_task_depth=FLAGS.phi_task_depth,
+                      rbc_config=(
+                          _rbc_identity_config()
+                          if FLAGS.critic_mode == 'rbc_decomposed' else None))
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
@@ -1481,7 +1652,7 @@ def main(_):
       critic_pool_vecs = ckpt.get('critic_pool_vectors')
       if critic_pool_vecs is not None:
         critic_pool.load_state_dict(critic_pool_vecs)
-    if FLAGS.critic_mode == 'decomposed':
+    if FLAGS.critic_mode in ('decomposed', 'rbc_decomposed'):
       prev_b_shared_params = ckpt.get('decomposed_b_shared_params')
       prev_b_shared_opt_state = ckpt.get('decomposed_b_shared_opt_state')
       prev_h_phi_params = ckpt.get('decomposed_h_phi_params')
@@ -1532,6 +1703,7 @@ def main(_):
           group="C2: decomposed single-cell sanity",
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
+                  'git_commit': _git_commit_sha(),
                   'critic_mode': FLAGS.critic_mode,
                   'use_task_id': FLAGS.use_task_id,
                   'adapt_heads_only': FLAGS.adapt_heads_only,
@@ -1551,7 +1723,21 @@ def main(_):
                   'neg_bank_n_per_step': FLAGS.neg_bank_n_per_step,
                   'neg_bank_candidate_pool': FLAGS.neg_bank_candidate_pool,
                   'neg_bank_weight': FLAGS.neg_bank_weight,
-                  'neg_bank_max_tasks': FLAGS.neg_bank_max_tasks},
+                  'neg_bank_max_tasks': FLAGS.neg_bank_max_tasks,
+                  'dyn_aux_weight': FLAGS.dyn_aux_weight,
+                  'dyn_aux_after_task0': FLAGS.dyn_aux_after_task0,
+                  'phi_task_width': FLAGS.phi_task_width,
+                  'phi_task_depth': FLAGS.phi_task_depth,
+                  'combine_mode': FLAGS.combine_mode,
+                  'goal_encoder_mode': FLAGS.goal_encoder_mode,
+                  'bellman_loss_weight': FLAGS.bellman_loss_weight,
+                  'bellman_residual_l2_weight':
+                      FLAGS.bellman_residual_l2_weight,
+                  'bellman_discount': FLAGS.bellman_discount,
+                  'bellman_tau': FLAGS.bellman_tau,
+                  'bellman_hidden_dim': FLAGS.bellman_hidden_dim,
+                  'her_reward_threshold': FLAGS.her_reward_threshold,
+                  'step_penalty_reward': FLAGS.step_penalty_reward},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,
       )
@@ -1647,7 +1833,7 @@ def main(_):
     if FLAGS.critic_mode == 'cka':
       ckpt_data['q_base'] = q_base
       ckpt_data['critic_pool_vectors'] = critic_pool.state_dict()
-    if FLAGS.critic_mode == 'decomposed':
+    if FLAGS.critic_mode in ('decomposed', 'rbc_decomposed'):
       ckpt_data['decomposed_b_shared_params'] = prev_b_shared_params
       ckpt_data['decomposed_b_shared_opt_state'] = prev_b_shared_opt_state
       ckpt_data['decomposed_h_phi_params'] = prev_h_phi_params
@@ -1662,7 +1848,10 @@ def main(_):
               actor_mode=FLAGS.actor_mode,
               dyn_aux_weight=FLAGS.dyn_aux_weight,
               phi_task_width=FLAGS.phi_task_width,
-              phi_task_depth=FLAGS.phi_task_depth)
+              phi_task_depth=FLAGS.phi_task_depth,
+              rbc_config=(
+                  _rbc_identity_config()
+                  if FLAGS.critic_mode == 'rbc_decomposed' else None))
 
     # ---- cross-task evaluation (forgetting measurement) ------------------
     if FLAGS.eval_episodes > 0:
