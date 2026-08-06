@@ -705,7 +705,7 @@ def train_single_task(
   decomp_nets = None
   rbc_nets = None
   hybrid_sac_nets = None
-  if critic_mode == 'decomposed' or critic_mode in _HYBRID_CRITIC_MODES:
+  if critic_mode == 'decomposed':
     decomp_nets = make_decomposed_networks(
         env_spec, obs_dim=obs_dim,
         repr_dim=config.repr_dim,
@@ -720,17 +720,31 @@ def train_single_task(
         goal_encoder_mode=getattr(
             continual_cfg, 'goal_encoder_mode', 'shared'),
     )
-    if critic_mode in _HYBRID_CRITIC_MODES:
-      hybrid_sac_nets = sac_networks.make_sac_networks(
-          env_spec,
-          obs_dim=obs_dim,
-          twin_q=True,
-          use_residual=config.use_residual,
-          network_width=int(getattr(
-              continual_cfg, 'dcc_sac_q_hidden_dim', 1024)),
-          critic_depth=config.critic_depth,
-          actor_depth=config.actor_depth,
-      )
+  elif critic_mode in _HYBRID_CRITIC_MODES:
+    decomp_nets = make_decomposed_networks(
+        env_spec, obs_dim=obs_dim,
+        repr_dim=config.repr_dim,
+        use_residual=config.use_residual,
+        network_width=config.network_width,
+        critic_depth=config.critic_depth,
+        phi_task_width=getattr(continual_cfg, 'phi_task_width', 256),
+        phi_task_depth=getattr(continual_cfg, 'phi_task_depth', 4),
+        energy_fn=config.energy_fn,
+        repr_norm=config.repr_norm,
+        combine_mode=getattr(continual_cfg, 'combine_mode', 'add'),
+        goal_encoder_mode=getattr(
+            continual_cfg, 'goal_encoder_mode', 'shared'),
+    )
+    hybrid_sac_nets = sac_networks.make_sac_networks(
+        env_spec,
+        obs_dim=obs_dim,
+        twin_q=True,
+        use_residual=config.use_residual,
+        network_width=int(getattr(
+            continual_cfg, 'dcc_sac_q_hidden_dim', 1024)),
+        critic_depth=config.critic_depth,
+        actor_depth=config.actor_depth,
+    )
   elif critic_mode == 'rbc_decomposed':
     rbc_nets = make_rbc_networks(
         env_spec, obs_dim=obs_dim,
