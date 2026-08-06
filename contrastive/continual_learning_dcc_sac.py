@@ -420,17 +420,28 @@ class ContinualDCCSACLearner(acme.Learner):
           jnp.mean(jnp.abs(q_pred)), 1.0)
       reached = her.reached_from_reward(
           transitions.reward, step_penalty_reward)
+      q_sorted = jnp.sort(jnp.reshape(q_pred, (-1,)))
+      target_sorted = jnp.sort(jnp.reshape(target, (-1,)))
+      td_sorted = jnp.sort(jnp.reshape(jnp.abs(q_error), (-1,)))
+      q_n = q_sorted.shape[0]
+      target_n = target_sorted.shape[0]
+      td_n = td_sorted.shape[0]
       return td_loss, {
           'q_mean': jnp.mean(q_pred),
           'q_std': jnp.std(q_pred),
           'q_min': jnp.min(q_pred),
           'q_max': jnp.max(q_pred),
+          'q_p01': q_sorted[int(0.01 * (q_n - 1))],
+          'q_p99': q_sorted[int(0.99 * (q_n - 1))],
           'q_target_mean': jnp.mean(target),
           'q_target_std': jnp.std(target),
           'q_target_min': jnp.min(target),
           'q_target_max': jnp.max(target),
+          'q_target_p01': target_sorted[int(0.01 * (target_n - 1))],
+          'q_target_p99': target_sorted[int(0.99 * (target_n - 1))],
           'td_error_abs': jnp.mean(jnp.abs(q_error)),
           'td_error_max': jnp.max(jnp.abs(q_error)),
+          'td_error_p95': td_sorted[int(0.95 * (td_n - 1))],
           'twin_disagreement_abs': twin_abs,
           'twin_disagreement_normalized': twin_normalized,
           'her_success_rate': jnp.mean(reached.astype(jnp.float32)),
@@ -502,6 +513,8 @@ class ContinualDCCSACLearner(acme.Learner):
           'dcc_sac/beta_effective': beta_effective,
           'dcc_sac/q_correction_mean': jnp.mean(
               beta_effective * q_z),
+          'dcc_sac/action_saturation_fraction': jnp.mean(
+              (jnp.abs(action) > 0.95).astype(jnp.float32)),
       }
 
     def alpha_loss_fn(log_alpha, policy_params, transitions, key):
@@ -512,6 +525,12 @@ class ContinualDCCSACLearner(acme.Learner):
       return jnp.mean(
           alpha * jax.lax.stop_gradient(
               -log_prob - target_entropy))
+
+    def _tree_l2_norm(tree):
+      squared = [
+          jnp.sum(jnp.square(leaf))
+          for leaf in jax.tree_util.tree_leaves(tree)]
+      return jnp.sqrt(jnp.sum(jnp.stack(squared)))
 
     def _updated(opt, params, opt_state, grad):
       updates, new_opt_state = opt.update(grad, opt_state)
@@ -599,7 +618,9 @@ class ContinualDCCSACLearner(acme.Learner):
             (new_count.astype(jnp.float32) - warmup_updates)
             / float(ramp_updates),
             0.0, 1.0)
-        gate = ramp * jnp.logical_and(stable, warm).astype(jnp.float32)
+        stable_flag = jnp.logical_and(stable, warm).astype(jnp.float32)
+        gate = ramp * stable_flag
+        q_grad_norm = _tree_l2_norm(q_grad)
       else:
         q_loss = jnp.asarray(0.0, dtype=jnp.float32)
         q_metrics = {
@@ -607,12 +628,17 @@ class ContinualDCCSACLearner(acme.Learner):
             'q_std': jnp.asarray(0.0),
             'q_min': jnp.asarray(0.0),
             'q_max': jnp.asarray(0.0),
+            'q_p01': jnp.asarray(0.0),
+            'q_p99': jnp.asarray(0.0),
             'q_target_mean': jnp.asarray(0.0),
             'q_target_std': jnp.asarray(0.0),
             'q_target_min': jnp.asarray(0.0),
             'q_target_max': jnp.asarray(0.0),
+            'q_target_p01': jnp.asarray(0.0),
+            'q_target_p99': jnp.asarray(0.0),
             'td_error_abs': jnp.asarray(0.0),
             'td_error_max': jnp.asarray(0.0),
+            'td_error_p95': jnp.asarray(0.0),
             'twin_disagreement_abs': jnp.asarray(0.0),
             'twin_disagreement_normalized': jnp.asarray(0.0),
             'her_success_rate': jnp.asarray(0.0),
@@ -625,7 +651,10 @@ class ContinualDCCSACLearner(acme.Learner):
         new_count = state.update_count + 1
         td_ema = state.td_error_ema
         twin_ema = state.twin_disagreement_ema
+        stable_flag = jnp.asarray(0.0, dtype=jnp.float32)
+        ramp = jnp.asarray(0.0, dtype=jnp.float32)
         gate = jnp.asarray(0.0, dtype=jnp.float32)
+        q_grad_norm = jnp.asarray(0.0, dtype=jnp.float32)
 
       (actor_loss, actor_metrics), actor_grad = jax.value_and_grad(
           actor_loss_fn, has_aux=True)(
@@ -673,7 +702,14 @@ class ContinualDCCSACLearner(acme.Learner):
              for name, value in q_metrics.items()},
           'dcc_sac/td_error_ema': td_ema,
           'dcc_sac/twin_disagreement_ema': twin_ema,
+          'dcc_sac/q_stable': stable_flag,
+          'dcc_sac/q_gate_ramp': ramp,
           'dcc_sac/q_gate': gate,
+          'dcc_sac/q_grad_norm': q_grad_norm,
+          'dcc_sac/dcc_grad_norm': _tree_l2_norm(dcc_grads),
+          'dcc_sac/actor_grad_norm': _tree_l2_norm(actor_grad),
+          'dcc_sac/alpha_grad_abs': jnp.abs(alpha_grad),
+          'dcc_sac/shared_parameter_count': jnp.asarray(0.0),
           'dcc_sac/total_critic_loss': (
               dcc_total + dyn_weight * dyn_loss
               + q_loss_weight * q_loss),
