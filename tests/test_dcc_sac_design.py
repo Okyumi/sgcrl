@@ -58,6 +58,10 @@ def test_new_python_files_parse():
       'contrastive/shortcut_diagnostics.py',
       'contrastive/dcc_sac_math.py',
       'contrastive/decomposed_networks.py',
+      'results/scripts/fetch_wandb_runs.py',
+      'results/scripts/compute_metrics.py',
+      'sac/flags.py',
+      'sac/training.py',
       'run_continual_contrastive.py',
   ):
     ast.parse((ROOT / relative).read_text(), filename=relative)
