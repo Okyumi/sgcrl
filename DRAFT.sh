@@ -10,7 +10,7 @@
 #SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%A_%a.out
 #SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
-#SBATCH --array=0
+#SBATCH --array=0-2
 #
 # ==========================================================================
 # Continual Goal-Conditioned Contrastive RL – Torch Batch SLURM Launcher
@@ -52,6 +52,8 @@ K_MAX="${K_MAX:-10}"
 START_TASK="${START_TASK:-0}"
 EVAL_EVERY="${EVAL_EVERY:-50000}"
 USE_WANDB="${USE_WANDB:-true}"
+WANDB_PROJECT="${WANDB_PROJECT:-continual_gcrl_paper}"
+WANDB_GROUP="${WANDB_GROUP:-C2: decomposed single-cell sanity}"
 ADD_UID="${ADD_UID:-true}"
 USE_TASK_ID="${USE_TASK_ID:-false}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
@@ -140,6 +142,8 @@ build_flags() {
   if [ "$USE_WANDB" = "true" ]; then
     _FLAGS="$_FLAGS --use_wandb"
   fi
+  _FLAGS="$_FLAGS --wandb_project=$WANDB_PROJECT"
+  _FLAGS="$_FLAGS --wandb_group=$WANDB_GROUP"
   if [ "$ADD_UID" = "true" ]; then
     _FLAGS="$_FLAGS --add_uid"
   fi
@@ -301,6 +305,8 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "Start task      : $START_TASK"
     echo "Eval every      : $EVAL_EVERY"
     echo "W&B             : $USE_WANDB"
+    echo "W&B project     : $WANDB_PROJECT"
+    echo "W&B group       : $WANDB_GROUP"
     echo "Critic mode     : $CRITIC_MODE"
     echo "Actor mode      : $ACTOR_MODE"
     echo "Use task ID     : $USE_TASK_ID"

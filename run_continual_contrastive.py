@@ -95,6 +95,10 @@ flags.DEFINE_integer('k_max', 10, 'Max pool size before merging.')
 flags.DEFINE_string('checkpoint_dir', 'logs/continual_checkpoints',
                     'Directory for cross-task checkpoints.')
 flags.DEFINE_bool('use_wandb', True, 'Log to W&B.')
+flags.DEFINE_string('wandb_project', 'continual_gcrl_paper',
+                    'W&B project name.')
+flags.DEFINE_string('wandb_group', 'C2: decomposed single-cell sanity',
+                    'W&B group name.')
 flags.DEFINE_bool('add_uid', False, 'Add UID to log dirs.')
 flags.DEFINE_integer('start_task', 0, 'Resume from this task (loads ckpt from task-1).')
 flags.DEFINE_integer('eval_every', 50_000, 'Evaluate every N env steps.')
@@ -1697,10 +1701,8 @@ def main(_):
     # without this call all wandb.log() silently fail.
     if FLAGS.use_wandb and wandb is not None:
       wandb.init(
-          project='continual_gcrl_paper',
-          # group="C0: CKA-failure diagnostic",
-          # group="C1: decomposed regression check and baseline",
-          group="C2: decomposed single-cell sanity",
+          project=FLAGS.wandb_project,
+          group=FLAGS.wandb_group,
           config={**params, 'task_id': task_id, 'env_name': env_name,
                   'num_tasks': num_tasks, 'k_max': continual_cfg.k_max,
                   'git_commit': _git_commit_sha(),

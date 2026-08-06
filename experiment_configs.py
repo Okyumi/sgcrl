@@ -37,6 +37,7 @@ Usage:
 """
 import argparse
 import itertools
+import shlex
 import sys
 
 
@@ -86,12 +87,16 @@ CELLS: list = [
     #  'log_mixture_norm': True, 'log_pool_cosine': True},
 
     # ---- C1: decomposed regression check, dyn_aux_weight=0 (N5) -----
+    # Resume unfinished seeds 5/6/7 (prior runs stopped around task 8).
     # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
-    #  'dyn_aux_weight': 0.0, 'log_probe_data': True},
+    #  'dyn_aux_weight': 0.0, 'log_probe_data': True,
+    #  'wandb_group': 'C1: decomposed regression check and baseline'},
     # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 6,
-    #  'dyn_aux_weight': 0.0, 'log_probe_data': True},
+    #  'dyn_aux_weight': 0.0, 'log_probe_data': True,
+    #  'wandb_group': 'C1: decomposed regression check and baseline'},
     # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
-    #  'dyn_aux_weight': 0.0, 'log_probe_data': True},
+    #  'dyn_aux_weight': 0.0, 'log_probe_data': True,
+    #  'wandb_group': 'C1: decomposed regression check and baseline'},
     # ---- C1 baseline: persistent at the same seeds ------------------
     # {'actor_mode': 'reset', 'critic_mode': 'persistent', 'seed': 5,
     #  'log_probe_data': True},
@@ -101,12 +106,21 @@ CELLS: list = [
     #  'log_probe_data': True},
 
     # ---- C2: decomposed single-cell sanity, dyn_aux_weight=1 (N6) --
-    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
-     'dyn_aux_weight': 1.0, 'log_probe_data': True},
-    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 6,
-     'dyn_aux_weight': 1.0, 'log_probe_data': True},
-    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 7,
-     'dyn_aux_weight': 1.0, 'log_probe_data': True},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 97,
+    #  'dyn_aux_weight': 1.0, 'log_probe_data': True,
+    #  'wandb_group': 'C2: decomposed single-cell sanity'},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 98,
+    #  'dyn_aux_weight': 1.0, 'log_probe_data': True,
+    #  'wandb_group': 'C2: decomposed single-cell sanity'},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 99,
+    #  'dyn_aux_weight': 1.0, 'log_probe_data': True,
+    #  'wandb_group': 'C2: decomposed single-cell sanity'},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 100,
+    #  'dyn_aux_weight': 1.0, 'log_probe_data': True,
+    #  'wandb_group': 'C2: decomposed single-cell sanity'},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 101,
+    #  'dyn_aux_weight': 1.0, 'log_probe_data': True,
+    #  'wandb_group': 'C2: decomposed single-cell sanity'},
 
     # ---- C2b: dyn-aux only at task 0; off afterward -----------------
     # Tests whether the dynamics auxiliary is doing real work during
@@ -134,14 +148,89 @@ CELLS: list = [
     # G4 dyn-aux full (dyn_aux_weight=1.0, decomposed), 5 seeds
     # G5 (decomposed body + reset carry) — deferred (N7b plumbing)
 
-    # ---- RBC-DCC staged pilot (leave commented until smoke gates pass) ----
+    # ---- RBC-DCC: 10-task continual comparison vs DCC (seeds 5,6,7) ----
+    {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 5,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+     'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+     'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+     'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+     'log_probe_data': True,
+     'wandb_group': 'RBC-DCC continual 10-task'},
+    {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 6,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+     'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+     'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+     'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+     'log_probe_data': True,
+     'wandb_group': 'RBC-DCC continual 10-task'},
+    {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 7,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+     'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+     'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+     'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+     'log_probe_data': True,
+     'wandb_group': 'RBC-DCC continual 10-task'},
+
+    # ---- RBC-DCC: single-task task-5 probe (handle-press-side) ----------
     # {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 5,
+    #  'single_task': 'sawyer_handle_press_side',
     #  'dyn_aux_weight': 1.0, 'combine_mode': 'add',
     #  'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
     #  'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
     #  'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
     #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
-    #  'log_probe_data': True},
+    #  'log_probe_data': True,
+    #  'wandb_group': 'RBC-DCC single-task k5'},
+    # {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 6,
+    #  'single_task': 'sawyer_handle_press_side',
+    #  'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+    #  'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+    #  'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+    #  'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+    #  'log_probe_data': True,
+    #  'wandb_group': 'RBC-DCC single-task k5'},
+    # {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 7,
+    #  'single_task': 'sawyer_handle_press_side',
+    #  'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+    #  'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+    #  'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+    #  'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+    #  'log_probe_data': True,
+    #  'wandb_group': 'RBC-DCC single-task k5'},
+
+    # ---- RBC-DCC: single-task task-8 probe (window-close) ---------------
+    # {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 5,
+    #  'single_task': 'sawyer_window_close',
+    #  'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+    #  'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+    #  'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+    #  'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+    #  'log_probe_data': True,
+    #  'wandb_group': 'RBC-DCC single-task k8'},
+    # {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 6,
+    #  'single_task': 'sawyer_window_close',
+    #  'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+    #  'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+    #  'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+    #  'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+    #  'log_probe_data': True,
+    #  'wandb_group': 'RBC-DCC single-task k8'},
+    # {'actor_mode': 'reset', 'critic_mode': 'rbc_decomposed', 'seed': 7,
+    #  'single_task': 'sawyer_window_close',
+    #  'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+    #  'goal_encoder_mode': 'shared', 'bellman_loss_weight': 1.0,
+    #  'bellman_residual_l2_weight': 0.0001, 'bellman_discount': 0.99,
+    #  'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
+    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+    #  'log_probe_data': True,
+    #  'wandb_group': 'RBC-DCC single-task k8'},
 ]
 
 
@@ -195,6 +284,7 @@ def _format_cell(c, num_cols=8):
       f'{c.get("actor_mode", "-"):<10}',
       f'{c.get("critic_mode", "-"):<11}',
       f'{c.get("seed", "-"):>4}',
+      f'{c.get("single_task", "-"):<26}',
       f'{c.get("dyn_aux_weight", "-")!s:>6}',
       f'{c.get("log_mixture_norm", "-")!s:>6}',
       f'{c.get("log_probe_data", "-")!s:>6}',
@@ -233,6 +323,7 @@ def main():
     print('')
     header = '  '.join([
         f'{"idx":>4}', f'{"actor":<10}', f'{"critic":<11}', f'{"seed":>4}',
+        f'{"single_task":<26}',
         f'{"dynw":>6}', f'{"mixN":>6}', f'{"prob":>6}',
         f'{"ptw":>5}', f'{"ptd":>5}',
     ])
@@ -255,6 +346,8 @@ def main():
     # them in the existing `if [ "$VAR" = "true" ]; then ...` pattern.
     if isinstance(value, bool):
       value = 'true' if value else 'false'
+    elif isinstance(value, str):
+      value = shlex.quote(value)
     print(f'{key.upper()}={value}')
 
 
