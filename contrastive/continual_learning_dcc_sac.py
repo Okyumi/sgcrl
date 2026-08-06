@@ -339,6 +339,8 @@ class ContinualDCCSACLearner(acme.Learner):
       action_margin = jnp.asarray(0.0, dtype=logits.dtype)
       action_score_std = jnp.asarray(0.0, dtype=logits.dtype)
       if use_action_contrast:
+        # Counterfactual matrix: hold (s, achieved_goal(s')) fixed and vary
+        # only the replay action; the action that produced s' is positive.
         n = min(action_contrast_batch_size, transitions.action.shape[0])
         state = transitions.observation[:n, :obs_dim]
         next_state = transitions.next_observation[:n, :obs_dim]
