@@ -771,593 +771,593 @@ def train_single_task(
       )
       decomp_nets = rbc_nets.decomposed
   
-    # ---- replay buffer (reverb) -------------------------------------------
-    # A fresh replay buffer is created per task so that experience from
-    # previous tasks does not leak into the current task's training data.
-    min_replay_traj = config.min_replay_size // config.max_episode_steps
-    max_replay_traj = config.max_replay_size // config.max_episode_steps
-  
-    replay_table = reverb.Table(
-        name=config.replay_table_name,
-        sampler=reverb.selectors.Uniform(),
-        remover=reverb.selectors.Fifo(),
-        max_size=max_replay_traj,
-        # IMPORTANT (sequential continual runner):
-        # During prefill we only insert and do not sample yet. Using
-        # SampleToInsertRatio can block inserts after ~min_size_to_sample
-        # episodes, causing prefill to hang. MinSize avoids this deadlock.
-        rate_limiter=rate_limiters.MinSize(min_replay_traj),
-        signature=adders_reverb.EpisodeAdder.signature(env_spec, {}))
-  
-    replay_server = reverb.Server([replay_table], port=None)
-    replay_client = reverb.Client(f'localhost:{replay_server.port}')
-  
-    # ---- dataset iterator --------------------------------------------------
-    her_ops = (
-        sac_her.tensorflow_ops()
-        if critic_mode in _HER_CRITIC_MODES else None)
-  
-    @tf.function
-    def flatten_fn(sample):
-      seq_len = tf.shape(sample.data.observation)[0]
-      arange = tf.range(seq_len)
-      is_future = tf.cast(arange[:, None] < arange[None], tf.float32)
-      discount = config.discount ** tf.cast(arange[None] - arange[:, None], tf.float32)
-      probs = is_future * discount
-      goal_index = tf.random.categorical(
-          logits=tf.math.log(probs), num_samples=1)[:, 0]
-      state = sample.data.observation[:-1, :config.obs_dim]
-      next_state = sample.data.observation[1:, :config.obs_dim]
-      goal = sample.data.observation[:, :config.obs_dim]
-      goal = contrastive_utils.obs_to_goal_2d(
-          goal, start_index=config.start_index, end_index=config.end_index)
-      goal = tf.gather(goal, goal_index[:-1])
-      new_obs = tf.concat([state, goal], axis=1)
-      new_next_obs = tf.concat([next_state, goal], axis=1)
-  
-      replay_reward = sample.data.reward[:-1]
-      replay_discount = sample.data.discount[:-1]
-      if critic_mode in _HER_CRITIC_MODES:
-        achieved_next = contrastive_utils.obs_to_goal_2d(
-            next_state,
-            start_index=config.start_index,
-            end_index=config.end_index)
-        replay_reward, replay_discount = sac_her.her_reward_and_discount(
-            achieved_next,
-            goal,
-            sample.data.discount[:-1],
-            threshold=float(
-                getattr(continual_cfg, 'her_reward_threshold', 0.05)),
-            step_penalty_reward=bool(
-                getattr(continual_cfg, 'step_penalty_reward', True)),
-            ops=her_ops)
-  
-      transition = types.Transition(
-          observation=new_obs, action=sample.data.action[:-1],
-          reward=replay_reward, discount=replay_discount,
-          next_observation=new_next_obs,
-          extras={'next_action': sample.data.action[1:]})
-      shift = tf.random.uniform((), 0, seq_len, tf.int32)
-      transition = tree.map_structure(lambda t: tf.roll(t, shift, axis=0), transition)
-      return transition
-  
-    # Use a single interleave worker to avoid deadlocks with drop_remainder
-    # batching during early sampling when the replay buffer is small.
-    num_parallel_calls = 1
-  
-    def _make_dataset(unused):
-      ds = reverb.TrajectoryDataset.from_table_signature(
-          server_address=replay_client.server_address,
-          table=config.replay_table_name,
-          max_in_flight_samples_per_worker=100)
-      ds = ds.map(flatten_fn)
-      def _transpose_fn(t):
-        dims = tf.range(tf.shape(tf.shape(t))[0])
-        perm = tf.concat([[1, 0], dims[2:]], axis=0)
-        return tf.transpose(t, perm)
-      ds = ds.batch(config.batch_size, drop_remainder=True)
-      ds = ds.map(lambda tr: tree.map_structure(_transpose_fn, tr))
-      ds = ds.unbatch().unbatch()
-      return ds
-  
-    dataset = tf.data.Dataset.from_tensors(0).repeat()
-    dataset = dataset.interleave(
-        _make_dataset, cycle_length=num_parallel_calls,
-        num_parallel_calls=num_parallel_calls, deterministic=False)
-    dataset = dataset.batch(
-        config.batch_size * config.num_sgd_steps_per_step, drop_remainder=True)
-  
-    @tf.function
-    def add_info(data):
-      info = reverb.SampleInfo(key=0, probability=0.0, table_size=0, priority=0.0)
-      return reverb.ReplaySample(info=info, data=data)
-    dataset = dataset.map(add_info, num_parallel_calls=tf.data.AUTOTUNE,
-                          deterministic=False)
-    dataset = dataset.prefetch(tf.data.AUTOTUNE)
-    iterator = dataset.as_numpy_iterator()
-    # No jax_utils.prefetch here: background device prefetching during the
-    # replay prefill phase (before the learner starts consuming) causes
-    # backpressure deadlocks.
-  
-    # ---- learner -----------------------------------------------------------
-    config_tag = (f'actor_{FLAGS.actor_mode}_critic_{critic_mode}'
-                  f'_tid_{FLAGS.use_task_id}_heads_{FLAGS.adapt_heads_only}')
-    if critic_mode == 'rbc_decomposed':
-      config_tag += (
-          f'_rbc_{rbc_checkpointing.config_fingerprint(_rbc_identity_config())}')
-    elif critic_mode in _HYBRID_CRITIC_MODES:
-      config_tag += (
-          f"_hybrid_{rbc_checkpointing.config_fingerprint(_dcc_sac_identity_config())}")
-    log_dir = os.path.join(
-        FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
-        f'task{task_id}_{env_name}_s{seed}')
-    os.makedirs(log_dir, exist_ok=True)
-    if (
-        critic_mode == 'rbc_decomposed'
-        or critic_mode in _HYBRID_CRITIC_MODES):
-      identity = (
-          _rbc_identity_config()
-          if critic_mode == 'rbc_decomposed'
-          else _dcc_sac_identity_config())
-      manifest = {
-          'git_commit': _git_commit_sha(),
-          'critic_mode': critic_mode,
-          'actor_mode': actor_mode,
-          'task_id': task_id,
-          'env_name': env_name,
-          'seed': seed,
-          **identity,
-      }
-      with open(os.path.join(log_dir, 'resolved_config.json'), 'w') as handle:
-        json.dump(manifest, handle, indent=2, sort_keys=True, default=str)
-  
-    learner_logger = make_default_logger(
-        'learner', save_data=True, save_dir=log_dir,
-        add_uid=config.add_uid, use_wandb=config.use_wandb,
-        time_delta=10.0, asynchronous=True,
-        serialize_fn=jax_utils.fetch_devicearray,
-        steps_key='learner_steps')
-  
-    rng = jax.random.PRNGKey(seed + task_id * 1000)
-  
-    q_optimizer = optax.adam(learning_rate=config.learning_rate, eps=1e-7)
-    vk_optimizer = optax.adam(learning_rate=config.actor_learning_rate, eps=1e-7)
-    beta_optimizer = optax.adam(learning_rate=1e-3)
-    alpha_scale_optimizer = optax.adam(learning_rate=1e-3)
-  
-    if critic_mode == 'decomposed':
-      # Sibling learner: shares the actor with `make_networks` (we hand it
-      # the policy_network + sample / log_prob fns) but maintains its own
-      # 4-component critic + h_dyn head. CKA / persistent / reset paths
-      # are untouched.
-      learner = ContinualDecomposedLearner(
-          decomp_nets=decomp_nets,
-          policy_network=networks.policy_network,
-          sample_fn=networks.sample,
-          log_prob_fn=networks.log_prob,
-          rng=rng,
-          iterator=iterator,
-          counter=counting.Counter(),
-          logger=learner_logger,
-          config=config,
-          continual_config=continual_cfg,
-          task_id=task_id,
-          prev_b_shared_params=prev_b_shared_params,
-          prev_b_shared_opt_state=prev_b_shared_opt_state,
-          prev_h_phi_params=prev_h_phi_params,
-          prev_h_phi_opt_state=prev_h_phi_opt_state,
-          prev_h_dyn_params=prev_h_dyn_params,
-          prev_h_dyn_opt_state=prev_h_dyn_opt_state,
-          prev_psi_params=prev_psi_params,
-          prev_psi_opt_state=prev_psi_opt_state,
-      )
-    elif critic_mode in _HYBRID_CRITIC_MODES:
-      learner = ContinualDCCSACLearner(
-          hybrid_mode=critic_mode,
-          decomp_nets=decomp_nets,
-          q_network=(
-            hybrid_sac_nets.q_network
-            if hybrid_sac_nets is not None else None),
-          policy_network=networks.policy_network,
-          sample_fn=networks.sample,
-          log_prob_fn=networks.log_prob,
-          rng=rng,
-          iterator=iterator,
-          counter=counting.Counter(),
-          logger=learner_logger,
-          config=config,
-          continual_config=continual_cfg,
-          task_id=task_id,
-          prev_b_shared_params=prev_b_shared_params,
-          prev_b_shared_opt_state=prev_b_shared_opt_state,
-          prev_h_phi_params=prev_h_phi_params,
-          prev_h_phi_opt_state=prev_h_phi_opt_state,
-          prev_h_dyn_params=prev_h_dyn_params,
-          prev_h_dyn_opt_state=prev_h_dyn_opt_state,
-          prev_psi_params=prev_psi_params,
-          prev_psi_opt_state=prev_psi_opt_state,
-      )
-    elif critic_mode == 'rbc_decomposed':
-      learner = ContinualRBCDecomposedLearner(
-          rbc_nets=rbc_nets,
-          policy_network=networks.policy_network,
-          sample_fn=networks.sample,
-          log_prob_fn=networks.log_prob,
-          rng=rng,
-          iterator=iterator,
-          counter=counting.Counter(),
-          logger=learner_logger,
-          config=config,
-          continual_config=continual_cfg,
-          task_id=task_id,
-          prev_b_shared_params=prev_b_shared_params,
-          prev_b_shared_opt_state=prev_b_shared_opt_state,
-          prev_h_phi_params=prev_h_phi_params,
-          prev_h_phi_opt_state=prev_h_phi_opt_state,
-          prev_h_dyn_params=prev_h_dyn_params,
-          prev_h_dyn_opt_state=prev_h_dyn_opt_state,
-          prev_psi_params=prev_psi_params,
-          prev_psi_opt_state=prev_psi_opt_state,
-      )
-    else:
-      learner = ContinualContrastiveLearner(
-          networks=networks,
-          rng=rng,
-          q_optimizer=q_optimizer,
-          vk_optimizer=vk_optimizer,
-          beta_optimizer=beta_optimizer,
-          alpha_scale_optimizer=alpha_scale_optimizer,
-          iterator=iterator,
-          counter=counting.Counter(),
-          logger=learner_logger,
-          obs_to_goal=functools.partial(
-              contrastive_utils.obs_to_goal_2d,
-              start_index=config.start_index,
-              end_index=config.end_index),
-          config=config,
-          continual_config=continual_cfg,
-          task_id=task_id,
-          theta_base=theta_base,
-          pool=pool,
-          prev_q_params=prev_q_params,
-          prev_target_q_params=prev_target_q_params,
-          prev_q_optimizer_state=prev_q_optimizer_state,
-          critic_mode=critic_mode,
-          actor_mode=actor_mode,
-          adapt_heads_only=adapt_heads_only,
-          encoder_from_base=encoder_from_base,
-          q_base=q_base,
-          critic_pool=critic_pool,
-          neg_bank_mode=FLAGS.neg_bank_mode,
-          neg_bank_n_per_step=FLAGS.neg_bank_n_per_step,
-          neg_bank_weight=FLAGS.neg_bank_weight,
-          neg_bank_hard_ratio=(FLAGS.neg_bank_candidate_pool // max(FLAGS.neg_bank_n_per_step, 1)),
-      )
-  
-    # ---- actor (for data collection) ---------------------------------------
-    policy_network = contrastive_networks.apply_policy_and_sample(networks)
-    actor_core = actor_core_lib.batched_feed_forward_to_actor_core(policy_network)
-    variable_client = variable_utils.VariableClient(learner, 'policy', device='cpu')
-  
-    adder = adders_reverb.EpisodeAdder(
-        client=replay_client,
-        priority_fns={config.replay_table_name: None},
-        max_sequence_length=config.max_episode_steps + 1)
-  
-    if config.use_random_actor:
-      actor = contrastive_utils.InitiallyRandomActor(
-          actor_core, jax.random.PRNGKey(seed + task_id + 100),
-          variable_client, adder, backend='cpu')
-    else:
-      actor = actors.GenericActor(
-          actor_core, jax.random.PRNGKey(seed + task_id + 100),
-          variable_client, adder, backend='cpu')
-  
-    # ---- observers ---------------------------------------------------------
-    observers = [
-        contrastive_utils.SuccessObserver(),
-        contrastive_utils.DistanceObserver(
-            obs_dim=config.obs_dim,
+  # ---- replay buffer (reverb) -------------------------------------------
+  # A fresh replay buffer is created per task so that experience from
+  # previous tasks does not leak into the current task's training data.
+  min_replay_traj = config.min_replay_size // config.max_episode_steps
+  max_replay_traj = config.max_replay_size // config.max_episode_steps
+
+  replay_table = reverb.Table(
+      name=config.replay_table_name,
+      sampler=reverb.selectors.Uniform(),
+      remover=reverb.selectors.Fifo(),
+      max_size=max_replay_traj,
+      # IMPORTANT (sequential continual runner):
+      # During prefill we only insert and do not sample yet. Using
+      # SampleToInsertRatio can block inserts after ~min_size_to_sample
+      # episodes, causing prefill to hang. MinSize avoids this deadlock.
+      rate_limiter=rate_limiters.MinSize(min_replay_traj),
+      signature=adders_reverb.EpisodeAdder.signature(env_spec, {}))
+
+  replay_server = reverb.Server([replay_table], port=None)
+  replay_client = reverb.Client(f'localhost:{replay_server.port}')
+
+  # ---- dataset iterator --------------------------------------------------
+  her_ops = (
+      sac_her.tensorflow_ops()
+      if critic_mode in _HER_CRITIC_MODES else None)
+
+  @tf.function
+  def flatten_fn(sample):
+    seq_len = tf.shape(sample.data.observation)[0]
+    arange = tf.range(seq_len)
+    is_future = tf.cast(arange[:, None] < arange[None], tf.float32)
+    discount = config.discount ** tf.cast(arange[None] - arange[:, None], tf.float32)
+    probs = is_future * discount
+    goal_index = tf.random.categorical(
+        logits=tf.math.log(probs), num_samples=1)[:, 0]
+    state = sample.data.observation[:-1, :config.obs_dim]
+    next_state = sample.data.observation[1:, :config.obs_dim]
+    goal = sample.data.observation[:, :config.obs_dim]
+    goal = contrastive_utils.obs_to_goal_2d(
+        goal, start_index=config.start_index, end_index=config.end_index)
+    goal = tf.gather(goal, goal_index[:-1])
+    new_obs = tf.concat([state, goal], axis=1)
+    new_next_obs = tf.concat([next_state, goal], axis=1)
+
+    replay_reward = sample.data.reward[:-1]
+    replay_discount = sample.data.discount[:-1]
+    if critic_mode in _HER_CRITIC_MODES:
+      achieved_next = contrastive_utils.obs_to_goal_2d(
+          next_state,
+          start_index=config.start_index,
+          end_index=config.end_index)
+      replay_reward, replay_discount = sac_her.her_reward_and_discount(
+          achieved_next,
+          goal,
+          sample.data.discount[:-1],
+          threshold=float(
+              getattr(continual_cfg, 'her_reward_threshold', 0.05)),
+          step_penalty_reward=bool(
+              getattr(continual_cfg, 'step_penalty_reward', True)),
+          ops=her_ops)
+
+    transition = types.Transition(
+        observation=new_obs, action=sample.data.action[:-1],
+        reward=replay_reward, discount=replay_discount,
+        next_observation=new_next_obs,
+        extras={'next_action': sample.data.action[1:]})
+    shift = tf.random.uniform((), 0, seq_len, tf.int32)
+    transition = tree.map_structure(lambda t: tf.roll(t, shift, axis=0), transition)
+    return transition
+
+  # Use a single interleave worker to avoid deadlocks with drop_remainder
+  # batching during early sampling when the replay buffer is small.
+  num_parallel_calls = 1
+
+  def _make_dataset(unused):
+    ds = reverb.TrajectoryDataset.from_table_signature(
+        server_address=replay_client.server_address,
+        table=config.replay_table_name,
+        max_in_flight_samples_per_worker=100)
+    ds = ds.map(flatten_fn)
+    def _transpose_fn(t):
+      dims = tf.range(tf.shape(tf.shape(t))[0])
+      perm = tf.concat([[1, 0], dims[2:]], axis=0)
+      return tf.transpose(t, perm)
+    ds = ds.batch(config.batch_size, drop_remainder=True)
+    ds = ds.map(lambda tr: tree.map_structure(_transpose_fn, tr))
+    ds = ds.unbatch().unbatch()
+    return ds
+
+  dataset = tf.data.Dataset.from_tensors(0).repeat()
+  dataset = dataset.interleave(
+      _make_dataset, cycle_length=num_parallel_calls,
+      num_parallel_calls=num_parallel_calls, deterministic=False)
+  dataset = dataset.batch(
+      config.batch_size * config.num_sgd_steps_per_step, drop_remainder=True)
+
+  @tf.function
+  def add_info(data):
+    info = reverb.SampleInfo(key=0, probability=0.0, table_size=0, priority=0.0)
+    return reverb.ReplaySample(info=info, data=data)
+  dataset = dataset.map(add_info, num_parallel_calls=tf.data.AUTOTUNE,
+                        deterministic=False)
+  dataset = dataset.prefetch(tf.data.AUTOTUNE)
+  iterator = dataset.as_numpy_iterator()
+  # No jax_utils.prefetch here: background device prefetching during the
+  # replay prefill phase (before the learner starts consuming) causes
+  # backpressure deadlocks.
+
+  # ---- learner -----------------------------------------------------------
+  config_tag = (f'actor_{FLAGS.actor_mode}_critic_{critic_mode}'
+                f'_tid_{FLAGS.use_task_id}_heads_{FLAGS.adapt_heads_only}')
+  if critic_mode == 'rbc_decomposed':
+    config_tag += (
+        f'_rbc_{rbc_checkpointing.config_fingerprint(_rbc_identity_config())}')
+  elif critic_mode in _HYBRID_CRITIC_MODES:
+    config_tag += (
+        f"_hybrid_{rbc_checkpointing.config_fingerprint(_dcc_sac_identity_config())}")
+  log_dir = os.path.join(
+      FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
+      f'task{task_id}_{env_name}_s{seed}')
+  os.makedirs(log_dir, exist_ok=True)
+  if (
+      critic_mode == 'rbc_decomposed'
+      or critic_mode in _HYBRID_CRITIC_MODES):
+    identity = (
+        _rbc_identity_config()
+        if critic_mode == 'rbc_decomposed'
+        else _dcc_sac_identity_config())
+    manifest = {
+        'git_commit': _git_commit_sha(),
+        'critic_mode': critic_mode,
+        'actor_mode': actor_mode,
+        'task_id': task_id,
+        'env_name': env_name,
+        'seed': seed,
+        **identity,
+    }
+    with open(os.path.join(log_dir, 'resolved_config.json'), 'w') as handle:
+      json.dump(manifest, handle, indent=2, sort_keys=True, default=str)
+
+  learner_logger = make_default_logger(
+      'learner', save_data=True, save_dir=log_dir,
+      add_uid=config.add_uid, use_wandb=config.use_wandb,
+      time_delta=10.0, asynchronous=True,
+      serialize_fn=jax_utils.fetch_devicearray,
+      steps_key='learner_steps')
+
+  rng = jax.random.PRNGKey(seed + task_id * 1000)
+
+  q_optimizer = optax.adam(learning_rate=config.learning_rate, eps=1e-7)
+  vk_optimizer = optax.adam(learning_rate=config.actor_learning_rate, eps=1e-7)
+  beta_optimizer = optax.adam(learning_rate=1e-3)
+  alpha_scale_optimizer = optax.adam(learning_rate=1e-3)
+
+  if critic_mode == 'decomposed':
+    # Sibling learner: shares the actor with `make_networks` (we hand it
+    # the policy_network + sample / log_prob fns) but maintains its own
+    # 4-component critic + h_dyn head. CKA / persistent / reset paths
+    # are untouched.
+    learner = ContinualDecomposedLearner(
+        decomp_nets=decomp_nets,
+        policy_network=networks.policy_network,
+        sample_fn=networks.sample,
+        log_prob_fn=networks.log_prob,
+        rng=rng,
+        iterator=iterator,
+        counter=counting.Counter(),
+        logger=learner_logger,
+        config=config,
+        continual_config=continual_cfg,
+        task_id=task_id,
+        prev_b_shared_params=prev_b_shared_params,
+        prev_b_shared_opt_state=prev_b_shared_opt_state,
+        prev_h_phi_params=prev_h_phi_params,
+        prev_h_phi_opt_state=prev_h_phi_opt_state,
+        prev_h_dyn_params=prev_h_dyn_params,
+        prev_h_dyn_opt_state=prev_h_dyn_opt_state,
+        prev_psi_params=prev_psi_params,
+        prev_psi_opt_state=prev_psi_opt_state,
+    )
+  elif critic_mode in _HYBRID_CRITIC_MODES:
+    learner = ContinualDCCSACLearner(
+        hybrid_mode=critic_mode,
+        decomp_nets=decomp_nets,
+        q_network=(
+          hybrid_sac_nets.q_network
+          if hybrid_sac_nets is not None else None),
+        policy_network=networks.policy_network,
+        sample_fn=networks.sample,
+        log_prob_fn=networks.log_prob,
+        rng=rng,
+        iterator=iterator,
+        counter=counting.Counter(),
+        logger=learner_logger,
+        config=config,
+        continual_config=continual_cfg,
+        task_id=task_id,
+        prev_b_shared_params=prev_b_shared_params,
+        prev_b_shared_opt_state=prev_b_shared_opt_state,
+        prev_h_phi_params=prev_h_phi_params,
+        prev_h_phi_opt_state=prev_h_phi_opt_state,
+        prev_h_dyn_params=prev_h_dyn_params,
+        prev_h_dyn_opt_state=prev_h_dyn_opt_state,
+        prev_psi_params=prev_psi_params,
+        prev_psi_opt_state=prev_psi_opt_state,
+    )
+  elif critic_mode == 'rbc_decomposed':
+    learner = ContinualRBCDecomposedLearner(
+        rbc_nets=rbc_nets,
+        policy_network=networks.policy_network,
+        sample_fn=networks.sample,
+        log_prob_fn=networks.log_prob,
+        rng=rng,
+        iterator=iterator,
+        counter=counting.Counter(),
+        logger=learner_logger,
+        config=config,
+        continual_config=continual_cfg,
+        task_id=task_id,
+        prev_b_shared_params=prev_b_shared_params,
+        prev_b_shared_opt_state=prev_b_shared_opt_state,
+        prev_h_phi_params=prev_h_phi_params,
+        prev_h_phi_opt_state=prev_h_phi_opt_state,
+        prev_h_dyn_params=prev_h_dyn_params,
+        prev_h_dyn_opt_state=prev_h_dyn_opt_state,
+        prev_psi_params=prev_psi_params,
+        prev_psi_opt_state=prev_psi_opt_state,
+    )
+  else:
+    learner = ContinualContrastiveLearner(
+        networks=networks,
+        rng=rng,
+        q_optimizer=q_optimizer,
+        vk_optimizer=vk_optimizer,
+        beta_optimizer=beta_optimizer,
+        alpha_scale_optimizer=alpha_scale_optimizer,
+        iterator=iterator,
+        counter=counting.Counter(),
+        logger=learner_logger,
+        obs_to_goal=functools.partial(
+            contrastive_utils.obs_to_goal_2d,
             start_index=config.start_index,
             end_index=config.end_index),
-    ]
-  
-    # ---- evaluator (deterministic policy) ----------------------------------
-    eval_policy_network = contrastive_networks.apply_policy_and_sample(
-        networks, eval_mode=True)
-    eval_actor_core = actor_core_lib.batched_feed_forward_to_actor_core(
-        eval_policy_network)
-    eval_variable_client = variable_utils.VariableClient(
-        learner, 'policy', device='cpu')
-    eval_actor = actors.GenericActor(
-        eval_actor_core, jax.random.PRNGKey(seed + task_id + 200),
-        eval_variable_client, backend='cpu')  # no adder — eval only
-  
-    eval_env, _ = contrastive_utils.make_environment(
-        env_name, config.start_index, config.end_index,
-        seed + task_id + 300, fixed_start_end=fixed_goal,
-        task_id=_tid, num_tasks=_ntasks)
-    eval_observers = [
-        contrastive_utils.SuccessObserver(),
-        contrastive_utils.DistanceObserver(
-            obs_dim=config.obs_dim,
-            start_index=config.start_index,
-            end_index=config.end_index),
-    ]
-    evaluator_logger = make_default_logger(
-        'evaluator', save_data=True, save_dir=log_dir,
-        add_uid=config.add_uid, use_wandb=config.use_wandb,
-        time_delta=10.0, steps_key='actor_steps')
-    eval_loop = environment_loop.EnvironmentLoop(
-        eval_env, eval_actor, counter=counting.Counter(),
-        logger=evaluator_logger, observers=eval_observers)
-  
-    # ---- training loop (actor-learner loop) --------------------------------
-    actor_logger = make_default_logger(
-        'actor', save_data=True, save_dir=log_dir,
-        add_uid=config.add_uid, use_wandb=config.use_wandb,
-        time_delta=10.0, steps_key='actor_steps')
-  
-    env_loop = environment_loop.EnvironmentLoop(
-        env, actor, counter=counting.Counter(),
-        logger=actor_logger, observers=observers)
-  
-    # Prefill replay buffer.  We need enough data for the first learner
-    # batch (batch_size * num_sgd_steps_per_step transitions) plus one
-    # episode buffer, otherwise `next(iterator)` blocks and the
-    # single-process actor-learner loop deadlocks.
-    first_batch = config.batch_size * config.num_sgd_steps_per_step
-    prefill_steps = max(config.min_replay_size,
-                        first_batch + config.max_episode_steps)
-    print(f'  Prefilling replay ({prefill_steps} steps)...', flush=True)
-    prefill_done = 0
-    prefill_eps = 0
-    while prefill_done < prefill_steps:
-      result = env_loop.run_episode()
-      env_loop._logger.write(result)  # pylint: disable=protected-access
-      prefill_done += int(result['episode_length'])
-      prefill_eps += 1
-    print(f'  Prefill complete ({prefill_done} steps, '
-          f'{prefill_eps} episodes).', flush=True)
-  
-    # Training
-    env_steps_done = 0
-    train_steps = max_steps - config.min_replay_size
-    log_every_steps = 10000  # print progress every N env steps
-    next_log_at = log_every_steps
-    eval_every = FLAGS.eval_every
-    next_eval_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
-    next_evaluator_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
-    episodes_done = 0
-    # Metric logging schedule: frequent (1x), occasional (5x)
-    metrics_every = eval_every if eval_every > 0 else 50000
-    next_metrics_frequent = metrics_every if FLAGS.log_rl_metrics else float('inf')
-    next_metrics_occasional = 5 * metrics_every if FLAGS.log_rl_metrics else float('inf')
-    # Automatic actor reset state (task 0 only)
-    auto_reset_active = (task_id == 0 and FLAGS.actor_auto_reset)
-    actor_reset_count = 0
-    actor_reset_rng = jax.random.PRNGKey(seed + 9999)  # separate RNG stream
-  
-    # Negative-bank sampling (task > 0 only; empty bank at task 0 by design)
-    bank_rng = np.random.default_rng(seed + 77777 + task_id * 31)
-    bank_sample_size = (
-        FLAGS.neg_bank_candidate_pool
-        if FLAGS.neg_bank_mode == 'hard_weighted'
-        else FLAGS.neg_bank_n_per_step)
-    use_bank_this_task = (
-        FLAGS.neg_bank_mode != 'off'
-        and FLAGS.neg_bank_n_per_step > 0
-        and task_id > 0
-        and neg_bank is not None
-        and neg_bank.size() > 0)
-  
-    print(f'  Training for {train_steps} env steps...', flush=True)
-    if auto_reset_active:
-      print(f'  Actor auto-reset enabled: warmup={FLAGS.actor_reset_warmup}, '
-            f'threshold={FLAGS.actor_reset_dormant_threshold}, '
-            f'max_resets={FLAGS.actor_reset_max}.', flush=True)
+        config=config,
+        continual_config=continual_cfg,
+        task_id=task_id,
+        theta_base=theta_base,
+        pool=pool,
+        prev_q_params=prev_q_params,
+        prev_target_q_params=prev_target_q_params,
+        prev_q_optimizer_state=prev_q_optimizer_state,
+        critic_mode=critic_mode,
+        actor_mode=actor_mode,
+        adapt_heads_only=adapt_heads_only,
+        encoder_from_base=encoder_from_base,
+        q_base=q_base,
+        critic_pool=critic_pool,
+        neg_bank_mode=FLAGS.neg_bank_mode,
+        neg_bank_n_per_step=FLAGS.neg_bank_n_per_step,
+        neg_bank_weight=FLAGS.neg_bank_weight,
+        neg_bank_hard_ratio=(FLAGS.neg_bank_candidate_pool // max(FLAGS.neg_bank_n_per_step, 1)),
+    )
+
+  # ---- actor (for data collection) ---------------------------------------
+  policy_network = contrastive_networks.apply_policy_and_sample(networks)
+  actor_core = actor_core_lib.batched_feed_forward_to_actor_core(policy_network)
+  variable_client = variable_utils.VariableClient(learner, 'policy', device='cpu')
+
+  adder = adders_reverb.EpisodeAdder(
+      client=replay_client,
+      priority_fns={config.replay_table_name: None},
+      max_sequence_length=config.max_episode_steps + 1)
+
+  if config.use_random_actor:
+    actor = contrastive_utils.InitiallyRandomActor(
+        actor_core, jax.random.PRNGKey(seed + task_id + 100),
+        variable_client, adder, backend='cpu')
+  else:
+    actor = actors.GenericActor(
+        actor_core, jax.random.PRNGKey(seed + task_id + 100),
+        variable_client, adder, backend='cpu')
+
+  # ---- observers ---------------------------------------------------------
+  observers = [
+      contrastive_utils.SuccessObserver(),
+      contrastive_utils.DistanceObserver(
+          obs_dim=config.obs_dim,
+          start_index=config.start_index,
+          end_index=config.end_index),
+  ]
+
+  # ---- evaluator (deterministic policy) ----------------------------------
+  eval_policy_network = contrastive_networks.apply_policy_and_sample(
+      networks, eval_mode=True)
+  eval_actor_core = actor_core_lib.batched_feed_forward_to_actor_core(
+      eval_policy_network)
+  eval_variable_client = variable_utils.VariableClient(
+      learner, 'policy', device='cpu')
+  eval_actor = actors.GenericActor(
+      eval_actor_core, jax.random.PRNGKey(seed + task_id + 200),
+      eval_variable_client, backend='cpu')  # no adder — eval only
+
+  eval_env, _ = contrastive_utils.make_environment(
+      env_name, config.start_index, config.end_index,
+      seed + task_id + 300, fixed_start_end=fixed_goal,
+      task_id=_tid, num_tasks=_ntasks)
+  eval_observers = [
+      contrastive_utils.SuccessObserver(),
+      contrastive_utils.DistanceObserver(
+          obs_dim=config.obs_dim,
+          start_index=config.start_index,
+          end_index=config.end_index),
+  ]
+  evaluator_logger = make_default_logger(
+      'evaluator', save_data=True, save_dir=log_dir,
+      add_uid=config.add_uid, use_wandb=config.use_wandb,
+      time_delta=10.0, steps_key='actor_steps')
+  eval_loop = environment_loop.EnvironmentLoop(
+      eval_env, eval_actor, counter=counting.Counter(),
+      logger=evaluator_logger, observers=eval_observers)
+
+  # ---- training loop (actor-learner loop) --------------------------------
+  actor_logger = make_default_logger(
+      'actor', save_data=True, save_dir=log_dir,
+      add_uid=config.add_uid, use_wandb=config.use_wandb,
+      time_delta=10.0, steps_key='actor_steps')
+
+  env_loop = environment_loop.EnvironmentLoop(
+      env, actor, counter=counting.Counter(),
+      logger=actor_logger, observers=observers)
+
+  # Prefill replay buffer.  We need enough data for the first learner
+  # batch (batch_size * num_sgd_steps_per_step transitions) plus one
+  # episode buffer, otherwise `next(iterator)` blocks and the
+  # single-process actor-learner loop deadlocks.
+  first_batch = config.batch_size * config.num_sgd_steps_per_step
+  prefill_steps = max(config.min_replay_size,
+                      first_batch + config.max_episode_steps)
+  print(f'  Prefilling replay ({prefill_steps} steps)...', flush=True)
+  prefill_done = 0
+  prefill_eps = 0
+  while prefill_done < prefill_steps:
+    result = env_loop.run_episode()
+    env_loop._logger.write(result)  # pylint: disable=protected-access
+    prefill_done += int(result['episode_length'])
+    prefill_eps += 1
+  print(f'  Prefill complete ({prefill_done} steps, '
+        f'{prefill_eps} episodes).', flush=True)
+
+  # Training
+  env_steps_done = 0
+  train_steps = max_steps - config.min_replay_size
+  log_every_steps = 10000  # print progress every N env steps
+  next_log_at = log_every_steps
+  eval_every = FLAGS.eval_every
+  next_eval_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
+  next_evaluator_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
+  episodes_done = 0
+  # Metric logging schedule: frequent (1x), occasional (5x)
+  metrics_every = eval_every if eval_every > 0 else 50000
+  next_metrics_frequent = metrics_every if FLAGS.log_rl_metrics else float('inf')
+  next_metrics_occasional = 5 * metrics_every if FLAGS.log_rl_metrics else float('inf')
+  # Automatic actor reset state (task 0 only)
+  auto_reset_active = (task_id == 0 and FLAGS.actor_auto_reset)
+  actor_reset_count = 0
+  actor_reset_rng = jax.random.PRNGKey(seed + 9999)  # separate RNG stream
+
+  # Negative-bank sampling (task > 0 only; empty bank at task 0 by design)
+  bank_rng = np.random.default_rng(seed + 77777 + task_id * 31)
+  bank_sample_size = (
+      FLAGS.neg_bank_candidate_pool
+      if FLAGS.neg_bank_mode == 'hard_weighted'
+      else FLAGS.neg_bank_n_per_step)
+  use_bank_this_task = (
+      FLAGS.neg_bank_mode != 'off'
+      and FLAGS.neg_bank_n_per_step > 0
+      and task_id > 0
+      and neg_bank is not None
+      and neg_bank.size() > 0)
+
+  print(f'  Training for {train_steps} env steps...', flush=True)
+  if auto_reset_active:
+    print(f'  Actor auto-reset enabled: warmup={FLAGS.actor_reset_warmup}, '
+          f'threshold={FLAGS.actor_reset_dormant_threshold}, '
+          f'max_resets={FLAGS.actor_reset_max}.', flush=True)
+  if use_bank_this_task:
+    print(f'  Negative bank enabled: mode={FLAGS.neg_bank_mode}, '
+          f'M={FLAGS.neg_bank_n_per_step}, weight={FLAGS.neg_bank_weight}, '
+          f'bank_size={neg_bank.size()} goals from '
+          f'{neg_bank.num_tasks()} previous tasks.', flush=True)
+
+  while env_steps_done < train_steps:
+    # Actor step: run one full episode and count actual env steps.
+    # NOTE: Acme's `EnvironmentLoop.run()` returns None (it only writes logs),
+    # so we call `run_episode()` to get the per-episode metrics dict.
+    result = env_loop.run_episode()
+    # Mirror `EnvironmentLoop.run()` behavior: write the episode log.
+    env_loop._logger.write(result)  # pylint: disable=protected-access
+    episode_steps = int(result['episode_length'])
+    env_steps_done += episode_steps
+    episodes_done += 1
+
+    # Sample bank negatives for this learner step.  Shape must be constant
+    # across calls to avoid JIT recompilation.
     if use_bank_this_task:
-      print(f'  Negative bank enabled: mode={FLAGS.neg_bank_mode}, '
-            f'M={FLAGS.neg_bank_n_per_step}, weight={FLAGS.neg_bank_weight}, '
-            f'bank_size={neg_bank.size()} goals from '
-            f'{neg_bank.num_tasks()} previous tasks.', flush=True)
-  
-    while env_steps_done < train_steps:
-      # Actor step: run one full episode and count actual env steps.
-      # NOTE: Acme's `EnvironmentLoop.run()` returns None (it only writes logs),
-      # so we call `run_episode()` to get the per-episode metrics dict.
-      result = env_loop.run_episode()
-      # Mirror `EnvironmentLoop.run()` behavior: write the episode log.
-      env_loop._logger.write(result)  # pylint: disable=protected-access
-      episode_steps = int(result['episode_length'])
-      env_steps_done += episode_steps
-      episodes_done += 1
-  
-      # Sample bank negatives for this learner step.  Shape must be constant
-      # across calls to avoid JIT recompilation.
-      if use_bank_this_task:
-        bank_sample = neg_bank.sample(n=bank_sample_size, rng=bank_rng)
-        if bank_sample is not None:
-          learner.set_bank_goals(jnp.asarray(bank_sample))
-  
-      # Learner step (first call triggers JAX JIT compilation, may be slow)
-      if episodes_done == 1:
-        print(f'  First learner step (includes JIT compilation)...', flush=True)
-      learner.step()
-      if episodes_done == 1:
-        print(f'  JIT compilation done.', flush=True)
-  
-      # Log learner metrics to W&B with global env_steps as x-axis
-      if FLAGS.use_wandb and wandb is not None and env_steps_done >= next_log_at:
-        try:
-          last_metrics = learner.last_metrics
-          if last_metrics:
-            wandb_learner = {f'learner/{k}': float(v)
-                            for k, v in last_metrics.items()
-                            if k not in ('steps', 'learner_steps', 'walltime')}
-            wandb_learner['learner/env_steps'] = env_steps_done
-            wandb.log(wandb_learner)
-        except (AttributeError, Exception):
-          pass  # learner may not have last_metrics yet
-  
-      # Periodic progress logging (to stdout, independent of TimeFilter)
-      if env_steps_done >= next_log_at:
-        print(f'  Task {task_id} [{env_name}]: '
-              f'{env_steps_done}/{train_steps} env steps '
-              f'({episodes_done} episodes)', flush=True)
-        next_log_at = env_steps_done + log_every_steps
-  
-      # Periodic evaluation (deterministic policy on current task)
-      if env_steps_done >= next_evaluator_at:
-        eval_variable_client.update_and_wait()
-        eval_successes = []
-        eval_returns = []
-        for _ in range(FLAGS.eval_episodes):
-          ep_result = eval_loop.run_episode()
-          eval_successes.append(ep_result.get('success', 0))
-          eval_returns.append(float(ep_result.get('episode_return', 0)))
-        eval_success_rate = np.mean(eval_successes)
-        eval_mean_return = np.mean(eval_returns)
-        if FLAGS.use_wandb and wandb is not None:
-          wandb.log({
-              'evaluator/success_rate': eval_success_rate,
-              'evaluator/mean_return': eval_mean_return,
-              'evaluator/env_steps': env_steps_done,
-          })
-        print(f'  [eval @ {env_steps_done}] success={eval_success_rate:.1%} '
-              f'return={eval_mean_return:.1f}', flush=True)
-        next_evaluator_at = env_steps_done + eval_every
-  
-      # ---- RL representation metrics ----------------------------------------
-      if env_steps_done >= next_metrics_frequent:
-        if env_steps_done >= next_metrics_occasional:
-          level = 'occasional'
-          next_metrics_occasional = env_steps_done + 5 * metrics_every
-          next_metrics_frequent = env_steps_done + metrics_every
-        else:
-          level = 'frequent'
-          next_metrics_frequent = env_steps_done + metrics_every
-  
-        try:
-          transitions = learner.last_transitions
-          # Two layouts:
-          #   (a) persistent / CKA / reset critic: learner.q_params is the
-          #       monolithic q-network pytree with sa_encoder / g_encoder
-          #       modules. rl_metrics.compute_all_metrics consumes it via
-          #       ``networks.repr_fn`` and ``networks.critic_hidden_repr_fn``.
-          #   (b) decomposed critic: learner.q_params is None; the critic
-          #       lives in five (or four when h_dyn is disabled) separate
-          #       param groups. We build a tiny networks shim whose
-          #       ``repr_fn(params, obs, action)`` calls
-          #       decomp_nets.apply_score's component pieces, and we hand
-          #       compute_all_metrics the bundle dict from
-          #       ``learner.get_variables(['critic'])[0]``. The hidden-
-          #       feature path (critic NRC2 / dormancy on hidden) is set to
-          #       None so the function silently skips those entries on the
-          #       decomposed critic.
-          if transitions is not None:
-            current_actor = learner.get_variables(['policy'])[0]
-            bs = config.batch_size
-            obs_sample = jnp.array(transitions.observation[:bs])
-            act_sample = jnp.array(transitions.action[:bs])
-  
-            if learner.q_params is not None:
-              metrics_networks = networks
-              current_critic = learner.q_params
-            else:
-              # Decomposed layout: build / cache a shim.
-              if not hasattr(learner, '_dcc_metrics_networks'):
-                from types import SimpleNamespace
-                _decomp = decomp_nets  # captured from enclosing scope
-                def _repr_fn(params, obs, action, hidden=None):
-                  z_sa = _decomp.apply_sa_repr(
-                      params['b_shared'], params['h_phi'],
-                      params['phi_task'], obs, action)
-                  # ``params['psi']`` is either the bare psi params or the
-                  # bundle dict {psi, psi_proj}; decomp.apply_psi handles
-                  # both.
-                  z_g = _decomp.apply_psi(params['psi'], obs)
-                  return z_sa, z_g, None
-                shim = SimpleNamespace(
-                    repr_fn=_repr_fn,
-                    critic_hidden_repr_fn=None,
-                    actor_repr_fn=networks.actor_repr_fn,
-                  )
-              try:
-                setattr(learner, '_dcc_metrics_networks', shim)
-              except Exception:
-                pass
-            metrics_networks = getattr(
-                learner, '_dcc_metrics_networks', networks)
-            current_critic = learner.get_variables(['critic'])[0]
-          m = rl_metrics.compute_all_metrics(
-              metrics_networks, current_actor, current_critic,
-              obs_sample, act_sample, obs_dim=obs_dim, level=level)
-          if FLAGS.use_wandb and wandb is not None:
-            wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
-            wandb_m['rl_metrics/env_steps'] = env_steps_done
-            wandb.log(wandb_m)
-          # ---- Automatic actor reset (dormancy-triggered, task 0 only) ----
-          if (auto_reset_active
-              and actor_reset_count < FLAGS.actor_reset_max
-              and env_steps_done >= FLAGS.actor_reset_warmup):
-            # Compute actor dormant ratio (cheap: one forward pass + mean).
-            # Use the already-extracted actor features when available;
-            # otherwise compute them on the fly.
-            actor_dr = m.get('actor/dormant_ratio')
-            if actor_dr is None:
-              # Occasional-level metrics weren't computed this cycle;
-              # compute dormant ratio directly.
-              actor_feats = rl_metrics.extract_actor_features(
-                  networks, current_actor, obs_sample)
-              if actor_feats is not None:
-                actor_dr = rl_metrics.dormant_ratio(actor_feats)
-            if actor_dr is not None and actor_dr > FLAGS.actor_reset_dormant_threshold:
-              actor_reset_rng, reset_key = jax.random.split(actor_reset_rng)
-              print(f'  [auto-reset @ {env_steps_done}] '
-                    f'actor dormant_ratio={actor_dr:.3f} > '
-                    f'{FLAGS.actor_reset_dormant_threshold} — '
-                    f'resetting actor (#{actor_reset_count + 1}).',
-                    flush=True)
-              learner.reset_actor(reset_key)
-              actor_reset_count += 1
-              if FLAGS.use_wandb and wandb is not None:
-                wandb.log({
-                    'actor_reset/triggered': 1,
-                    'actor_reset/dormant_ratio_at_reset': actor_dr,
-                    'actor_reset/count': actor_reset_count,
-                    'actor_reset/env_steps': env_steps_done,
-                })
+      bank_sample = neg_bank.sample(n=bank_sample_size, rng=bank_rng)
+      if bank_sample is not None:
+        learner.set_bank_goals(jnp.asarray(bank_sample))
 
-      except Exception as e:
-        print(f'  [rl_metrics] Warning: {e}', flush=True)
+    # Learner step (first call triggers JAX JIT compilation, may be slow)
+    if episodes_done == 1:
+      print(f'  First learner step (includes JIT compilation)...', flush=True)
+    learner.step()
+    if episodes_done == 1:
+      print(f'  JIT compilation done.', flush=True)
 
-    # Intra-task periodic evaluation on all tasks seen so far
-    if FLAGS.intra_eval_previous_tasks and env_steps_done >= next_eval_at:
-      next_eval_at = env_steps_done + eval_every
-      current_policy = learner.get_variables(['policy'])[0]
-      current_q = learner.q_params
-      print(f'  [intra-eval @ {env_steps_done} steps] '
-            f'Evaluating tasks 0..{task_id}...', flush=True)
-      intra_results = {}
-      for eval_tid in range(task_id + 1):
-        eval_env_i = task_sequence[eval_tid]
-        sr = evaluate_on_task(
-            eval_env_i, eval_tid, current_policy, current_q, config,
-            continual_cfg, seed,
-            num_episodes=FLAGS.eval_episodes,
-            k_sample_k=FLAGS.k_sample_k)
-        intra_results[eval_env_i] = sr
-      intra_mean = np.mean(list(intra_results.values()))
-      print(f'  [intra-eval] Mean success: {intra_mean:.1%}', flush=True)
+    # Log learner metrics to W&B with global env_steps as x-axis
+    if FLAGS.use_wandb and wandb is not None and env_steps_done >= next_log_at:
+      try:
+        last_metrics = learner.last_metrics
+        if last_metrics:
+          wandb_learner = {f'learner/{k}': float(v)
+                          for k, v in last_metrics.items()
+                          if k not in ('steps', 'learner_steps', 'walltime')}
+          wandb_learner['learner/env_steps'] = env_steps_done
+          wandb.log(wandb_learner)
+      except (AttributeError, Exception):
+        pass  # learner may not have last_metrics yet
+
+    # Periodic progress logging (to stdout, independent of TimeFilter)
+    if env_steps_done >= next_log_at:
+      print(f'  Task {task_id} [{env_name}]: '
+            f'{env_steps_done}/{train_steps} env steps '
+            f'({episodes_done} episodes)', flush=True)
+      next_log_at = env_steps_done + log_every_steps
+
+    # Periodic evaluation (deterministic policy on current task)
+    if env_steps_done >= next_evaluator_at:
+      eval_variable_client.update_and_wait()
+      eval_successes = []
+      eval_returns = []
+      for _ in range(FLAGS.eval_episodes):
+        ep_result = eval_loop.run_episode()
+        eval_successes.append(ep_result.get('success', 0))
+        eval_returns.append(float(ep_result.get('episode_return', 0)))
+      eval_success_rate = np.mean(eval_successes)
+      eval_mean_return = np.mean(eval_returns)
       if FLAGS.use_wandb and wandb is not None:
-        wandb_intra = {f'intra_eval/{n}': s for n, s in intra_results.items()}
-        wandb_intra['intra_eval/mean_success'] = intra_mean
-        wandb_intra['intra_eval/env_steps'] = env_steps_done
-        wandb.log(wandb_intra)
+        wandb.log({
+            'evaluator/success_rate': eval_success_rate,
+            'evaluator/mean_return': eval_mean_return,
+            'evaluator/env_steps': env_steps_done,
+        })
+      print(f'  [eval @ {env_steps_done}] success={eval_success_rate:.1%} '
+            f'return={eval_mean_return:.1f}', flush=True)
+      next_evaluator_at = env_steps_done + eval_every
 
-  print(f'  Task {task_id} training complete '
-        f'({env_steps_done} env steps, {episodes_done} episodes).', flush=True)
+    # ---- RL representation metrics ----------------------------------------
+    if env_steps_done >= next_metrics_frequent:
+      if env_steps_done >= next_metrics_occasional:
+        level = 'occasional'
+        next_metrics_occasional = env_steps_done + 5 * metrics_every
+        next_metrics_frequent = env_steps_done + metrics_every
+      else:
+        level = 'frequent'
+        next_metrics_frequent = env_steps_done + metrics_every
+
+      try:
+        transitions = learner.last_transitions
+        # Two layouts:
+        #   (a) persistent / CKA / reset critic: learner.q_params is the
+        #       monolithic q-network pytree with sa_encoder / g_encoder
+        #       modules. rl_metrics.compute_all_metrics consumes it via
+        #       ``networks.repr_fn`` and ``networks.critic_hidden_repr_fn``.
+        #   (b) decomposed critic: learner.q_params is None; the critic
+        #       lives in five (or four when h_dyn is disabled) separate
+        #       param groups. We build a tiny networks shim whose
+        #       ``repr_fn(params, obs, action)`` calls
+        #       decomp_nets.apply_score's component pieces, and we hand
+        #       compute_all_metrics the bundle dict from
+        #       ``learner.get_variables(['critic'])[0]``. The hidden-
+        #       feature path (critic NRC2 / dormancy on hidden) is set to
+        #       None so the function silently skips those entries on the
+        #       decomposed critic.
+        if transitions is not None:
+          current_actor = learner.get_variables(['policy'])[0]
+          bs = config.batch_size
+          obs_sample = jnp.array(transitions.observation[:bs])
+          act_sample = jnp.array(transitions.action[:bs])
+
+          if learner.q_params is not None:
+            metrics_networks = networks
+            current_critic = learner.q_params
+          else:
+            # Decomposed layout: build / cache a shim.
+            if not hasattr(learner, '_dcc_metrics_networks'):
+              from types import SimpleNamespace
+              _decomp = decomp_nets  # captured from enclosing scope
+              def _repr_fn(params, obs, action, hidden=None):
+                z_sa = _decomp.apply_sa_repr(
+                    params['b_shared'], params['h_phi'],
+                    params['phi_task'], obs, action)
+                # ``params['psi']`` is either the bare psi params or the
+                # bundle dict {psi, psi_proj}; decomp.apply_psi handles
+                # both.
+                z_g = _decomp.apply_psi(params['psi'], obs)
+                return z_sa, z_g, None
+              shim = SimpleNamespace(
+                  repr_fn=_repr_fn,
+                  critic_hidden_repr_fn=None,
+                  actor_repr_fn=networks.actor_repr_fn,
+                )
+            try:
+              setattr(learner, '_dcc_metrics_networks', shim)
+            except Exception:
+              pass
+          metrics_networks = getattr(
+              learner, '_dcc_metrics_networks', networks)
+          current_critic = learner.get_variables(['critic'])[0]
+        m = rl_metrics.compute_all_metrics(
+            metrics_networks, current_actor, current_critic,
+            obs_sample, act_sample, obs_dim=obs_dim, level=level)
+        if FLAGS.use_wandb and wandb is not None:
+          wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
+          wandb_m['rl_metrics/env_steps'] = env_steps_done
+          wandb.log(wandb_m)
+        # ---- Automatic actor reset (dormancy-triggered, task 0 only) ----
+        if (auto_reset_active
+            and actor_reset_count < FLAGS.actor_reset_max
+            and env_steps_done >= FLAGS.actor_reset_warmup):
+          # Compute actor dormant ratio (cheap: one forward pass + mean).
+          # Use the already-extracted actor features when available;
+          # otherwise compute them on the fly.
+          actor_dr = m.get('actor/dormant_ratio')
+          if actor_dr is None:
+            # Occasional-level metrics weren't computed this cycle;
+            # compute dormant ratio directly.
+            actor_feats = rl_metrics.extract_actor_features(
+                networks, current_actor, obs_sample)
+            if actor_feats is not None:
+              actor_dr = rl_metrics.dormant_ratio(actor_feats)
+          if actor_dr is not None and actor_dr > FLAGS.actor_reset_dormant_threshold:
+            actor_reset_rng, reset_key = jax.random.split(actor_reset_rng)
+            print(f'  [auto-reset @ {env_steps_done}] '
+                  f'actor dormant_ratio={actor_dr:.3f} > '
+                  f'{FLAGS.actor_reset_dormant_threshold} — '
+                  f'resetting actor (#{actor_reset_count + 1}).',
+                  flush=True)
+            learner.reset_actor(reset_key)
+            actor_reset_count += 1
+            if FLAGS.use_wandb and wandb is not None:
+              wandb.log({
+                  'actor_reset/triggered': 1,
+                  'actor_reset/dormant_ratio_at_reset': actor_dr,
+                  'actor_reset/count': actor_reset_count,
+                  'actor_reset/env_steps': env_steps_done,
+              })
+
+    except Exception as e:
+      print(f'  [rl_metrics] Warning: {e}', flush=True)
+
+  # Intra-task periodic evaluation on all tasks seen so far
+  if FLAGS.intra_eval_previous_tasks and env_steps_done >= next_eval_at:
+    next_eval_at = env_steps_done + eval_every
+    current_policy = learner.get_variables(['policy'])[0]
+    current_q = learner.q_params
+    print(f'  [intra-eval @ {env_steps_done} steps] '
+          f'Evaluating tasks 0..{task_id}...', flush=True)
+    intra_results = {}
+    for eval_tid in range(task_id + 1):
+      eval_env_i = task_sequence[eval_tid]
+      sr = evaluate_on_task(
+          eval_env_i, eval_tid, current_policy, current_q, config,
+          continual_cfg, seed,
+          num_episodes=FLAGS.eval_episodes,
+          k_sample_k=FLAGS.k_sample_k)
+      intra_results[eval_env_i] = sr
+    intra_mean = np.mean(list(intra_results.values()))
+    print(f'  [intra-eval] Mean success: {intra_mean:.1%}', flush=True)
+    if FLAGS.use_wandb and wandb is not None:
+      wandb_intra = {f'intra_eval/{n}': s for n, s in intra_results.items()}
+      wandb_intra['intra_eval/mean_success'] = intra_mean
+      wandb_intra['intra_eval/env_steps'] = env_steps_done
+      wandb.log(wandb_intra)
+
+print(f'  Task {task_id} training complete '
+      f'({env_steps_done} env steps, {episodes_done} episodes).', flush=True)
 
   # ---- snapshot composed policy for cross-task evaluation ----------------
   # Must happen before pool extraction which changes the composition.
