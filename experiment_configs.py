@@ -17,6 +17,9 @@ Two sources are concatenated to produce the final list of runs:
        bellman_loss_weight, bellman_residual_l2_weight,
        bellman_discount, bellman_tau, bellman_hidden_dim,
        her_reward_threshold, step_penalty_reward,
+       dcc_sac_beta_max, dcc_sac_q_warmup_updates,
+       dcc_sac_q_ramp_updates, action_contrast_weight,
+       shortcut_diagnostic_interval, post_task_eval_scope,
        log_pool_cosine, log_mixture_norm, log_probe_data,
        (and any other future field that submit scripts know how to
        forward).
@@ -142,6 +145,63 @@ CELLS: list = [
     #  'bellman_tau': 0.005, 'bellman_hidden_dim': 256,
     #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
     #  'log_probe_data': True},
+
+    # ---- Task-5/task-8 shortcut diagnosis and algorithm probes ------------
+    # Run these as single-task experiments first.  Keep the same seed,
+    # budget, HER threshold, evaluation cadence, and diagnostic interval
+    # across modes.  Repeat seeds 5/6/7 after the one-seed runtime smoke.
+    #
+    # Ordinary DCC diagnostic control:
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+    #  'single_task': 'sawyer_handle_press_side',
+    #  'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
+    #  'post_task_eval_scope': 'current',
+    #  'wandb_group': 'DCC shortcut diagnostic k5'},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+    #  'single_task': 'sawyer_window_close',
+    #  'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
+    #  'post_task_eval_scope': 'current',
+    #  'wandb_group': 'DCC shortcut diagnostic k8'},
+    #
+    # Stable-Q-gated DCC-SAC:
+    # {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
+    #  'single_task': 'sawyer_handle_press_side',
+    #  'dyn_aux_weight': 1.0, 'dcc_sac_beta_max': 0.1,
+    #  'dcc_sac_q_warmup_updates': 10000,
+    #  'dcc_sac_q_ramp_updates': 25000,
+    #  'shortcut_diagnostic_interval': 1000,
+    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+    #  'post_task_eval_scope': 'current',
+    #  'wandb_group': 'DCC-SAC gated k5'},
+    # {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
+    #  'single_task': 'sawyer_window_close',
+    #  'dyn_aux_weight': 1.0, 'dcc_sac_beta_max': 0.1,
+    #  'dcc_sac_q_warmup_updates': 10000,
+    #  'dcc_sac_q_ramp_updates': 25000,
+    #  'shortcut_diagnostic_interval': 1000,
+    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+    #  'post_task_eval_scope': 'current',
+    #  'wandb_group': 'DCC-SAC gated k8'},
+    #
+    # Reward-free Action-Contrastive DCC:
+    # {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 5,
+    #  'single_task': 'sawyer_handle_press_side',
+    #  'dyn_aux_weight': 1.0, 'action_contrast_weight': 1.0,
+    #  'action_contrast_temperature': 1.0,
+    #  'shortcut_diagnostic_interval': 1000,
+    #  'post_task_eval_scope': 'current',
+    #  'wandb_group': 'AC-DCC k5'},
+    # {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 5,
+    #  'single_task': 'sawyer_window_close',
+    #  'dyn_aux_weight': 1.0, 'action_contrast_weight': 1.0,
+    #  'action_contrast_temperature': 1.0,
+    #  'shortcut_diagnostic_interval': 1000,
+    #  'post_task_eval_scope': 'current',
+    #  'wandb_group': 'AC-DCC k8'},
+    #
+    # Required ablations after the main smoke:
+    #   dcc_sac_separate -- actor ignores DCC and uses Q only.
+    #   action_dcc_sac   -- AC-DCC plus the same stable Q correction.
 ]
 
 
