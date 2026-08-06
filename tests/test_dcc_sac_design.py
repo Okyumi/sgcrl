@@ -94,6 +94,8 @@ def test_action_dcc_and_ablation_modes_are_wired():
 def test_runner_uses_canonical_her_for_q_modes():
   source = (ROOT / 'run_continual_contrastive.py').read_text()
   assert "_HER_CRITIC_MODES" in source
+  assert "_Q_HYBRID_CRITIC_MODES" in source
+  assert "'dcc_sac', 'dcc_sac_separate', 'action_dcc_sac'" in source
   assert "sac_her.her_reward_and_discount" in source
   assert "critic_mode in _HER_CRITIC_MODES" in source
 
