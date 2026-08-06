@@ -85,6 +85,42 @@ class ContinualConfig:
   her_reward_threshold: float = 0.05
   step_penalty_reward: bool = True
 
+
+  # -- DCC-SAC: independent raw-input Q and gated actor fusion ---------------
+  # The DCC objective remains primary.  Q affects the actor only through a
+  # centered/scaled action-ranking correction after the stability gate opens.
+  dcc_sac_q_loss_weight: float = 1.0
+  dcc_sac_q_learning_rate: float = 3e-4
+  dcc_sac_discount: float = 0.99
+  dcc_sac_tau: float = 0.005
+  dcc_sac_q_hidden_dim: int = 1024
+  dcc_sac_beta_max: float = 0.1
+  dcc_sac_q_warmup_updates: int = 10_000
+  dcc_sac_q_ramp_updates: int = 25_000
+  dcc_sac_td_error_threshold: float = 0.5
+  dcc_sac_twin_disagreement_threshold: float = 0.1
+  dcc_sac_ema_decay: float = 0.99
+  dcc_sac_candidate_actions: int = 8
+  dcc_sac_normalization_eps: float = 1e-3
+  dcc_sac_correction_clip: float = 5.0
+
+  # -- Action-Contrastive DCC (AC-DCC) --------------------------------------
+  # For each transition, hold (s, achieved_goal(s')) fixed and identify the
+  # replay action among actions drawn from other transitions.  This makes
+  # action sensitivity part of the training objective rather than a hoped-for
+  # by-product of goal classification.
+  action_contrast_weight: float = 1.0
+  action_contrast_temperature: float = 1.0
+  action_contrast_batch_size: int = 32
+
+  # -- Shortcut/action diagnostics ------------------------------------------
+  # Zero preserves legacy runtime.  For task-5/task-8 single-task probes,
+  # 1000 learner calls gives useful curves without putting the diagnostics in
+  # every update.
+  shortcut_diagnostic_interval: int = 0
+  shortcut_diagnostic_batch_size: int = 32
+  shortcut_candidate_actions: int = 16
+
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.
   # Off by default so existing runs are bit-for-bit identical. Turn on for
