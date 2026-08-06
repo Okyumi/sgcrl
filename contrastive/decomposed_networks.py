@@ -87,7 +87,8 @@ class DecomposedCriticNetworks:
 
   # Convenience apply fns that callers may use directly.
   apply_sa_repr: Optional[Callable] = None  # composed phi(s,a)
-  apply_score: Optional[Callable] = None    # full critic score
+  apply_score: Optional[Callable] = None    # full (B, B) critic score
+  apply_paired_score: Optional[Callable] = None  # matched triples, shape (B,)
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +355,27 @@ def make_decomposed_networks(
     # inner_product (SGCRL default)
     return jnp.einsum('ik,jk->ij', sa, g)
 
+  def apply_paired_score(
+      params_b_shared, params_h_phi, params_phi_task, params_psi,
+      obs, action, params_psi_proj=None):
+    """Efficient scores for matched (state, action, goal) triples.
+
+    Unlike apply_score, this function does not materialize a B-by-B matrix.
+    It is therefore the canonical scoring path for actor, Bellman-correction,
+    and fixed-state action-ranking computations.
+    """
+    sa = apply_sa_repr(
+        params_b_shared, params_h_phi, params_phi_task, obs, action)
+    g = apply_psi(params_psi, obs, params_psi_proj)
+    if repr_norm:
+      sa = sa / jnp.maximum(
+          jnp.linalg.norm(sa, axis=1, keepdims=True), 1e-8)
+      g = g / jnp.maximum(
+          jnp.linalg.norm(g, axis=1, keepdims=True), 1e-8)
+    if energy_fn == 'l2':
+      return -jnp.sqrt(jnp.sum(jnp.square(sa - g), axis=-1) + 1e-6)
+    return jnp.sum(sa * g, axis=-1)
+
   bundle = DecomposedCriticNetworks(
       init_b_shared=init_b_shared, apply_b_shared=b_shared.apply,
       init_h_phi=init_h_phi, apply_h_phi=h_phi.apply,
@@ -364,6 +386,7 @@ def make_decomposed_networks(
       repr_dim=repr_dim, hidden_dim=hidden_dim_actual,
       apply_sa_repr=apply_sa_repr,
       apply_score=apply_score,
+      apply_paired_score=apply_paired_score,
   )
   # Attach extra fields outside the dataclass field list so older callers
   # do not have to change.  Access via `bundle.combine_mode` etc.
