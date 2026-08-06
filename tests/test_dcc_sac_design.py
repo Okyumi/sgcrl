@@ -85,7 +85,10 @@ def test_action_dcc_and_ablation_modes_are_wired():
   ):
     assert repr(mode) in source
   assert "self._use_q = hybrid_mode != 'action_dcc'" in source
+  assert "q_params = None" in source
   assert "hold (s, achieved_goal(s')) fixed" in source
+  runner = (ROOT / 'run_continual_contrastive.py').read_text()
+  assert "if critic_mode != 'action_dcc':\n      hybrid_sac_nets =" in runner
 
 
 def test_runner_uses_canonical_her_for_q_modes():
