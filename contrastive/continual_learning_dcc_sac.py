@@ -431,6 +431,16 @@ class ContinualDCCSACLearner(acme.Learner):
           jnp.mean(jnp.abs(q_pred)), 1.0)
       reached = her.reached_from_reward(
           transitions.reward, step_penalty_reward)
+      next_state = transitions.next_observation[:, :obs_dim]
+      relabeled_goal = transitions.observation[:, obs_dim:]
+      if end_index == -1:
+        achieved_next = next_state[:, start_index:]
+      else:
+        achieved_next = next_state[:, start_index:end_index]
+      goal_distance = jnp.linalg.norm(
+          achieved_next - relabeled_goal, axis=-1)
+      distance_sorted = jnp.sort(goal_distance)
+      distance_n = distance_sorted.shape[0]
       q_sorted = jnp.sort(jnp.reshape(q_pred, (-1,)))
       target_sorted = jnp.sort(jnp.reshape(target, (-1,)))
       td_sorted = jnp.sort(jnp.reshape(jnp.abs(q_error), (-1,)))
@@ -456,6 +466,13 @@ class ContinualDCCSACLearner(acme.Learner):
           'twin_disagreement_abs': twin_abs,
           'twin_disagreement_normalized': twin_normalized,
           'her_success_rate': jnp.mean(reached.astype(jnp.float32)),
+          'her_goal_distance_mean': jnp.mean(goal_distance),
+          'her_goal_distance_min': jnp.min(goal_distance),
+          'her_goal_distance_max': jnp.max(goal_distance),
+          'her_goal_distance_p50': distance_sorted[
+              int(0.50 * (distance_n - 1))],
+          'her_goal_distance_p95': distance_sorted[
+              int(0.95 * (distance_n - 1))],
           'reward_mean': jnp.mean(transitions.reward),
           'discount_mean': jnp.mean(transitions.discount),
       }
@@ -653,6 +670,11 @@ class ContinualDCCSACLearner(acme.Learner):
             'twin_disagreement_abs': jnp.asarray(0.0),
             'twin_disagreement_normalized': jnp.asarray(0.0),
             'her_success_rate': jnp.asarray(0.0),
+            'her_goal_distance_mean': jnp.asarray(0.0),
+            'her_goal_distance_min': jnp.asarray(0.0),
+            'her_goal_distance_max': jnp.asarray(0.0),
+            'her_goal_distance_p50': jnp.asarray(0.0),
+            'her_goal_distance_p95': jnp.asarray(0.0),
             'reward_mean': jnp.mean(transitions.reward),
             'discount_mean': jnp.mean(transitions.discount),
         }
