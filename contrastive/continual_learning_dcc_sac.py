@@ -737,15 +737,15 @@ class ContinualDCCSACLearner(acme.Learner):
     self._logger.write(self._last_metrics)
 
   def get_variables(self, names):
+    # Return the DCC bundle under the standard critic variable name so the
+    # existing decomposed representation-metric shim remains valid.  Scalar
+    # Q parameters are exposed separately through sac_q_params.
     critic = {
-        'dcc': {
-            'b_shared': self._state.b_shared_params,
-            'h_phi': self._state.h_phi_params,
-            'phi_task': self._state.phi_task_params,
-            'psi': self._state.psi_params,
-            'h_dyn': self._state.h_dyn_params,
-        },
-        'q': self._state.q_params,
+        'b_shared': self._state.b_shared_params,
+        'h_phi': self._state.h_phi_params,
+        'phi_task': self._state.phi_task_params,
+        'psi': self._state.psi_params,
+        'h_dyn': self._state.h_dyn_params,
     }
     table = {'policy': self._state.policy_params, 'critic': critic}
     return [table[name] for name in names]
