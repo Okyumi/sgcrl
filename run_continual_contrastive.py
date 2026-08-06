@@ -433,8 +433,7 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
         f'_rbc_{rbc_checkpointing.config_fingerprint(rbc_config)}')
   if critic_mode in _HYBRID_CRITIC_MODES:
     config_key += (
-        f'_hybrid_{rbc_checkpointing.config_fingerprint('
-        f'_dcc_sac_identity_config())}')
+        f"_hybrid_{rbc_checkpointing.config_fingerprint(_dcc_sac_identity_config())}"
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
@@ -867,8 +866,7 @@ def train_single_task(
         f'_rbc_{rbc_checkpointing.config_fingerprint(_rbc_identity_config())}')
   elif critic_mode in _HYBRID_CRITIC_MODES:
     config_tag += (
-        f'_hybrid_{rbc_checkpointing.config_fingerprint('
-        f'_dcc_sac_identity_config())}')
+        f"_hybrid_{rbc_checkpointing.config_fingerprint(_dcc_sac_identity_config())}"
   log_dir = os.path.join(
       FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
       f'task{task_id}_{env_name}_s{seed}')
