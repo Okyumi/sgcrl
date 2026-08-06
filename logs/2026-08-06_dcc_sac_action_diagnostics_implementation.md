@@ -39,6 +39,10 @@ For each state and goal, Q is centered and scaled across candidate actions.
 The normalized correction is clipped and multiplied by a ramped gate and a
 small beta.  At gate zero, the actor objective is ordinary DCC exactly.
 
+The gate establishes numerical stability, not semantic usefulness.  Q action
+variance and DCC-Q ranking agreement are therefore logged separately and must
+be inspected before increasing beta.
+
 ### dcc_sac_separate
 
 A required ablation.  DCC is trained in parallel, but the actor uses standard
@@ -104,6 +108,26 @@ DCC-SAC stability and tail metrics include Q/target mean, standard deviation,
 minimum and maximum, mean/max TD error, absolute and normalized twin
 disagreement, EMA stability statistics, HER success, gate value, effective
 beta, and normalized correction magnitude.
+
+The candidate-action standard deviations and DCC-Q agreement are genuinely
+fixed-(state, goal) diagnostics.  The two `progress_spearman` fields are
+cheaper replay-batch proxies: they correlate scores with observed one-step
+progress across replay transitions and are not counterfactual environment
+rollouts from the same state.  A causal action-ranking study still requires
+checkpoint rollouts from resettable states.
+
+## HER predicate used by Q modes
+
+The canonical helper does not call each environment's native success
+conditions.  It computes one strict Euclidean predicate,
+
+`norm(achieved_next - relabeled_goal) < her_reward_threshold`.
+
+Thus every coordinate in the selected goal projection contributes jointly,
+but this is not a logical AND over task-specific predicates.  A transition
+receives the success reward only when the joint vector lies inside the radius;
+otherwise it keeps the failure reward.  This approximation must be validated
+against the native success definition for tasks 5 and 8.
 
 ## Recommended first experiments
 
