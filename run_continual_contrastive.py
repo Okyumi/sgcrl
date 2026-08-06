@@ -749,24 +749,24 @@ def train_single_task(
           actor_depth=config.actor_depth,
       )
     elif critic_mode == 'rbc_decomposed':
-      rbc_nets = make_rbc_networks(
-          env_spec, obs_dim=obs_dim,
-          repr_dim=config.repr_dim,
-          use_residual=config.use_residual,
-          network_width=config.network_width,
-          critic_depth=config.critic_depth,
-          phi_task_width=getattr(continual_cfg, 'phi_task_width', 256),
-          phi_task_depth=getattr(continual_cfg, 'phi_task_depth', 4),
-          energy_fn=config.energy_fn,
-          repr_norm=config.repr_norm,
-          combine_mode=getattr(continual_cfg, 'combine_mode', 'add'),
-          goal_encoder_mode=getattr(
-              continual_cfg, 'goal_encoder_mode', 'shared'),
-          bellman_hidden_dim=getattr(
-              continual_cfg, 'bellman_hidden_dim', 256),
-      )
-      decomp_nets = rbc_nets.decomposed
-  
+    rbc_nets = make_rbc_networks(
+        env_spec, obs_dim=obs_dim,
+        repr_dim=config.repr_dim,
+        use_residual=config.use_residual,
+        network_width=config.network_width,
+        critic_depth=config.critic_depth,
+        phi_task_width=getattr(continual_cfg, 'phi_task_width', 256),
+        phi_task_depth=getattr(continual_cfg, 'phi_task_depth', 4),
+        energy_fn=config.energy_fn,
+        repr_norm=config.repr_norm,
+        combine_mode=getattr(continual_cfg, 'combine_mode', 'add'),
+        goal_encoder_mode=getattr(
+            continual_cfg, 'goal_encoder_mode', 'shared'),
+        bellman_hidden_dim=getattr(
+            continual_cfg, 'bellman_hidden_dim', 256),
+    )
+    decomp_nets = rbc_nets.decomposed
+
   # ---- replay buffer (reverb) -------------------------------------------
   # A fresh replay buffer is created per task so that experience from
   # previous tasks does not leak into the current task's training data.
@@ -1278,82 +1278,82 @@ def train_single_task(
                   repr_fn=_repr_fn,
                   critic_hidden_repr_fn=None,
                   actor_repr_fn=networks.actor_repr_fn,
-                )
-            try:
-              setattr(learner, '_dcc_metrics_networks', shim)
-            except Exception:
-              pass
-          metrics_networks = getattr(
-              learner, '_dcc_metrics_networks', networks)
-          current_critic = learner.get_variables(['critic'])[0]
-        m = rl_metrics.compute_all_metrics(
-            metrics_networks, current_actor, current_critic,
-            obs_sample, act_sample, obs_dim=obs_dim, level=level)
-        if FLAGS.use_wandb and wandb is not None:
-          wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
-          wandb_m['rl_metrics/env_steps'] = env_steps_done
-          wandb.log(wandb_m)
-        # ---- Automatic actor reset (dormancy-triggered, task 0 only) ----
-        if (auto_reset_active
-            and actor_reset_count < FLAGS.actor_reset_max
-            and env_steps_done >= FLAGS.actor_reset_warmup):
-          # Compute actor dormant ratio (cheap: one forward pass + mean).
-          # Use the already-extracted actor features when available;
-          # otherwise compute them on the fly.
-          actor_dr = m.get('actor/dormant_ratio')
-          if actor_dr is None:
-            # Occasional-level metrics weren't computed this cycle;
-            # compute dormant ratio directly.
-            actor_feats = rl_metrics.extract_actor_features(
-                networks, current_actor, obs_sample)
-            if actor_feats is not None:
-              actor_dr = rl_metrics.dormant_ratio(actor_feats)
-          if actor_dr is not None and actor_dr > FLAGS.actor_reset_dormant_threshold:
-            actor_reset_rng, reset_key = jax.random.split(actor_reset_rng)
-            print(f'  [auto-reset @ {env_steps_done}] '
-                  f'actor dormant_ratio={actor_dr:.3f} > '
-                  f'{FLAGS.actor_reset_dormant_threshold} — '
-                  f'resetting actor (#{actor_reset_count + 1}).',
-                  flush=True)
-            learner.reset_actor(reset_key)
-            actor_reset_count += 1
-            if FLAGS.use_wandb and wandb is not None:
-              wandb.log({
-                  'actor_reset/triggered': 1,
-                  'actor_reset/dormant_ratio_at_reset': actor_dr,
-                  'actor_reset/count': actor_reset_count,
-                  'actor_reset/env_steps': env_steps_done,
-              })
+              )
+              try:
+                setattr(learner, '_dcc_metrics_networks', shim)
+              except Exception:
+                pass
+            metrics_networks = getattr(
+                learner, '_dcc_metrics_networks', networks)
+            current_critic = learner.get_variables(['critic'])[0]
+          m = rl_metrics.compute_all_metrics(
+              metrics_networks, current_actor, current_critic,
+              obs_sample, act_sample, obs_dim=obs_dim, level=level)
+          if FLAGS.use_wandb and wandb is not None:
+            wandb_m = {f'rl_metrics/{k}': v for k, v in m.items()}
+            wandb_m['rl_metrics/env_steps'] = env_steps_done
+            wandb.log(wandb_m)
+          # ---- Automatic actor reset (dormancy-triggered, task 0 only) ----
+          if (auto_reset_active
+              and actor_reset_count < FLAGS.actor_reset_max
+              and env_steps_done >= FLAGS.actor_reset_warmup):
+            # Compute actor dormant ratio (cheap: one forward pass + mean).
+            # Use the already-extracted actor features when available;
+            # otherwise compute them on the fly.
+            actor_dr = m.get('actor/dormant_ratio')
+            if actor_dr is None:
+              # Occasional-level metrics weren't computed this cycle;
+              # compute dormant ratio directly.
+              actor_feats = rl_metrics.extract_actor_features(
+                  networks, current_actor, obs_sample)
+              if actor_feats is not None:
+                actor_dr = rl_metrics.dormant_ratio(actor_feats)
+            if actor_dr is not None and actor_dr > FLAGS.actor_reset_dormant_threshold:
+              actor_reset_rng, reset_key = jax.random.split(actor_reset_rng)
+              print(f'  [auto-reset @ {env_steps_done}] '
+                    f'actor dormant_ratio={actor_dr:.3f} > '
+                    f'{FLAGS.actor_reset_dormant_threshold} — '
+                    f'resetting actor (#{actor_reset_count + 1}).',
+                    flush=True)
+              learner.reset_actor(reset_key)
+              actor_reset_count += 1
+              if FLAGS.use_wandb and wandb is not None:
+                wandb.log({
+                    'actor_reset/triggered': 1,
+                    'actor_reset/dormant_ratio_at_reset': actor_dr,
+                    'actor_reset/count': actor_reset_count,
+                    'actor_reset/env_steps': env_steps_done,
+                })
 
-    except Exception as e:
-      print(f'  [rl_metrics] Warning: {e}', flush=True)
+      except Exception as e:
+        print(f'  [rl_metrics] Warning: {e}', flush=True)
 
-  # Intra-task periodic evaluation on all tasks seen so far
-  if FLAGS.intra_eval_previous_tasks and env_steps_done >= next_eval_at:
-    next_eval_at = env_steps_done + eval_every
-    current_policy = learner.get_variables(['policy'])[0]
-    current_q = learner.q_params
-    print(f'  [intra-eval @ {env_steps_done} steps] '
-          f'Evaluating tasks 0..{task_id}...', flush=True)
-    intra_results = {}
-    for eval_tid in range(task_id + 1):
-      eval_env_i = task_sequence[eval_tid]
-      sr = evaluate_on_task(
-          eval_env_i, eval_tid, current_policy, current_q, config,
-          continual_cfg, seed,
-          num_episodes=FLAGS.eval_episodes,
-          k_sample_k=FLAGS.k_sample_k)
-      intra_results[eval_env_i] = sr
-    intra_mean = np.mean(list(intra_results.values()))
-    print(f'  [intra-eval] Mean success: {intra_mean:.1%}', flush=True)
-    if FLAGS.use_wandb and wandb is not None:
-      wandb_intra = {f'intra_eval/{n}': s for n, s in intra_results.items()}
-      wandb_intra['intra_eval/mean_success'] = intra_mean
-      wandb_intra['intra_eval/env_steps'] = env_steps_done
-      wandb.log(wandb_intra)
+    # Intra-task periodic evaluation on all tasks seen so far
+    if FLAGS.intra_eval_previous_tasks and env_steps_done >= next_eval_at:
+      next_eval_at = env_steps_done + eval_every
+      current_policy = learner.get_variables(['policy'])[0]
+      current_q = learner.q_params
+      print(f'  [intra-eval @ {env_steps_done} steps] '
+            f'Evaluating tasks 0..{task_id}...', flush=True)
+      intra_results = {}
+      for eval_tid in range(task_id + 1):
+        eval_env_i = task_sequence[eval_tid]
+        sr = evaluate_on_task(
+            eval_env_i, eval_tid, current_policy, current_q, config,
+            continual_cfg, seed,
+            num_episodes=FLAGS.eval_episodes,
+            k_sample_k=FLAGS.k_sample_k)
+        intra_results[eval_env_i] = sr
+      intra_mean = np.mean(list(intra_results.values()))
+      print(f'  [intra-eval] Mean success: {intra_mean:.1%}', flush=True)
+      if FLAGS.use_wandb and wandb is not None:
+        wandb_intra = {f'intra_eval/{n}': s for n, s in intra_results.items()}
+        wandb_intra['intra_eval/mean_success'] = intra_mean
+        wandb_intra['intra_eval/env_steps'] = env_steps_done
+        wandb.log(wandb_intra)
 
-print(f'  Task {task_id} training complete '
-      f'({env_steps_done} env steps, {episodes_done} episodes).', flush=True)
+  print(f'  Task {task_id} training complete '
+        f'({env_steps_done} env steps, {episodes_done} episodes).', flush=True)
 
   # ---- snapshot composed policy for cross-task evaluation ----------------
   # Must happen before pool extraction which changes the composition.
