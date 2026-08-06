@@ -106,6 +106,20 @@ def test_paired_score_avoids_actor_bxb_matrix():
   assert 'decomp.apply_paired_score(' in learner
 
 
+def test_her_geometry_metrics_are_logged_and_exported():
+  learner = (
+      ROOT / 'contrastive/continual_learning_dcc_sac.py').read_text()
+  fetcher = (ROOT / 'results/scripts/fetch_wandb_runs.py').read_text()
+  for metric in (
+      'her_success_rate',
+      'her_goal_distance_mean',
+      'her_goal_distance_p50',
+      'her_goal_distance_p95',
+  ):
+    assert repr(metric) in learner
+    assert f'learner/dcc_sac/{metric}' in fetcher
+
+
 def test_evaluation_scope_controls_present():
   source = (ROOT / 'run_continual_contrastive.py').read_text()
   assert "'post_task_eval_scope'" in source
