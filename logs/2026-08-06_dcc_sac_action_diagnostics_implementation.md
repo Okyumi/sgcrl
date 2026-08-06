@@ -60,7 +60,7 @@ goal-contrastive matrix, it constructs an action matrix for a replay subset:
 
 This directly trains the fixed-(state, goal) action-ranking direction needed
 by the actor.  It does not use environment reward, HER reward, or a Bellman
-target.
+target, and it does not allocate the independent scalar Q network.
 
 ### action_dcc_sac
 
@@ -106,8 +106,9 @@ AC-DCC training metrics:
 
 DCC-SAC stability and tail metrics include Q/target mean, standard deviation,
 minimum and maximum, mean/max TD error, absolute and normalized twin
-disagreement, EMA stability statistics, HER success, gate value, effective
-beta, and normalized correction magnitude.
+disagreement, EMA stability statistics, HER success, relabeled-goal
+distance mean/median/p95/min/max, gate value, effective beta, and normalized
+correction magnitude.
 
 The candidate-action standard deviations and DCC-Q agreement are genuinely
 fixed-(state, goal) diagnostics.  The two `progress_spearman` fields are
