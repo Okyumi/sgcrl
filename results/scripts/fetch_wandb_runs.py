@@ -57,10 +57,70 @@ import pandas as pd
 
 RUN_NAME_RE = re.compile(r"^task(\d+)_(.+)_s(\d+)$")
 
-# The pair of metric keys we want from history. evaluator/success_rate is
-# the deterministic per-step evaluation success rate; evaluator/env_steps
-# is the matching x-axis.
-HISTORY_KEYS = ["evaluator/env_steps", "evaluator/success_rate"]
+# Evaluation and learner-diagnostic history keys.  W&B writes evaluator
+# and learner rows at different cadences, so the fetcher keeps their union.
+DIAGNOSTIC_KEYS = [
+    "learner/shortcut/categorical_accuracy",
+    "learner/shortcut/action_shuffled_categorical_accuracy",
+    "learner/shortcut/zero_action_categorical_accuracy",
+    "learner/shortcut/action_shuffle_retention",
+    "learner/shortcut/zero_action_retention",
+    "learner/shortcut/logit_saturation_fraction",
+    "learner/shortcut/positive_negative_margin",
+    "learner/action/dcc_shuffle_delta_rms",
+    "learner/action/dcc_shuffle_delta_abs",
+    "learner/action/dcc_candidate_std_policy",
+    "learner/action/dcc_candidate_std_uniform",
+    "learner/action/dcc_action_grad_norm",
+    "learner/action/dcc_progress_spearman",
+    "learner/action/q_candidate_std_policy",
+    "learner/action/q_candidate_std_uniform",
+    "learner/action/q_progress_spearman",
+    "learner/action/dcc_q_candidate_spearman",
+    "learner/q/twin_disagreement_periodic",
+    "learner/acdcc/action_contrast_loss",
+    "learner/acdcc/action_contrast_accuracy",
+    "learner/acdcc/action_contrast_margin",
+    "learner/acdcc/action_score_std",
+    "learner/dcc_sac/q_loss",
+    "learner/dcc_sac/q_mean",
+    "learner/dcc_sac/q_std",
+    "learner/dcc_sac/q_min",
+    "learner/dcc_sac/q_max",
+    "learner/dcc_sac/q_p01",
+    "learner/dcc_sac/q_p99",
+    "learner/dcc_sac/q_target_mean",
+    "learner/dcc_sac/q_target_std",
+    "learner/dcc_sac/q_target_min",
+    "learner/dcc_sac/q_target_max",
+    "learner/dcc_sac/q_target_p01",
+    "learner/dcc_sac/q_target_p99",
+    "learner/dcc_sac/td_error_abs",
+    "learner/dcc_sac/td_error_max",
+    "learner/dcc_sac/td_error_p95",
+    "learner/dcc_sac/twin_disagreement_abs",
+    "learner/dcc_sac/twin_disagreement_normalized",
+    "learner/dcc_sac/td_error_ema",
+    "learner/dcc_sac/twin_disagreement_ema",
+    "learner/dcc_sac/q_stable",
+    "learner/dcc_sac/q_gate_ramp",
+    "learner/dcc_sac/q_gate",
+    "learner/dcc_sac/beta_effective",
+    "learner/dcc_sac/q_correction_mean",
+    "learner/dcc_sac/action_saturation_fraction",
+    "learner/dcc_sac/q_grad_norm",
+    "learner/dcc_sac/dcc_grad_norm",
+    "learner/dcc_sac/actor_grad_norm",
+    "learner/dcc_sac/alpha_grad_abs",
+    "learner/alpha",
+    "learner/log_alpha",
+]
+HISTORY_KEYS = [
+    "evaluator/env_steps",
+    "evaluator/success_rate",
+    "learner/env_steps",
+    *DIAGNOSTIC_KEYS,
+]
 
 # Config and summary fields we cache alongside each run (small set; the
 # full config is reachable via the W&B API if needed later).
@@ -78,6 +138,12 @@ RUN_FIELDS = [
     "dyn_aux_weight",
     "phi_task_width",
     "phi_task_depth",
+    "dcc_sac_beta_max",
+    "dcc_sac_q_warmup_updates",
+    "dcc_sac_q_ramp_updates",
+    "action_contrast_weight",
+    "shortcut_diagnostic_interval",
+    "post_task_eval_scope",
 ]
 
 
@@ -111,9 +177,9 @@ def _fetch_history_df(run, keys: list[str]) -> pd.DataFrame:
         return pd.DataFrame(columns=keys)
     if df is None or df.empty:
         return pd.DataFrame(columns=keys)
-    # Some runs have NaN-only columns; drop rows missing the headline key.
-    if "evaluator/success_rate" in df.columns:
-        df = df.dropna(subset=["evaluator/success_rate"])
+    # Keep the union of evaluator and learner rows.  Downstream success
+    # metrics filter success_rate explicitly; diagnostic metrics use their
+    # own non-null rows.
     return df
 
 
@@ -167,10 +233,17 @@ def fetch_group(
         if hist.empty:
             n_no_history += 1
             continue
+        for key in HISTORY_KEYS:
+            if key not in hist.columns:
+                hist[key] = float("nan")
         hist = hist.rename(columns={
-            "evaluator/env_steps": "env_steps",
+            "evaluator/env_steps": "evaluator_env_steps",
             "evaluator/success_rate": "success_rate",
         })
+        hist["env_steps"] = (
+            pd.to_numeric(hist["learner/env_steps"], errors="coerce")
+            .combine_first(pd.to_numeric(
+                hist["evaluator_env_steps"], errors="coerce")))
         hist["run_id"] = r.id
         hist["run_name"] = r.name
         hist["group"] = group
@@ -180,10 +253,12 @@ def fetch_group(
         hist["task_idx"] = k
         hist["env"] = env
         hist["state"] = r.state
-        history_rows.append(hist[[
+        output_columns = [
             "run_id", "run_name", "group", "actor_mode", "critic_mode",
             "seed", "task_idx", "env", "state", "env_steps", "success_rate",
-        ]])
+            *DIAGNOSTIC_KEYS,
+        ]
+        history_rows.append(hist[output_columns])
         n_kept += 1
         if i % 25 == 0:
             print(f"  [{group}] processed {i}/{len(runs)} (kept={n_kept})", flush=True)
@@ -195,6 +270,7 @@ def fetch_group(
         histories_df = pd.DataFrame(columns=[
             "run_id", "run_name", "group", "actor_mode", "critic_mode",
             "seed", "task_idx", "env", "state", "env_steps", "success_rate",
+            *DIAGNOSTIC_KEYS,
         ])
 
     manifest = {
