@@ -59,9 +59,9 @@ class DCCSACTrainingState(NamedTuple):
   psi_params: networks_lib.Params
   psi_opt_state: optax.OptState
 
-  q_params: networks_lib.Params
-  target_q_params: networks_lib.Params
-  q_opt_state: optax.OptState
+  q_params: Optional[networks_lib.Params]
+  target_q_params: Optional[networks_lib.Params]
+  q_opt_state: Optional[optax.OptState]
 
   alpha_params: jnp.ndarray
   alpha_opt_state: optax.OptState
@@ -130,6 +130,8 @@ class ContinualDCCSACLearner(acme.Learner):
     self._separate_actor = hybrid_mode == 'dcc_sac_separate'
     self._use_action_contrast = hybrid_mode in (
         'action_dcc', 'action_dcc_sac')
+    if self._use_q and q_network is None:
+      raise ValueError(f'critic_mode={hybrid_mode} requires a Q network.')
 
     self._decomp_nets = decomp_nets
     self._q_network = q_network
@@ -198,7 +200,14 @@ class ContinualDCCSACLearner(acme.Learner):
 
     phi_task_params = decomp_nets.init_phi_task(keys[4])
     policy_params = policy_network.init(keys[5])
-    q_params = q_network.init(keys[6])
+    if self._use_q:
+      q_params = q_network.init(keys[6])
+      target_q_params = jax.tree_util.tree_map(lambda x: x, q_params)
+      q_opt_state = self._q_opt.init(q_params)
+    else:
+      q_params = None
+      target_q_params = None
+      q_opt_state = None
     alpha_params = jnp.asarray(0.0, dtype=jnp.float32)
 
     self._state = DCCSACTrainingState(
@@ -215,8 +224,8 @@ class ContinualDCCSACLearner(acme.Learner):
         psi_params=psi_params,
         psi_opt_state=psi_opt_state,
         q_params=q_params,
-        target_q_params=jax.tree_util.tree_map(lambda x: x, q_params),
-        q_opt_state=self._q_opt.init(q_params),
+        target_q_params=target_q_params,
+        q_opt_state=q_opt_state,
         alpha_params=alpha_params,
         alpha_opt_state=self._alpha_opt.init(alpha_params),
         td_error_ema=jnp.asarray(0.0, dtype=jnp.float32),
