@@ -104,6 +104,9 @@ flags.DEFINE_integer('eval_episodes', 10,
 flags.DEFINE_bool('intra_eval_previous_tasks', False,
                   'Also evaluate on all previous tasks during training, not '
                   'only at task boundaries.')
+flags.DEFINE_enum(
+    'post_task_eval_scope', 'all_seen', ['all_seen', 'current', 'none'],
+    'Boundary evaluation scope: all tasks seen, current task only, or none.')
 flags.DEFINE_integer('k_sample_k', 0,
                      'K for K-sample-argmax evaluation, scored by '
                      'min(Q1,Q2). 0 uses the deterministic policy mean.')
@@ -223,7 +226,8 @@ def wandb_run_config(params: Dict[str, Any], task_id: int, env_name: str,
   ablation_flags = (
       'critic_mode', 'use_task_id', 'adapt_heads_only', 'encoder_from_base',
       'use_20_tasks', 'actor_mode', 'eval_episodes',
-      'intra_eval_previous_tasks', 'k_sample_k', 'actor_auto_reset',
+      'intra_eval_previous_tasks', 'post_task_eval_scope', 'k_sample_k',
+      'actor_auto_reset',
       'actor_reset_dormant_threshold', 'actor_reset_warmup',
       'actor_reset_max', 'her_reward_threshold', 'step_penalty_reward',
       'task_sequence',
