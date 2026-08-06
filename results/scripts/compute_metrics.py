@@ -168,10 +168,13 @@ def _load_history_for_group(raw_dir: Path, group: str) -> pd.DataFrame:
 def load_all_histories(raw_dir: Path, groups: list[str]) -> pd.DataFrame:
     parts = [_load_history_for_group(raw_dir, g) for g in groups]
     df = pd.concat(parts, ignore_index=True)
-    # Drop rows without a finite success rate; downstream metrics expect
-    # numeric values.
-    df = df.dropna(subset=["success_rate"]).copy()
-    df["success_rate"] = df["success_rate"].astype(float)
+    # Keep learner-only rows.  Success and diagnostic consumers apply
+    # their own non-null filters because W&B logs them at different cadences.
+    df = df.copy()
+    if "success_rate" not in df.columns:
+        df["success_rate"] = np.nan
+    df["success_rate"] = pd.to_numeric(
+        df["success_rate"], errors="coerce")
     df["env_steps"] = pd.to_numeric(df["env_steps"], errors="coerce")
     return df
 
@@ -209,6 +212,7 @@ def compute_per_seed_per_task(histories: pd.DataFrame) -> pd.DataFrame:
     WITH THE MOST EVALUATOR LOG ROWS. That is the most-complete attempt
     for that (cell, seed, task).
     """
+    histories = histories.dropna(subset=["success_rate"]).copy()
     grouped = histories.groupby(
         ["group", "actor_mode", "critic_mode", "seed", "task_idx", "env", "run_id"],
         dropna=False,
@@ -366,6 +370,85 @@ def render_documentation(reference_cell: str) -> str:
     )
 
 
+
+# --- Shortcut and action-diagnostic aggregates ----------------------------
+
+_DIAGNOSTIC_PREFIXES = (
+    "learner/shortcut/",
+    "learner/action/",
+    "learner/q/",
+    "learner/acdcc/",
+    "learner/dcc_sac/",
+)
+_DIAGNOSTIC_EXACT = ("learner/alpha", "learner/log_alpha")
+
+
+def _diagnostic_columns(histories: pd.DataFrame) -> list[str]:
+    return [
+        column for column in histories.columns
+        if column.startswith(_DIAGNOSTIC_PREFIXES)
+        or column in _DIAGNOSTIC_EXACT
+    ]
+
+
+def compute_diagnostic_metrics(
+    histories: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return long-form per-run and across-seed diagnostic summaries.
+
+    Each per-run row contains first, final, mean, min, max, early-20%, and
+    final-20% values for one metric.  Missing/irregular logging is handled by
+    sorting finite points by env_steps; no interpolation is invented.
+    """
+    id_columns = [
+        "group", "actor_mode", "critic_mode", "seed",
+        "task_idx", "env", "run_id",
+    ]
+    rows = []
+    for metric in _diagnostic_columns(histories):
+        subset = histories[id_columns + ["env_steps", metric]].copy()
+        subset[metric] = pd.to_numeric(subset[metric], errors="coerce")
+        subset = subset.dropna(subset=[metric])
+        for keys, group in subset.groupby(id_columns, dropna=False):
+            group = group.sort_values("env_steps")
+            values = group[metric].to_numpy(dtype=float)
+            n = len(values)
+            if not n:
+                continue
+            window = max(1, int(np.ceil(0.2 * n)))
+            rows.append({
+                **dict(zip(id_columns, keys)),
+                "metric": metric,
+                "n_points": n,
+                "first": float(values[0]),
+                "final": float(values[-1]),
+                "mean": float(np.mean(values)),
+                "min": float(np.min(values)),
+                "max": float(np.max(values)),
+                "early_20": float(np.mean(values[:window])),
+                "final_20": float(np.mean(values[-window:])),
+            })
+    per_run = pd.DataFrame(rows)
+    if per_run.empty:
+        return per_run, pd.DataFrame()
+
+    aggregate_rows = []
+    aggregate_ids = ["group", "actor_mode", "critic_mode", "task_idx", "env",
+                     "metric"]
+    for keys, group in per_run.groupby(aggregate_ids, dropna=False):
+        row = dict(zip(aggregate_ids, keys))
+        row["n_runs"] = int(group.shape[0])
+        for statistic in (
+            "first", "final", "mean", "min", "max", "early_20", "final_20"
+        ):
+            values = group[statistic].dropna()
+            row[f"{statistic}_mean"] = float(values.mean())
+            row[f"{statistic}_std"] = (
+                float(values.std(ddof=1)) if len(values) > 1 else 0.0)
+        aggregate_rows.append(row)
+    return per_run, pd.DataFrame(aggregate_rows)
+
+
 # --- Main ----------------------------------------------------------------
 
 def main() -> None:
@@ -406,6 +489,20 @@ def main() -> None:
     crl_metrics.to_csv(out_dir / "crl_metrics.csv", index=False)
     print(f"  -> {out_dir / 'cell_summary.csv'} ({len(cell_summary)} rows)")
     print(f"  -> {out_dir / 'crl_metrics.csv'} ({len(crl_metrics)} rows)")
+
+    print("Computing shortcut/action diagnostic summaries ...", flush=True)
+    diagnostic_per_run, diagnostic_summary = compute_diagnostic_metrics(
+        histories)
+    diagnostic_per_run.to_csv(
+        out_dir / "diagnostic_per_run.csv", index=False)
+    diagnostic_summary.to_csv(
+        out_dir / "diagnostic_summary.csv", index=False)
+    print(
+        f"  -> {out_dir / 'diagnostic_per_run.csv'} "
+        f"({len(diagnostic_per_run)} rows)")
+    print(
+        f"  -> {out_dir / 'diagnostic_summary.csv'} "
+        f"({len(diagnostic_summary)} rows)")
 
     with open(out_dir / "documentation.md", "w") as f:
         f.write(render_documentation(args.reference_cell))
