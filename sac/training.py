@@ -746,24 +746,36 @@ def run(flag_values):
     checkpointing.save_ckpt(
         f.checkpoint_dir, task_id, seed, ckpt_data, **ckpt_kwargs)
 
-    # ---- cross-task evaluation -------------------------------------------
-    if f.eval_episodes > 0:
-      print('\n  Evaluating on all tasks seen so far...', flush=True)
+    # ---- configurable task-boundary evaluation ---------------------------
+    if (
+        f.eval_episodes > 0
+        and f.post_task_eval_scope != 'none'):
+      if f.post_task_eval_scope == 'current':
+        eval_task_ids = [task_id]
+        print('\n  Evaluating only the task just trained...', flush=True)
+      else:
+        eval_task_ids = list(range(task_id + 1))
+        print('\n  Evaluating on all tasks seen so far...', flush=True)
       eval_results = {}
-      for eval_tid in range(task_id + 1):
+      for eval_tid in eval_task_ids:
         eval_env_name = task_sequence[eval_tid]
         sr = evaluate_on_task(
             eval_env_name, eval_tid, composed_policy, prev_q, config,
             continual_cfg, seed, num_episodes=f.eval_episodes,
             k_sample_k=f.k_sample_k, use_task_id=f.use_task_id)
         eval_results[eval_env_name] = sr
-        print(f'    Task {eval_tid} [{eval_env_name}]: {sr:.1%}', flush=True)
+        print(
+            f'    Task {eval_tid} [{eval_env_name}]: {sr:.1%}',
+            flush=True)
       mean_sr = float(np.mean(list(eval_results.values())))
       print(f'    Mean success: {mean_sr:.1%}', flush=True)
       if f.use_wandb and wandb is not None:
-        payload = {f'eval/{name}': sr for name, sr in eval_results.items()}
+        payload = {
+            f'eval/{name}': sr for name, sr in eval_results.items()}
         payload['eval/mean_success'] = mean_sr
-        payload['eval/num_tasks_seen'] = task_id + 1
+        payload['eval/num_tasks_evaluated'] = len(eval_task_ids)
+        payload['eval/scope_all_seen'] = float(
+            f.post_task_eval_scope == 'all_seen')
         wandb.log(payload)
 
     if f.use_wandb and wandb is not None:
