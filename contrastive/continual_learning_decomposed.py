@@ -65,6 +65,7 @@ import reverb
 
 from contrastive import config as contrastive_config
 from contrastive import decomposed_networks
+from contrastive import shortcut_diagnostics
 from contrastive import state_mask as sm
 from default import make_default_logger
 
@@ -254,6 +255,27 @@ class ContinualDecomposedLearner(acme.Learner):
     )
 
     self._update_step = self._make_update_step()
+
+    # Optional task-5/task-8 shortcut diagnostics.  The default interval of
+    # zero preserves the legacy DCC hot path exactly.
+    self._diagnostic_interval = int(getattr(
+        continual_config, 'shortcut_diagnostic_interval', 0))
+    self._diagnostic_counter = 0
+    self._diagnostic_fn = None
+    if self._diagnostic_interval > 0:
+      self._diagnostic_fn = shortcut_diagnostics.make_shortcut_diagnostic_fn(
+          decomp_nets=decomp_nets,
+          policy_network=policy_network,
+          sample_fn=sample_fn,
+          obs_dim=config.obs_dim,
+          start_index=config.start_index,
+          end_index=config.end_index,
+          diagnostic_batch_size=int(getattr(
+              continual_config, 'shortcut_diagnostic_batch_size', 32)),
+          candidate_actions=int(getattr(
+              continual_config, 'shortcut_candidate_actions', 16)),
+          q_network=None,
+      )
 
   # ------------------------------------------------------------------
   # JIT-compiled update step
@@ -523,6 +545,23 @@ class ContinualDecomposedLearner(acme.Learner):
     self._last_transitions = transitions
 
     self._state, metrics = self._update_step(self._state, transitions)
+
+    self._diagnostic_counter += 1
+    if (
+        self._diagnostic_fn is not None
+        and self._diagnostic_counter % self._diagnostic_interval == 0):
+      diagnostic_key = jax.random.fold_in(
+          self._state.key, self._diagnostic_counter)
+      diagnostic_metrics = self._diagnostic_fn(
+          self._state.b_shared_params,
+          self._state.h_phi_params,
+          self._state.phi_task_params,
+          self._state.psi_params,
+          self._state.policy_params,
+          None,
+          transitions,
+          diagnostic_key)
+      metrics = {**metrics, **diagnostic_metrics}
 
     timestamp = time.time()
     elapsed = timestamp - self._timestamp if self._timestamp else 0
