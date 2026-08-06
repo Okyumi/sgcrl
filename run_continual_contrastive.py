@@ -64,6 +64,7 @@ from contrastive.continual_learning_decomposed import (
     ContinualDecomposedLearner, DecomposedTrainingState,
 )
 from contrastive.continual_learning_rbc import ContinualRBCDecomposedLearner
+from contrastive.continual_learning_dcc_sac import ContinualDCCSACLearner
 from contrastive.decomposed_networks import make_decomposed_networks
 from contrastive.rbc_networks import make_rbc_networks
 from contrastive import rbc_checkpointing
@@ -75,6 +76,7 @@ from contrastive.negative_bank import NegativeBank
 from contrastive import rl_metrics
 from default import make_default_logger
 from sac import her as sac_her
+from sac import networks as sac_networks
 
 import env_utils
 
@@ -83,6 +85,13 @@ try:
   import wandb
 except ImportError:
   wandb = None
+
+# DCC-family modes with separate parameter groups and a reset actor.
+_HYBRID_CRITIC_MODES = (
+    'dcc_sac', 'dcc_sac_separate', 'action_dcc', 'action_dcc_sac')
+_DECOMPOSED_CRITIC_MODES = (
+    'decomposed', 'rbc_decomposed') + _HYBRID_CRITIC_MODES
+_HER_CRITIC_MODES = ('rbc_decomposed',) + _HYBRID_CRITIC_MODES
 
 # ---- flags ----------------------------------------------------------------
 FLAGS = flags.FLAGS
@@ -109,13 +118,21 @@ flags.DEFINE_string('critic_mode', 'persistent',
                     'Critic evolution across tasks: "persistent" (never reset, carry forward), '
                     '"reset" (reinitialize critic each task), '
                     '"cka" (CKA-RL style base+vectors for critic too), '
-                    '"decomposed" (DCC), or "rbc_decomposed" (RBC-DCC).')
+                    '"decomposed" (DCC), "rbc_decomposed" (RBC-DCC), '
+                    '"dcc_sac" (gated actor fusion), '
+                    '"dcc_sac_separate" (SAC-only actor ablation), '
+                    '"action_dcc" (reward-free AC-DCC), or '
+                    '"action_dcc_sac" (AC-DCC plus gated Q correction).')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Episodes per task for cross-task evaluation (0 to disable).')
 flags.DEFINE_bool('intra_eval_previous_tasks', False,
                   'During training on the current task, periodically evaluate on '
                   'all previously learned tasks. Disabled by default because it '
                   'is expensive (creates envs for every past task at each eval interval).')
+flags.DEFINE_enum(
+    'post_task_eval_scope', 'all_seen', ['all_seen', 'current', 'none'],
+    'Boundary evaluation scope: all tasks seen so far (legacy default), '
+    'only the task just trained, or no boundary evaluation.')
 flags.DEFINE_bool('log_rl_metrics', True,
                   'Log representation metrics (weight norms, feature rank, '
                   'NRC, dormant ratio, intrinsic dimension). Enabled by default.')
@@ -246,7 +263,48 @@ flags.DEFINE_float('her_reward_threshold', 0.05,
                    'RBC-DCC HER goal-reach radius. Included in checkpoint '
                    'identity; the same value is used by standalone SAC.')
 flags.DEFINE_bool('step_penalty_reward', True,
-                  'RBC-DCC HER reward shape: -1/0 when true, 0/+1 otherwise.')
+                  'HER reward shape: -1/0 when true, 0/+1 otherwise.')
+flags.DEFINE_float('dcc_sac_q_loss_weight', 1.0,
+                   'Weight on the independent twin-Q TD loss.')
+flags.DEFINE_float('dcc_sac_q_learning_rate', 3e-4,
+                   'Learning rate for the independent raw-input twin Q.')
+flags.DEFINE_float('dcc_sac_discount', 0.99,
+                   'Bootstrap discount for the DCC-SAC Q critic.')
+flags.DEFINE_float('dcc_sac_tau', 0.005,
+                   'Polyak update rate for the DCC-SAC target Q.')
+flags.DEFINE_integer('dcc_sac_q_hidden_dim', 1024,
+                     'Width of each independent raw-input Q head.')
+flags.DEFINE_float('dcc_sac_beta_max', 0.1,
+                   'Maximum normalized Q-ranking correction weight.')
+flags.DEFINE_integer('dcc_sac_q_warmup_updates', 10000,
+                     'Learner updates before Q may influence the actor.')
+flags.DEFINE_integer('dcc_sac_q_ramp_updates', 25000,
+                     'Updates used to ramp the stable Q gate from zero.')
+flags.DEFINE_float('dcc_sac_td_error_threshold', 0.5,
+                   'Maximum EMA absolute TD error for opening the Q gate.')
+flags.DEFINE_float('dcc_sac_twin_disagreement_threshold', 0.1,
+                   'Maximum normalized twin disagreement for the Q gate.')
+flags.DEFINE_float('dcc_sac_ema_decay', 0.99,
+                   'EMA decay for DCC-SAC Q stability statistics.')
+flags.DEFINE_integer('dcc_sac_candidate_actions', 8,
+                     'Candidate actions used to normalize Q at fixed (s,g).')
+flags.DEFINE_float('dcc_sac_normalization_eps', 1e-3,
+                   'Minimum across-action Q scale in actor normalization.')
+flags.DEFINE_float('dcc_sac_correction_clip', 5.0,
+                   'Absolute clip on the normalized Q correction.')
+flags.DEFINE_float('action_contrast_weight', 1.0,
+                   'AC-DCC weight on fixed-(s,g_next) action InfoNCE.')
+flags.DEFINE_float('action_contrast_temperature', 1.0,
+                   'Temperature for AC-DCC action logits.')
+flags.DEFINE_integer('action_contrast_batch_size', 32,
+                     'Number of replay actions in each AC-DCC matrix.')
+flags.DEFINE_integer('shortcut_diagnostic_interval', 0,
+                     'Learner-call interval for shortcut/action diagnostics; '
+                     '0 disables them and preserves the legacy hot path.')
+flags.DEFINE_integer('shortcut_diagnostic_batch_size', 32,
+                     'Replay anchors used by periodic shortcut diagnostics.')
+flags.DEFINE_integer('shortcut_candidate_actions', 16,
+                     'Fixed-state candidate actions used by diagnostics.')
 flags.DEFINE_bool('log_pool_cosine', True,
                   'Log per-task pool cosine-similarity matrices on the '
                   'actor / critic CKA pools. Cheap host-side metric. '
@@ -298,6 +356,43 @@ def _rbc_identity_config():
   }
 
 
+
+def _dcc_sac_identity_config():
+  """Resolved settings defining DCC-SAC and AC-DCC checkpoints."""
+  return {
+      'critic_mode': FLAGS.critic_mode,
+      'dyn_aux_weight': FLAGS.dyn_aux_weight,
+      'dyn_aux_after_task0': FLAGS.dyn_aux_after_task0,
+      'phi_task_width': FLAGS.phi_task_width,
+      'phi_task_depth': FLAGS.phi_task_depth,
+      'combine_mode': FLAGS.combine_mode,
+      'goal_encoder_mode': FLAGS.goal_encoder_mode,
+      'her_reward_threshold': FLAGS.her_reward_threshold,
+      'step_penalty_reward': FLAGS.step_penalty_reward,
+      'dcc_sac_q_loss_weight': FLAGS.dcc_sac_q_loss_weight,
+      'dcc_sac_q_learning_rate': FLAGS.dcc_sac_q_learning_rate,
+      'dcc_sac_discount': FLAGS.dcc_sac_discount,
+      'dcc_sac_tau': FLAGS.dcc_sac_tau,
+      'dcc_sac_q_hidden_dim': FLAGS.dcc_sac_q_hidden_dim,
+      'dcc_sac_beta_max': FLAGS.dcc_sac_beta_max,
+      'dcc_sac_q_warmup_updates': FLAGS.dcc_sac_q_warmup_updates,
+      'dcc_sac_q_ramp_updates': FLAGS.dcc_sac_q_ramp_updates,
+      'dcc_sac_td_error_threshold': FLAGS.dcc_sac_td_error_threshold,
+      'dcc_sac_twin_disagreement_threshold':
+          FLAGS.dcc_sac_twin_disagreement_threshold,
+      'dcc_sac_ema_decay': FLAGS.dcc_sac_ema_decay,
+      'dcc_sac_candidate_actions': FLAGS.dcc_sac_candidate_actions,
+      'dcc_sac_normalization_eps': FLAGS.dcc_sac_normalization_eps,
+      'dcc_sac_correction_clip': FLAGS.dcc_sac_correction_clip,
+      'action_contrast_weight': FLAGS.action_contrast_weight,
+      'action_contrast_temperature': FLAGS.action_contrast_temperature,
+      'action_contrast_batch_size': FLAGS.action_contrast_batch_size,
+      'shortcut_diagnostic_interval': FLAGS.shortcut_diagnostic_interval,
+      'shortcut_diagnostic_batch_size':
+          FLAGS.shortcut_diagnostic_batch_size,
+      'shortcut_candidate_actions': FLAGS.shortcut_candidate_actions,
+  }
+
 def _git_commit_sha():
   """Best-effort source revision for run manifests."""
   try:
@@ -340,6 +435,10 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
       raise ValueError('rbc_config is required for RBC-DCC checkpoints.')
     config_key += (
         f'_rbc_{rbc_checkpointing.config_fingerprint(rbc_config)}')
+  if critic_mode in _HYBRID_CRITIC_MODES:
+    config_key += (
+        f'_hybrid_{rbc_checkpointing.config_fingerprint('
+        f'_dcc_sac_identity_config())}')
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
@@ -523,7 +622,7 @@ def train_single_task(
   # Fail fast before booting the replay server. The decomposed learner
   # also raises on use_td/twin_q internally, but failing here keeps the
   # error attributable to a single source.
-  if critic_mode in ('decomposed', 'rbc_decomposed'):
+  if critic_mode in _DECOMPOSED_CRITIC_MODES:
     if config.use_td:
       raise ValueError(
           f"critic_mode={critic_mode!r} requires use_td=False; RBC uses its "
@@ -552,6 +651,9 @@ def train_single_task(
           "k_sample_k>0 "
           "in cross-task evaluation; the decomposed critic exposes a "
           "5-tuple bundle, not a single q_params pytree.")
+  if critic_mode in _HYBRID_CRITIC_MODES and actor_mode != 'reset':
+    raise ValueError(
+        f'critic_mode={critic_mode!r} requires actor_mode=reset.')
   if critic_mode == 'rbc_decomposed':
     if actor_mode != 'reset':
       raise ValueError(
@@ -607,7 +709,8 @@ def train_single_task(
 
   decomp_nets = None
   rbc_nets = None
-  if critic_mode == 'decomposed':
+  hybrid_sac_nets = None
+  if critic_mode == 'decomposed' or critic_mode in _HYBRID_CRITIC_MODES:
     decomp_nets = make_decomposed_networks(
         env_spec, obs_dim=obs_dim,
         repr_dim=config.repr_dim,
@@ -622,6 +725,17 @@ def train_single_task(
         goal_encoder_mode=getattr(
             continual_cfg, 'goal_encoder_mode', 'shared'),
     )
+    if critic_mode in _HYBRID_CRITIC_MODES:
+      hybrid_sac_nets = sac_networks.make_sac_networks(
+          env_spec,
+          obs_dim=obs_dim,
+          twin_q=True,
+          use_residual=config.use_residual,
+          network_width=int(getattr(
+              continual_cfg, 'dcc_sac_q_hidden_dim', 1024)),
+          critic_depth=config.critic_depth,
+          actor_depth=config.actor_depth,
+      )
   elif critic_mode == 'rbc_decomposed':
     rbc_nets = make_rbc_networks(
         env_spec, obs_dim=obs_dim,
@@ -665,7 +779,7 @@ def train_single_task(
   # ---- dataset iterator --------------------------------------------------
   her_ops = (
       sac_her.tensorflow_ops()
-      if critic_mode == 'rbc_decomposed' else None)
+      if critic_mode in _HER_CRITIC_MODES else None)
 
   @tf.function
   def flatten_fn(sample):
@@ -687,7 +801,7 @@ def train_single_task(
 
     replay_reward = sample.data.reward[:-1]
     replay_discount = sample.data.discount[:-1]
-    if critic_mode == 'rbc_decomposed':
+    if critic_mode in _HER_CRITIC_MODES:
       achieved_next = contrastive_utils.obs_to_goal_2d(
           next_state,
           start_index=config.start_index,
@@ -755,11 +869,21 @@ def train_single_task(
   if critic_mode == 'rbc_decomposed':
     config_tag += (
         f'_rbc_{rbc_checkpointing.config_fingerprint(_rbc_identity_config())}')
+  elif critic_mode in _HYBRID_CRITIC_MODES:
+    config_tag += (
+        f'_hybrid_{rbc_checkpointing.config_fingerprint('
+        f'_dcc_sac_identity_config())}')
   log_dir = os.path.join(
       FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
       f'task{task_id}_{env_name}_s{seed}')
   os.makedirs(log_dir, exist_ok=True)
-  if critic_mode == 'rbc_decomposed':
+  if (
+      critic_mode == 'rbc_decomposed'
+      or critic_mode in _HYBRID_CRITIC_MODES):
+    identity = (
+        _rbc_identity_config()
+        if critic_mode == 'rbc_decomposed'
+        else _dcc_sac_identity_config())
     manifest = {
         'git_commit': _git_commit_sha(),
         'critic_mode': critic_mode,
@@ -767,7 +891,7 @@ def train_single_task(
         'task_id': task_id,
         'env_name': env_name,
         'seed': seed,
-        **_rbc_identity_config(),
+        **identity,
     }
     with open(os.path.join(log_dir, 'resolved_config.json'), 'w') as handle:
       json.dump(manifest, handle, indent=2, sort_keys=True, default=str)
@@ -793,6 +917,30 @@ def train_single_task(
     # are untouched.
     learner = ContinualDecomposedLearner(
         decomp_nets=decomp_nets,
+        policy_network=networks.policy_network,
+        sample_fn=networks.sample,
+        log_prob_fn=networks.log_prob,
+        rng=rng,
+        iterator=iterator,
+        counter=counting.Counter(),
+        logger=learner_logger,
+        config=config,
+        continual_config=continual_cfg,
+        task_id=task_id,
+        prev_b_shared_params=prev_b_shared_params,
+        prev_b_shared_opt_state=prev_b_shared_opt_state,
+        prev_h_phi_params=prev_h_phi_params,
+        prev_h_phi_opt_state=prev_h_phi_opt_state,
+        prev_h_dyn_params=prev_h_dyn_params,
+        prev_h_dyn_opt_state=prev_h_dyn_opt_state,
+        prev_psi_params=prev_psi_params,
+        prev_psi_opt_state=prev_psi_opt_state,
+    )
+  elif critic_mode in _HYBRID_CRITIC_MODES:
+    learner = ContinualDCCSACLearner(
+        hybrid_mode=critic_mode,
+        decomp_nets=decomp_nets,
+        q_network=hybrid_sac_nets.q_network,
         policy_network=networks.policy_network,
         sample_fn=networks.sample,
         log_prob_fn=networks.log_prob,
@@ -1240,7 +1388,7 @@ def train_single_task(
   _dump_probe_data()
 
   # ---- extract state for next task ---------------------------------------
-  if critic_mode in ('decomposed', 'rbc_decomposed'):
+  if critic_mode in _DECOMPOSED_CRITIC_MODES:
     # The decomposed actor is reset every task: there is no v_k pool to
     # extract, no theta_base to fold, no critic CKA pool to update. The
     # only carry is the four shared critic groups (b_shared / h_phi /
@@ -1524,6 +1672,27 @@ def main(_):
       bellman_hidden_dim=FLAGS.bellman_hidden_dim,
       her_reward_threshold=FLAGS.her_reward_threshold,
       step_penalty_reward=FLAGS.step_penalty_reward,
+      dcc_sac_q_loss_weight=FLAGS.dcc_sac_q_loss_weight,
+      dcc_sac_q_learning_rate=FLAGS.dcc_sac_q_learning_rate,
+      dcc_sac_discount=FLAGS.dcc_sac_discount,
+      dcc_sac_tau=FLAGS.dcc_sac_tau,
+      dcc_sac_q_hidden_dim=FLAGS.dcc_sac_q_hidden_dim,
+      dcc_sac_beta_max=FLAGS.dcc_sac_beta_max,
+      dcc_sac_q_warmup_updates=FLAGS.dcc_sac_q_warmup_updates,
+      dcc_sac_q_ramp_updates=FLAGS.dcc_sac_q_ramp_updates,
+      dcc_sac_td_error_threshold=FLAGS.dcc_sac_td_error_threshold,
+      dcc_sac_twin_disagreement_threshold=
+          FLAGS.dcc_sac_twin_disagreement_threshold,
+      dcc_sac_ema_decay=FLAGS.dcc_sac_ema_decay,
+      dcc_sac_candidate_actions=FLAGS.dcc_sac_candidate_actions,
+      dcc_sac_normalization_eps=FLAGS.dcc_sac_normalization_eps,
+      dcc_sac_correction_clip=FLAGS.dcc_sac_correction_clip,
+      action_contrast_weight=FLAGS.action_contrast_weight,
+      action_contrast_temperature=FLAGS.action_contrast_temperature,
+      action_contrast_batch_size=FLAGS.action_contrast_batch_size,
+      shortcut_diagnostic_interval=FLAGS.shortcut_diagnostic_interval,
+      shortcut_diagnostic_batch_size=FLAGS.shortcut_diagnostic_batch_size,
+      shortcut_candidate_actions=FLAGS.shortcut_candidate_actions,
       log_pool_cosine=FLAGS.log_pool_cosine,
       log_mixture_norm=FLAGS.log_mixture_norm,
       log_probe_data=FLAGS.log_probe_data,
@@ -1656,7 +1825,7 @@ def main(_):
       critic_pool_vecs = ckpt.get('critic_pool_vectors')
       if critic_pool_vecs is not None:
         critic_pool.load_state_dict(critic_pool_vecs)
-    if FLAGS.critic_mode in ('decomposed', 'rbc_decomposed'):
+    if FLAGS.critic_mode in _DECOMPOSED_CRITIC_MODES:
       prev_b_shared_params = ckpt.get('decomposed_b_shared_params')
       prev_b_shared_opt_state = ckpt.get('decomposed_b_shared_opt_state')
       prev_h_phi_params = ckpt.get('decomposed_h_phi_params')
@@ -1739,7 +1908,39 @@ def main(_):
                   'bellman_tau': FLAGS.bellman_tau,
                   'bellman_hidden_dim': FLAGS.bellman_hidden_dim,
                   'her_reward_threshold': FLAGS.her_reward_threshold,
-                  'step_penalty_reward': FLAGS.step_penalty_reward},
+                  'step_penalty_reward': FLAGS.step_penalty_reward,
+                  'dcc_sac_q_loss_weight': FLAGS.dcc_sac_q_loss_weight,
+                  'dcc_sac_q_learning_rate': FLAGS.dcc_sac_q_learning_rate,
+                  'dcc_sac_discount': FLAGS.dcc_sac_discount,
+                  'dcc_sac_tau': FLAGS.dcc_sac_tau,
+                  'dcc_sac_q_hidden_dim': FLAGS.dcc_sac_q_hidden_dim,
+                  'dcc_sac_beta_max': FLAGS.dcc_sac_beta_max,
+                  'dcc_sac_q_warmup_updates':
+                      FLAGS.dcc_sac_q_warmup_updates,
+                  'dcc_sac_q_ramp_updates': FLAGS.dcc_sac_q_ramp_updates,
+                  'dcc_sac_td_error_threshold':
+                      FLAGS.dcc_sac_td_error_threshold,
+                  'dcc_sac_twin_disagreement_threshold':
+                      FLAGS.dcc_sac_twin_disagreement_threshold,
+                  'dcc_sac_ema_decay': FLAGS.dcc_sac_ema_decay,
+                  'dcc_sac_candidate_actions':
+                      FLAGS.dcc_sac_candidate_actions,
+                  'dcc_sac_normalization_eps':
+                      FLAGS.dcc_sac_normalization_eps,
+                  'dcc_sac_correction_clip': FLAGS.dcc_sac_correction_clip,
+                  'action_contrast_weight': FLAGS.action_contrast_weight,
+                  'action_contrast_temperature':
+                      FLAGS.action_contrast_temperature,
+                  'action_contrast_batch_size':
+                      FLAGS.action_contrast_batch_size,
+                  'shortcut_diagnostic_interval':
+                      FLAGS.shortcut_diagnostic_interval,
+                  'shortcut_diagnostic_batch_size':
+                      FLAGS.shortcut_diagnostic_batch_size,
+                  'shortcut_candidate_actions':
+                      FLAGS.shortcut_candidate_actions,
+                  'post_task_eval_scope':
+                      FLAGS.post_task_eval_scope},
           name=f'task{task_id}_{env_name}_s{seed}',
           reinit=True,
       )
@@ -1835,7 +2036,7 @@ def main(_):
     if FLAGS.critic_mode == 'cka':
       ckpt_data['q_base'] = q_base
       ckpt_data['critic_pool_vectors'] = critic_pool.state_dict()
-    if FLAGS.critic_mode in ('decomposed', 'rbc_decomposed'):
+    if FLAGS.critic_mode in _DECOMPOSED_CRITIC_MODES:
       ckpt_data['decomposed_b_shared_params'] = prev_b_shared_params
       ckpt_data['decomposed_b_shared_opt_state'] = prev_b_shared_opt_state
       ckpt_data['decomposed_h_phi_params'] = prev_h_phi_params
@@ -1855,11 +2056,18 @@ def main(_):
                   _rbc_identity_config()
                   if FLAGS.critic_mode == 'rbc_decomposed' else None))
 
-    # ---- cross-task evaluation (forgetting measurement) ------------------
-    if FLAGS.eval_episodes > 0:
-      print(f'\n  Evaluating on all tasks seen so far...', flush=True)
+    # ---- configurable task-boundary evaluation ---------------------------
+    if (
+        FLAGS.eval_episodes > 0
+        and FLAGS.post_task_eval_scope != 'none'):
+      if FLAGS.post_task_eval_scope == 'current':
+        eval_task_ids = [task_id]
+        print('\n  Evaluating only the task just trained...', flush=True)
+      else:
+        eval_task_ids = list(range(task_id + 1))
+        print('\n  Evaluating on all tasks seen so far...', flush=True)
       eval_results = {}
-      for eval_tid in range(task_id + 1):
+      for eval_tid in eval_task_ids:
         eval_env_name_i = task_sequence[eval_tid]
         sr = evaluate_on_task(
             eval_env_name_i, eval_tid, composed_policy, prev_q, config,
@@ -1867,13 +2075,18 @@ def main(_):
             num_episodes=FLAGS.eval_episodes,
             k_sample_k=FLAGS.k_sample_k)
         eval_results[eval_env_name_i] = sr
-        print(f'    Task {eval_tid} [{eval_env_name_i}]: {sr:.1%}', flush=True)
+        print(
+            f'    Task {eval_tid} [{eval_env_name_i}]: {sr:.1%}',
+            flush=True)
       mean_sr = np.mean(list(eval_results.values()))
       print(f'    Mean success: {mean_sr:.1%}', flush=True)
       if FLAGS.use_wandb and wandb is not None:
-        wandb_eval = {f'eval/{name}': sr for name, sr in eval_results.items()}
+        wandb_eval = {
+            f'eval/{name}': sr for name, sr in eval_results.items()}
         wandb_eval['eval/mean_success'] = mean_sr
-        wandb_eval['eval/num_tasks_seen'] = task_id + 1
+        wandb_eval['eval/num_tasks_evaluated'] = len(eval_task_ids)
+        wandb_eval['eval/scope_all_seen'] = float(
+            FLAGS.post_task_eval_scope == 'all_seen')
         wandb.log(wandb_eval)
 
     # Close the W&B run for this task before starting the next one
