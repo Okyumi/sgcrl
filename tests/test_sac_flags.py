@@ -50,6 +50,7 @@ def _flag_values(**overrides):
     ('actor_depth', 4),
     ('log_rl_metrics', True),
     ('actor_auto_reset', False),
+    ('post_task_eval_scope', 'all_seen'),
     ('auto_resume', True),
     ('start_task', 0),
     ('use_wandb', True),
@@ -77,6 +78,11 @@ def test_unknown_transfer_mode_is_rejected_at_parse_time():
 def test_wandb_mode_offers_online_offline_disabled():
   assert FLAGS['wandb_mode'].parser.enum_values == [
       'online', 'offline', 'disabled']
+
+
+def test_post_task_eval_scope_offers_cost_controls():
+  assert FLAGS['post_task_eval_scope'].parser.enum_values == [
+      'all_seen', 'current', 'none']
 
 
 def test_no_flag_default_looks_like_a_credential():
@@ -202,7 +208,8 @@ def test_wandb_config_records_the_task_identity():
 @pytest.mark.parametrize('key', [
     'actor_mode', 'critic_mode', 'use_task_id', 'adapt_heads_only',
     'encoder_from_base', 'use_20_tasks', 'eval_episodes',
-    'intra_eval_previous_tasks', 'k_sample_k', 'actor_auto_reset',
+    'intra_eval_previous_tasks', 'post_task_eval_scope', 'k_sample_k',
+    'actor_auto_reset',
     'her_reward_threshold', 'step_penalty_reward', 'task_sequence',
 ])
 def test_wandb_config_records_every_ablation_axis(key):
@@ -236,7 +243,8 @@ def test_wandb_config_carries_no_account_details():
     'wandb_project', 'wandb_group', 'wandb_mode', 'wandb_entity',
     'single_task', 'task_sequence', 'use_wandb', 'add_uid', 'auto_resume',
     'use_task_id', 'adapt_heads_only', 'encoder_from_base', 'use_20_tasks',
-    'intra_eval_previous_tasks', 'log_rl_metrics', 'use_residual',
+    'intra_eval_previous_tasks', 'post_task_eval_scope',
+    'log_rl_metrics', 'use_residual',
     'step_penalty_reward', 'actor_auto_reset',
 ])
 def test_flag_used_by_draft_sac_sh_is_defined(name):
