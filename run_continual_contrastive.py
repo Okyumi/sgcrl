@@ -89,9 +89,11 @@ except ImportError:
 # DCC-family modes with separate parameter groups and a reset actor.
 _HYBRID_CRITIC_MODES = (
     'dcc_sac', 'dcc_sac_separate', 'action_dcc', 'action_dcc_sac')
+_Q_HYBRID_CRITIC_MODES = (
+    'dcc_sac', 'dcc_sac_separate', 'action_dcc_sac')
 _DECOMPOSED_CRITIC_MODES = (
     'decomposed', 'rbc_decomposed') + _HYBRID_CRITIC_MODES
-_HER_CRITIC_MODES = ('rbc_decomposed',) + _HYBRID_CRITIC_MODES
+_HER_CRITIC_MODES = ('rbc_decomposed',) + _Q_HYBRID_CRITIC_MODES
 
 # ---- flags ----------------------------------------------------------------
 FLAGS = flags.FLAGS
