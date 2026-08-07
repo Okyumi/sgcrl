@@ -752,7 +752,7 @@ def train_single_task(
           critic_depth=config.critic_depth,
           actor_depth=config.actor_depth,
       )
-    elif critic_mode == 'rbc_decomposed':
+  elif critic_mode == 'rbc_decomposed':
     rbc_nets = make_rbc_networks(
         env_spec, obs_dim=obs_dim,
         repr_dim=config.repr_dim,

@@ -240,53 +240,53 @@ CELLS: list = [
     # budget, HER threshold, evaluation cadence, and diagnostic interval
     # across modes.  Repeat seeds 5/6/7 after the one-seed runtime smoke.
     #
-    # Ordinary DCC diagnostic control:
-    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
-    #  'single_task': 'sawyer_handle_press_side',
-    #  'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
-    #  'post_task_eval_scope': 'current',
-    #  'wandb_group': 'DCC shortcut diagnostic k5'},
-    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
-    #  'single_task': 'sawyer_window_close',
-    #  'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
-    #  'post_task_eval_scope': 'current',
-    #  'wandb_group': 'DCC shortcut diagnostic k8'},
+    # Ordinary DCC diagnostic control (2):
+    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+     'single_task': 'sawyer_handle_press_side',
+     'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'DCC shortcut diagnostic k5'},
+    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+     'single_task': 'sawyer_window_close',
+     'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'DCC shortcut diagnostic k8'},
     #
-    # Stable-Q-gated DCC-SAC:
-    # {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
-    #  'single_task': 'sawyer_handle_press_side',
-    #  'dyn_aux_weight': 1.0, 'dcc_sac_beta_max': 0.1,
-    #  'dcc_sac_q_warmup_updates': 10000,
-    #  'dcc_sac_q_ramp_updates': 25000,
-    #  'shortcut_diagnostic_interval': 1000,
-    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
-    #  'post_task_eval_scope': 'current',
-    #  'wandb_group': 'DCC-SAC gated k5'},
-    # {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
-    #  'single_task': 'sawyer_window_close',
-    #  'dyn_aux_weight': 1.0, 'dcc_sac_beta_max': 0.1,
-    #  'dcc_sac_q_warmup_updates': 10000,
-    #  'dcc_sac_q_ramp_updates': 25000,
-    #  'shortcut_diagnostic_interval': 1000,
-    #  'her_reward_threshold': 0.05, 'step_penalty_reward': True,
-    #  'post_task_eval_scope': 'current',
-    #  'wandb_group': 'DCC-SAC gated k8'},
-    #
-    # Reward-free Action-Contrastive DCC:
-    # {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 5,
-    #  'single_task': 'sawyer_handle_press_side',
-    #  'dyn_aux_weight': 1.0, 'action_contrast_weight': 1.0,
-    #  'action_contrast_temperature': 1.0,
-    #  'shortcut_diagnostic_interval': 1000,
-    #  'post_task_eval_scope': 'current',
-    #  'wandb_group': 'AC-DCC k5'},
-    # {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 5,
-    #  'single_task': 'sawyer_window_close',
-    #  'dyn_aux_weight': 1.0, 'action_contrast_weight': 1.0,
-    #  'action_contrast_temperature': 1.0,
-    #  'shortcut_diagnostic_interval': 1000,
-    #  'post_task_eval_scope': 'current',
-    #  'wandb_group': 'AC-DCC k8'},
+    # Stable-Q-gated DCC-SAC (2):
+    {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
+     'single_task': 'sawyer_handle_press_side',
+     'dyn_aux_weight': 1.0, 'dcc_sac_beta_max': 0.1,
+     'dcc_sac_q_warmup_updates': 10000,
+     'dcc_sac_q_ramp_updates': 25000,
+     'shortcut_diagnostic_interval': 1000,
+     'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'DCC-SAC gated k5'},
+    {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
+     'single_task': 'sawyer_window_close',
+     'dyn_aux_weight': 1.0, 'dcc_sac_beta_max': 0.1,
+     'dcc_sac_q_warmup_updates': 10000,
+     'dcc_sac_q_ramp_updates': 25000,
+     'shortcut_diagnostic_interval': 1000,
+     'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'DCC-SAC gated k8'},
+    
+    # Reward-free Action-Contrastive DCC (2):
+    {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 5,
+     'single_task': 'sawyer_handle_press_side',
+     'dyn_aux_weight': 1.0, 'action_contrast_weight': 1.0,
+     'action_contrast_temperature': 1.0,
+     'shortcut_diagnostic_interval': 1000,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'AC-DCC k5'},
+    {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 5,
+     'single_task': 'sawyer_window_close',
+     'dyn_aux_weight': 1.0, 'action_contrast_weight': 1.0,
+     'action_contrast_temperature': 1.0,
+     'shortcut_diagnostic_interval': 1000,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'AC-DCC k8'},
     #
     # Required ablations after the main smoke:
     #   dcc_sac_separate -- actor ignores DCC and uses Q only.
@@ -298,7 +298,7 @@ CELLS: list = [
     # post_task_eval_scope=current avoids a full past-task sweep at each
     # task boundary.
     #
-    # Stable-Q-gated DCC-SAC:
+    # Stable-Q-gated DCC-SAC (3):
     {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
      'dyn_aux_weight': 1.0, 'combine_mode': 'add',
      'goal_encoder_mode': 'shared', 'dcc_sac_beta_max': 0.1,
@@ -327,7 +327,7 @@ CELLS: list = [
      'post_task_eval_scope': 'current',
      'wandb_group': 'DCC-SAC-continual-10-task'},
     #
-    # Reward-free Action-Contrastive DCC:
+    # Reward-free Action-Contrastive DCC (3):
     {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 5,
      'dyn_aux_weight': 1.0, 'combine_mode': 'add',
      'goal_encoder_mode': 'shared', 'action_contrast_weight': 1.0,
