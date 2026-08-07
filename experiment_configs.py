@@ -291,6 +291,64 @@ CELLS: list = [
     # Required ablations after the main smoke:
     #   dcc_sac_separate -- actor ignores DCC and uses Q only.
     #   action_dcc_sac   -- AC-DCC plus the same stable Q correction.
+
+    # ---- Full 10-task continual curriculum: main new algorithms -----------
+    # Matched seeds 5/6/7.  These cells intentionally omit single_task.
+    # Intra-task evaluation of previous tasks remains off by default, and
+    # post_task_eval_scope=current avoids a full past-task sweep at each
+    # task boundary.
+    #
+    # Stable-Q-gated DCC-SAC:
+    {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'dcc_sac_beta_max': 0.1,
+     'dcc_sac_q_warmup_updates': 10000,
+     'dcc_sac_q_ramp_updates': 25000,
+     'shortcut_diagnostic_interval': 1000,
+     'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'DCC-SAC-continual-10-task'},
+    {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 6,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'dcc_sac_beta_max': 0.1,
+     'dcc_sac_q_warmup_updates': 10000,
+     'dcc_sac_q_ramp_updates': 25000,
+     'shortcut_diagnostic_interval': 1000,
+     'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'DCC-SAC-continual-10-task'},
+    {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 7,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'dcc_sac_beta_max': 0.1,
+     'dcc_sac_q_warmup_updates': 10000,
+     'dcc_sac_q_ramp_updates': 25000,
+     'shortcut_diagnostic_interval': 1000,
+     'her_reward_threshold': 0.05, 'step_penalty_reward': True,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'DCC-SAC-continual-10-task'},
+    #
+    # Reward-free Action-Contrastive DCC:
+    {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 5,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'action_contrast_weight': 1.0,
+     'action_contrast_temperature': 1.0,
+     'shortcut_diagnostic_interval': 1000,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'AC-DCC-continual-10-task'},
+    {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 6,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'action_contrast_weight': 1.0,
+     'action_contrast_temperature': 1.0,
+     'shortcut_diagnostic_interval': 1000,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'AC-DCC-continual-10-task'},
+    {'actor_mode': 'reset', 'critic_mode': 'action_dcc', 'seed': 7,
+     'dyn_aux_weight': 1.0, 'combine_mode': 'add',
+     'goal_encoder_mode': 'shared', 'action_contrast_weight': 1.0,
+     'action_contrast_temperature': 1.0,
+     'shortcut_diagnostic_interval': 1000,
+     'post_task_eval_scope': 'current',
+     'wandb_group': 'AC-DCC-continual-10-task'},
 ]
 
 
