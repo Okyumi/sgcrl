@@ -80,7 +80,9 @@ EXTRA_OVERRIDES: dict = {}
 #     lands).
 # =====================================================================
 
-CELLS: list = [
+# Previously submitted task-5/task-8 and hybrid batches are retained here for
+# provenance but are intentionally excluded from build_configs().
+ARCHIVED_CELLS: list = [
     # ---- C0: CKA-failure diagnostic (D7) ----------------------------
     # {'actor_mode': 'cka', 'critic_mode': 'cka', 'seed': 5,
     #  'log_mixture_norm': True, 'log_pool_cosine': True},
@@ -349,6 +351,55 @@ CELLS: list = [
      'shortcut_diagnostic_interval': 1000,
      'post_task_eval_scope': 'current',
      'wandb_group': 'AC-DCC-continual-10-task'},
+]
+
+
+# =====================================================================
+# Active batch — persistent-actor DCC ablation
+# =====================================================================
+
+# Matched to the reported DCC seeds (5, 6, 7). Both cells keep the DCC
+# critic lifecycle unchanged: b_shared / h_phi / h_dyn / psi persist and
+# phi_task resets. The only actor-side change is actor_mode='persistent'.
+CELLS: list = [
+    # DCC with masked-dynamics auxiliary (mu=1).
+    *[
+        {
+            'actor_mode': 'persistent',
+            'critic_mode': 'decomposed',
+            'seed': seed,
+            'dyn_aux_weight': 1.0,
+            'combine_mode': 'add',
+            'goal_encoder_mode': 'shared',
+            'single_task': '',
+            'use_task_id': False,
+            'actor_auto_reset': False,
+            'shortcut_diagnostic_interval': 0,
+            'log_probe_data': True,
+            'post_task_eval_scope': 'current',
+            'wandb_group': 'DCC-persistent-actor-dynamics',
+        }
+        for seed in (5, 6, 7)
+    ],
+    # DCC without masked-dynamics auxiliary (mu=0).
+    *[
+        {
+            'actor_mode': 'persistent',
+            'critic_mode': 'decomposed',
+            'seed': seed,
+            'dyn_aux_weight': 0.0,
+            'combine_mode': 'add',
+            'goal_encoder_mode': 'shared',
+            'single_task': '',
+            'use_task_id': False,
+            'actor_auto_reset': False,
+            'shortcut_diagnostic_interval': 0,
+            'log_probe_data': True,
+            'post_task_eval_scope': 'current',
+            'wandb_group': 'DCC-persistent-actor-no-dynamics',
+        }
+        for seed in (5, 6, 7)
+    ],
 ]
 
 
