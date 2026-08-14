@@ -592,6 +592,11 @@ def train_single_task(
     q_base: Optional[networks_lib.Params] = None,
     critic_pool: Optional[KnowledgePool] = None,
     neg_bank=None,
+    # ---- DCC actor carry (used only by decomposed + persistent actor) -----
+    prev_dcc_policy_params: Optional[networks_lib.Params] = None,
+    prev_dcc_policy_opt_state=None,
+    prev_dcc_alpha_params=None,
+    prev_dcc_alpha_opt_state=None,
     # ---- shared DCC carry (used by decomposed and rbc_decomposed) ----------
     prev_b_shared_params: Optional[networks_lib.Params] = None,
     prev_b_shared_opt_state=None,
@@ -604,13 +609,12 @@ def train_single_task(
 ):
   """Train on a single task and return (theta_base, learner) for the next task.
 
-  When ``critic_mode`` is ``decomposed`` or ``rbc_decomposed``, the actor /
-  pool plumbing is
-  bypassed and the decomposed critic state is carried through the
-  ``prev_b_shared_*`` / ``prev_h_phi_*`` / ``prev_h_dyn_*`` /
-  ``prev_psi_*`` arguments instead. The returned tuple's actor/pool
-  fields are placeholders in that case (see the bottom of this
-  function).
+  When ``critic_mode`` is ``decomposed`` or ``rbc_decomposed``, the CKA actor
+  pool plumbing is bypassed and the decomposed critic state is carried through
+  the ``prev_b_shared_*`` / ``prev_h_phi_*`` / ``prev_h_dyn_*`` /
+  ``prev_psi_*`` arguments instead. Plain DCC additionally uses the
+  ``prev_dcc_*`` slots when ``actor_mode='persistent'``; the legacy CKA
+  actor/pool return slots remain placeholders for decomposed modes.
   """
 
   np.random.seed(seed + task_id)
@@ -641,7 +645,7 @@ def train_single_task(
     if actor_mode == 'cka':
       raise ValueError(
           f"critic_mode={critic_mode!r} is incompatible with actor_mode='cka' "
-          "(proposal 1 keeps the actor reset; use actor_mode='reset').")
+          "(use actor_mode='reset' or, for plain DCC, 'persistent').")
     if FLAGS.k_sample_k > 0:
       raise ValueError(
           f"critic_mode={critic_mode!r} does not currently support "
@@ -748,7 +752,7 @@ def train_single_task(
           critic_depth=config.critic_depth,
           actor_depth=config.actor_depth,
       )
-    elif critic_mode == 'rbc_decomposed':
+  elif critic_mode == 'rbc_decomposed':
     rbc_nets = make_rbc_networks(
         env_spec, obs_dim=obs_dim,
         repr_dim=config.repr_dim,
@@ -938,6 +942,11 @@ def train_single_task(
         config=config,
         continual_config=continual_cfg,
         task_id=task_id,
+        actor_mode=actor_mode,
+        prev_policy_params=prev_dcc_policy_params,
+        prev_policy_opt_state=prev_dcc_policy_opt_state,
+        prev_alpha_params=prev_dcc_alpha_params,
+        prev_alpha_opt_state=prev_dcc_alpha_opt_state,
         prev_b_shared_params=prev_b_shared_params,
         prev_b_shared_opt_state=prev_b_shared_opt_state,
         prev_h_phi_params=prev_h_phi_params,
@@ -1402,12 +1411,10 @@ def train_single_task(
 
   # ---- extract state for next task ---------------------------------------
   if critic_mode in _DECOMPOSED_CRITIC_MODES:
-    # The decomposed actor is reset every task: there is no v_k pool to
-    # extract, no theta_base to fold, no critic CKA pool to update. The
-    # only carry is the four shared critic groups (b_shared / h_phi /
-    # h_dyn / psi) plus their optimiser states. phi_task and the actor
-    # are reinitialised inside ContinualDecomposedLearner at the next
-    # task's construction.
+    # There is no v_k actor pool or critic CKA pool. Plain DCC optionally
+    # carries the actor, actor optimiser, and entropy state when
+    # actor_mode='persistent'; all other decomposed-family modes reset the
+    # actor. The shared critic groups and their optimiser states always carry.
     out_theta_base = None
     out_q_params = None
     out_target_q_params = None
@@ -1423,9 +1430,21 @@ def train_single_task(
     out_h_dyn_opt_state = learner.h_dyn_opt_state
     out_psi_params = learner.psi_params
     out_psi_opt_state = learner.psi_opt_state
+    if critic_mode == 'decomposed' and actor_mode == 'persistent':
+      out_dcc_policy_params = learner.policy_params
+      out_dcc_policy_opt_state = learner.policy_opt_state
+      out_dcc_alpha_params = learner.alpha_params
+      out_dcc_alpha_opt_state = learner.alpha_opt_state
+      actor_handoff = 'actor / actor optimizer / entropy state carried'
+    else:
+      out_dcc_policy_params = None
+      out_dcc_policy_opt_state = None
+      out_dcc_alpha_params = None
+      out_dcc_alpha_opt_state = None
+      actor_handoff = 'actor reinitialised next task'
     print(
         f'  [{critic_mode}] Carrying b_shared / h_phi / h_dyn / psi to task '
-        f'{task_id + 1}; phi_task and actor reinitialised next task.',
+        f'{task_id + 1}; phi_task reinitialised; {actor_handoff}.',
         flush=True,
     )
 
@@ -1453,6 +1472,8 @@ def train_single_task(
         out_h_phi_params, out_h_phi_opt_state,
         out_h_dyn_params, out_h_dyn_opt_state,
         out_psi_params, out_psi_opt_state,
+        out_dcc_policy_params, out_dcc_policy_opt_state,
+        out_dcc_alpha_params, out_dcc_alpha_opt_state,
     )
 
   v_k = learner.v_k
@@ -1641,6 +1662,8 @@ def train_single_task(
       None, None,  # h_phi params / opt_state
       None, None,  # h_dyn params / opt_state
       None, None,  # psi params / opt_state
+      None, None,  # DCC policy params / opt_state
+      None, None,  # DCC entropy params / opt_state
   )
 
 
@@ -1772,6 +1795,10 @@ def main(_):
   prev_h_dyn_opt_state = None
   prev_psi_params = None
   prev_psi_opt_state = None
+  prev_dcc_policy_params = None
+  prev_dcc_policy_opt_state = None
+  prev_dcc_alpha_params = None
+  prev_dcc_alpha_opt_state = None
 
   # Previous-replay negative bank (offline-to-online variant)
   # goal_dim = config.obs_dim (state and goal have identical dimensionality
@@ -1847,6 +1874,12 @@ def main(_):
       prev_h_dyn_opt_state = ckpt.get('decomposed_h_dyn_opt_state')
       prev_psi_params = ckpt.get('decomposed_psi_params')
       prev_psi_opt_state = ckpt.get('decomposed_psi_opt_state')
+      if FLAGS.critic_mode == 'decomposed' and FLAGS.actor_mode == 'persistent':
+        prev_dcc_policy_params = ckpt.get('decomposed_policy_params')
+        prev_dcc_policy_opt_state = ckpt.get(
+            'decomposed_policy_opt_state')
+        prev_dcc_alpha_params = ckpt.get('decomposed_alpha_params')
+        prev_dcc_alpha_opt_state = ckpt.get('decomposed_alpha_opt_state')
 
   for task_id in range(start_task, num_tasks):
     env_name = task_sequence[task_id]
@@ -1991,7 +2024,9 @@ def main(_):
      prev_b_shared_params, prev_b_shared_opt_state,
      prev_h_phi_params, prev_h_phi_opt_state,
      prev_h_dyn_params, prev_h_dyn_opt_state,
-     prev_psi_params, prev_psi_opt_state) = train_single_task(
+     prev_psi_params, prev_psi_opt_state,
+     prev_dcc_policy_params, prev_dcc_policy_opt_state,
+     prev_dcc_alpha_params, prev_dcc_alpha_opt_state) = train_single_task(
         task_id=task_id,
         env_name=env_name,
         config=config,
@@ -2010,6 +2045,10 @@ def main(_):
         q_base=q_base,
         critic_pool=critic_pool,
         neg_bank=neg_bank,
+        prev_dcc_policy_params=prev_dcc_policy_params,
+        prev_dcc_policy_opt_state=prev_dcc_policy_opt_state,
+        prev_dcc_alpha_params=prev_dcc_alpha_params,
+        prev_dcc_alpha_opt_state=prev_dcc_alpha_opt_state,
         # Decomposed-critic carry (None for non-decomposed paths).
         prev_b_shared_params=prev_b_shared_params,
         prev_b_shared_opt_state=prev_b_shared_opt_state,
@@ -2060,6 +2099,12 @@ def main(_):
       ckpt_data['decomposed_h_dyn_opt_state'] = prev_h_dyn_opt_state
       ckpt_data['decomposed_psi_params'] = prev_psi_params
       ckpt_data['decomposed_psi_opt_state'] = prev_psi_opt_state
+      if FLAGS.critic_mode == 'decomposed':
+        ckpt_data['decomposed_policy_params'] = prev_dcc_policy_params
+        ckpt_data['decomposed_policy_opt_state'] = (
+            prev_dcc_policy_opt_state)
+        ckpt_data['decomposed_alpha_params'] = prev_dcc_alpha_params
+        ckpt_data['decomposed_alpha_opt_state'] = prev_dcc_alpha_opt_state
     save_ckpt(FLAGS.checkpoint_dir, task_id, seed, ckpt_data,
               critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
               adapt_heads_only=FLAGS.adapt_heads_only,

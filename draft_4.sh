@@ -9,7 +9,7 @@
 #SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%A_%a.out
 #SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
-#SBATCH --array=0-22
+#SBATCH --array=0-2
 
 # ==========================================================================
 # Continual Goal-Conditioned Contrastive RL – Batch SLURM Launcher

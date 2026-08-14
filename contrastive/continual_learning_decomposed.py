@@ -24,13 +24,13 @@ Trainable groups (each has its own optimiser state):
   h_dyn        : sees dyn_aux_weight * L_dyn
   phi_task     : sees L_InfoNCE                  (reset every task)
   psi          : sees L_InfoNCE
-  actor params : sees actor objective only       (reset every task)
+  actor params : sees actor objective only       (reset or persistent)
 
 Continual handoff at task k > 0:
 
   b_shared, h_phi, h_dyn, psi, q_optimizer states for them   -> carry over
   phi_task params + opt state                                 -> reinit
-  actor params + opt state                                    -> reinit (reset)
+  actor params + opt state + entropy state                     -> actor-mode
 
 The actor objective matches the existing SGCRL learner: optionally roll
 goals via ``config.random_goals`` (0.0 / 0.5 / 1.0), then maximise the
@@ -42,7 +42,8 @@ Excluded from this learner intentionally (out of scope for proposal 1):
   - Twin Q
   - Negative bank
   - Image observations
-  - Actor CKA decomposition (use ``actor_mode='reset'``)
+  - Actor CKA decomposition (use ``actor_mode='reset'`` or
+    ``actor_mode='persistent'``)
 
 The orchestrator should fall back to ``ContinualContrastiveLearner`` for
 any cell that needs the above features.
@@ -80,7 +81,7 @@ class DecomposedTrainingState(NamedTuple):
   Five critic parameter groups (b_shared, h_phi, h_dyn, phi_task, psi)
   plus the actor (policy_params) and the adaptive entropy temperature.
   """
-  # Actor (reset every task)
+  # Actor (reset or carried according to actor_mode)
   policy_params: networks_lib.Params
   policy_opt_state: optax.OptState
 
@@ -136,7 +137,13 @@ class ContinualDecomposedLearner(acme.Learner):
       config: contrastive_config.ContrastiveConfig,
       continual_config,
       task_id: int = 0,
-      # State carried in from previous task (decomposed components only).
+      actor_mode: str = 'reset',
+      # Actor state carried only when actor_mode='persistent'.
+      prev_policy_params: Optional[networks_lib.Params] = None,
+      prev_policy_opt_state: Optional[optax.OptState] = None,
+      prev_alpha_params: Optional[jnp.ndarray] = None,
+      prev_alpha_opt_state: Optional[optax.OptState] = None,
+      # Shared critic state carried in from the previous task.
       prev_b_shared_params: Optional[networks_lib.Params] = None,
       prev_b_shared_opt_state: Optional[optax.OptState] = None,
       prev_h_phi_params: Optional[networks_lib.Params] = None,
@@ -153,6 +160,10 @@ class ContinualDecomposedLearner(acme.Learner):
           'Set use_td=False or use a different critic_mode.')
     if getattr(config, 'twin_q', False):
       raise ValueError('critic_mode=decomposed does not support twin_q.')
+    if actor_mode not in ('reset', 'persistent'):
+      raise ValueError(
+          'critic_mode=decomposed supports actor_mode in '
+          "{'reset', 'persistent'} only.")
 
     self._iterator = iterator
     self._counter = counter or counting.Counter()
@@ -164,6 +175,7 @@ class ContinualDecomposedLearner(acme.Learner):
     self._sample_fn = sample_fn
     self._log_prob_fn = log_prob_fn
     self._task_id = task_id
+    self._actor_mode = actor_mode
     self._timestamp: Optional[float] = None
     self._last_metrics: Dict[str, float] = {}
 
@@ -223,15 +235,35 @@ class ContinualDecomposedLearner(acme.Learner):
           prev_psi_opt_state if prev_psi_opt_state is not None
           else self._psi_opt.init(psi_params))
 
-    # Task-specific encoder + actor reinitialised every task.
+    # The task-specific critic encoder is always reinitialised. The actor
+    # follows actor_mode: reset starts from a fresh policy, while persistent
+    # carries both policy parameters and Adam state without modification.
     phi_task_params = decomp_nets.init_phi_task(subkeys[4])
     phi_task_opt_state = self._phi_task_opt.init(phi_task_params)
-    policy_params = policy_network.init(subkeys[5])
-    policy_opt_state = self._actor_opt.init(policy_params)
+    carry_actor = actor_mode == 'persistent' and task_id > 0
+    if carry_actor:
+      if prev_policy_params is None or prev_policy_opt_state is None:
+        raise ValueError(
+            'Persistent DCC actor requires previous policy parameters and '
+            'optimizer state at task_id > 0. Start from task 0 or resume from '
+            'a persistent-actor DCC checkpoint.')
+      policy_params = prev_policy_params
+      policy_opt_state = prev_policy_opt_state
+    else:
+      policy_params = policy_network.init(subkeys[5])
+      policy_opt_state = self._actor_opt.init(policy_params)
 
     if self._adaptive_entropy:
-      alpha_params = jnp.array(log_alpha_init, dtype=jnp.float32)
-      alpha_opt_state = self._alpha_opt.init(alpha_params)
+      if carry_actor:
+        if prev_alpha_params is None or prev_alpha_opt_state is None:
+          raise ValueError(
+              'Persistent DCC actor requires previous entropy parameters and '
+              'optimizer state at task_id > 0.')
+        alpha_params = prev_alpha_params
+        alpha_opt_state = prev_alpha_opt_state
+      else:
+        alpha_params = jnp.array(log_alpha_init, dtype=jnp.float32)
+        alpha_opt_state = self._alpha_opt.init(alpha_params)
     else:
       alpha_params = None
       alpha_opt_state = None
@@ -664,6 +696,18 @@ class ContinualDecomposedLearner(acme.Learner):
   @property
   def policy_params(self):
     return self._state.policy_params
+
+  @property
+  def policy_opt_state(self):
+    return self._state.policy_opt_state
+
+  @property
+  def alpha_params(self):
+    return self._state.alpha_params
+
+  @property
+  def alpha_opt_state(self):
+    return self._state.alpha_optimizer_state
 
   @property
   def last_metrics(self):
