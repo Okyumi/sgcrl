@@ -244,16 +244,16 @@ ARCHIVED_CELLS: list = [
     # across modes.  Repeat seeds 5/6/7 after the one-seed runtime smoke.
     #
     # Ordinary DCC diagnostic control (2):
-    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
-     'single_task': 'sawyer_handle_press_side',
-     'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
-     'post_task_eval_scope': 'current',
-     'wandb_group': 'DCC shortcut diagnostic k5'},
-    {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
-     'single_task': 'sawyer_window_close',
-     'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
-     'post_task_eval_scope': 'current',
-     'wandb_group': 'DCC shortcut diagnostic k8'},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+    #  'single_task': 'sawyer_handle_press_side',
+    #  'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
+    #  'post_task_eval_scope': 'current',
+    #  'wandb_group': 'DCC shortcut diagnostic k5'},
+    # {'actor_mode': 'reset', 'critic_mode': 'decomposed', 'seed': 5,
+    #  'single_task': 'sawyer_window_close',
+    #  'dyn_aux_weight': 1.0, 'shortcut_diagnostic_interval': 1000,
+    #  'post_task_eval_scope': 'current',
+    #  'wandb_group': 'DCC shortcut diagnostic k8'},
     #
     # Stable-Q-gated DCC-SAC (2):
     {'actor_mode': 'reset', 'critic_mode': 'dcc_sac', 'seed': 5,
