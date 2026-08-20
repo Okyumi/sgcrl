@@ -76,6 +76,13 @@ class ContinualConfig:
   # path canonical and rely on the projection knob for ablations.
   goal_encoder_mode: str = 'shared'
 
+  # -- StableCRL / CRTR in-trajectory negatives -----------------------------
+  # 1 preserves the legacy sampler exactly. Values >1 draw multiple
+  # independently relabeled (s, a, future-goal) pairs from each sampled
+  # episode, so other pairs from the same episode become hard in-batch
+  # negatives. StableCRL uses 12 by default.
+  in_trajectory_negative_repeats: int = 1
+
   # -- RBC-DCC Bellman calibration ------------------------------------------
   bellman_loss_weight: float = 1.0
   bellman_residual_l2_weight: float = 1e-4

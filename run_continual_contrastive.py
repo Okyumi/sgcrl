@@ -68,6 +68,7 @@ from contrastive.continual_learning_dcc_sac import ContinualDCCSACLearner
 from contrastive.decomposed_networks import make_decomposed_networks
 from contrastive.rbc_networks import make_rbc_networks
 from contrastive import rbc_checkpointing
+from contrastive import intrajectory
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
     cosine_matrix_from_vectors,
@@ -251,6 +252,11 @@ flags.DEFINE_string('goal_encoder_mode', 'shared',
                     '"projected" (adds a Linear projection on top of psi(g) '
                     'regardless of combine_mode; useful ablation for '
                     'isolating the contribution of the projection itself).')
+flags.DEFINE_integer(
+    'in_trajectory_negative_repeats', 1,
+    'Number of independently relabeled state--future-goal pairs sampled '
+    'from each replay episode. 1 preserves the legacy sampler; values >1 '
+    'enable CRTR/StableCRL in-trajectory negatives. StableCRL uses 12.')
 flags.DEFINE_float('bellman_loss_weight', 1.0,
                    'RBC-DCC weight lambda_Q on the twin scalar TD loss.')
 flags.DEFINE_float('bellman_residual_l2_weight', 1e-4,
@@ -409,7 +415,8 @@ def _git_commit_sha():
 def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
                use_task_id=True, adapt_heads_only=True, actor_mode='cka',
                dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
-               rbc_config=None):
+               rbc_config=None, in_trajectory_negative_repeats=1,
+               single_task=''):
   """Checkpoint path keyed by all ablation-relevant config.
 
   Base structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
@@ -432,6 +439,11 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
       v is not None for v in (dyn_aux_weight, phi_task_width, phi_task_depth)):
     config_key += (f'_dyn{float(dyn_aux_weight):.3f}'
                    f'_pt{int(phi_task_width)}x{int(phi_task_depth)}')
+  if (critic_mode == 'decomposed'
+      and int(in_trajectory_negative_repeats) > 1):
+    config_key += f'_itn{int(in_trajectory_negative_repeats)}'
+    if single_task:
+      config_key += f'_env_{single_task}'
   if critic_mode == 'rbc_decomposed':
     if rbc_config is None:
       raise ValueError('rbc_config is required for RBC-DCC checkpoints.')
@@ -447,13 +459,17 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
 def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
-              rbc_config=None):
+              rbc_config=None, in_trajectory_negative_repeats=1,
+              single_task=''):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode,
                      dyn_aux_weight=dyn_aux_weight,
                      phi_task_width=phi_task_width,
                      phi_task_depth=phi_task_depth,
-                     rbc_config=rbc_config)
+                     rbc_config=rbc_config,
+                     in_trajectory_negative_repeats=
+                         in_trajectory_negative_repeats,
+                     single_task=single_task)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_util.tree_map(
@@ -467,17 +483,22 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
-              rbc_config=None):
+              rbc_config=None, in_trajectory_negative_repeats=1,
+              single_task=''):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode,
                      dyn_aux_weight=dyn_aux_weight,
                      phi_task_width=phi_task_width,
                      phi_task_depth=phi_task_depth,
-                     rbc_config=rbc_config)
+                     rbc_config=rbc_config,
+                     in_trajectory_negative_repeats=
+                         in_trajectory_negative_repeats,
+                     single_task=single_task)
   if not os.path.exists(path):
     # Migration notice: check whether a legacy (pre-2026-05-14)
     # un-disambiguated decomposed checkpoint exists at the OLD path.
-    if critic_mode == 'decomposed':
+    if (critic_mode == 'decomposed'
+        and int(in_trajectory_negative_repeats) == 1):
       legacy_path = _ckpt_path(
           ckpt_dir, task_id, seed, critic_mode, use_task_id,
           adapt_heads_only, actor_mode,
@@ -801,6 +822,29 @@ def train_single_task(
       sac_her.tensorflow_ops()
       if critic_mode in _HER_CRITIC_MODES else None)
 
+  in_trajectory_repeats = int(getattr(
+      continual_cfg, 'in_trajectory_negative_repeats', 1))
+  intrajectory.validate_repetition_factor(
+      in_trajectory_repeats,
+      batch_size=config.batch_size,
+      episode_transitions=config.max_episode_steps)
+  if in_trajectory_repeats > 1 and critic_mode != 'decomposed':
+    raise ValueError(
+        'In-trajectory negatives are currently implemented only for plain '
+        'DCC (critic_mode="decomposed"); got '
+        f'critic_mode={critic_mode!r}.')
+  trajectories_per_critic_batch = intrajectory.trajectories_per_batch(
+      config.batch_size, in_trajectory_repeats)
+  if in_trajectory_repeats > 1:
+    counts = intrajectory.in_batch_repetition_counts(
+        config.batch_size, in_trajectory_repeats)
+    print(
+        '  [in-trajectory negatives] '
+        f'r={in_trajectory_repeats}; '
+        f'{trajectories_per_critic_batch} replay episodes per '
+        f'{config.batch_size}-row critic batch; group sizes={counts}.',
+        flush=True)
+
   @tf.function
   def flatten_fn(sample):
     seq_len = tf.shape(sample.data.observation)[0]
@@ -845,6 +889,40 @@ def train_single_task(
     transition = tree.map_structure(lambda t: tf.roll(t, shift, axis=0), transition)
     return transition
 
+  @tf.function
+  def flatten_intrajectory_fn(sample):
+    """Draw repeated pairs from one episode for CRTR/StableCRL negatives."""
+    seq_len = tf.shape(sample.data.observation)[0]
+    num_transitions = seq_len - 1
+    anchor_index = tf.random.uniform(
+        shape=(in_trajectory_repeats,), minval=0,
+        maxval=num_transitions, dtype=tf.int32)
+    candidate_index = tf.range(seq_len, dtype=tf.int32)
+    is_future = tf.cast(
+        anchor_index[:, None] < candidate_index[None, :], tf.float32)
+    delta = candidate_index[None, :] - anchor_index[:, None]
+    probs = is_future * (
+        config.discount ** tf.cast(delta, tf.float32))
+    goal_index = tf.random.categorical(
+        logits=tf.math.log(probs), num_samples=1)[:, 0]
+    all_state = sample.data.observation[:, :config.obs_dim]
+    all_goal = contrastive_utils.obs_to_goal_2d(
+        all_state, start_index=config.start_index,
+        end_index=config.end_index)
+    state = tf.gather(all_state, anchor_index)
+    next_state = tf.gather(all_state, anchor_index + 1)
+    goal = tf.gather(all_goal, goal_index)
+    return types.Transition(
+        observation=tf.concat([state, goal], axis=1),
+        action=tf.gather(sample.data.action, anchor_index),
+        reward=tf.gather(sample.data.reward, anchor_index),
+        discount=tf.gather(sample.data.discount, anchor_index),
+        next_observation=tf.concat([next_state, goal], axis=1),
+        extras={
+            'next_action': tf.gather(
+                sample.data.action, anchor_index + 1),
+        })
+
   # Use a single interleave worker to avoid deadlocks with drop_remainder
   # batching during early sampling when the replay buffer is small.
   num_parallel_calls = 1
@@ -854,14 +932,33 @@ def train_single_task(
         server_address=replay_client.server_address,
         table=config.replay_table_name,
         max_in_flight_samples_per_worker=100)
-    ds = ds.map(flatten_fn)
+    ds = ds.map(
+        flatten_intrajectory_fn
+        if in_trajectory_repeats > 1 else flatten_fn)
     def _transpose_fn(t):
       dims = tf.range(tf.shape(tf.shape(t))[0])
       perm = tf.concat([[1, 0], dims[2:]], axis=0)
       return tf.transpose(t, perm)
-    ds = ds.batch(config.batch_size, drop_remainder=True)
-    ds = ds.map(lambda tr: tree.map_structure(_transpose_fn, tr))
-    ds = ds.unbatch().unbatch()
+    if in_trajectory_repeats > 1:
+      ds = ds.batch(trajectories_per_critic_batch, drop_remainder=True)
+
+      def _pack_intrajectory_batch(tr):
+        def _pack(t):
+          # ``Dataset.batch`` produces [episode, repetition, ...].
+          shape = tf.shape(t)
+          packed = tf.reshape(
+              t,
+              tf.concat([[shape[0] * shape[1]], shape[2:]], axis=0))
+          return packed[:config.batch_size]
+        return tree.map_structure(_pack, tr)
+
+      ds = ds.map(_pack_intrajectory_batch)
+      ds = ds.unbatch()
+    else:
+      # Legacy path is intentionally unchanged.
+      ds = ds.batch(config.batch_size, drop_remainder=True)
+      ds = ds.map(lambda tr: tree.map_structure(_transpose_fn, tr))
+      ds = ds.unbatch().unbatch()
     return ds
 
   dataset = tf.data.Dataset.from_tensors(0).repeat()
@@ -886,6 +983,9 @@ def train_single_task(
   # ---- learner -----------------------------------------------------------
   config_tag = (f'actor_{FLAGS.actor_mode}_critic_{critic_mode}'
                 f'_tid_{FLAGS.use_task_id}_heads_{FLAGS.adapt_heads_only}')
+  if (critic_mode == 'decomposed'
+      and FLAGS.in_trajectory_negative_repeats > 1):
+    config_tag += f'_itn{FLAGS.in_trajectory_negative_repeats}'
   if critic_mode == 'rbc_decomposed':
     config_tag += (
         f'_rbc_{rbc_checkpointing.config_fingerprint(_rbc_identity_config())}')
@@ -1398,7 +1498,10 @@ def train_single_task(
               phi_task_depth=FLAGS.phi_task_depth,
               rbc_config=(
                   _rbc_identity_config()
-                  if critic_mode == 'rbc_decomposed' else None))),
+                  if critic_mode == 'rbc_decomposed' else None),
+              in_trajectory_negative_repeats=
+                  FLAGS.in_trajectory_negative_repeats,
+              single_task=FLAGS.single_task)),
           f'probe_data_task{task_id}_seed{seed}.npz',
       )
       os.makedirs(os.path.dirname(probe_path), exist_ok=True)
@@ -1562,7 +1665,10 @@ def train_single_task(
               FLAGS.use_task_id, adapt_heads_only, actor_mode,
               dyn_aux_weight=FLAGS.dyn_aux_weight,
               phi_task_width=FLAGS.phi_task_width,
-              phi_task_depth=FLAGS.phi_task_depth)),
+              phi_task_depth=FLAGS.phi_task_depth,
+              in_trajectory_negative_repeats=
+                  FLAGS.in_trajectory_negative_repeats,
+              single_task=FLAGS.single_task)),
           f'pool_cosine_actor_task{task_id}.npy',
       )
       os.makedirs(os.path.dirname(mat_path), exist_ok=True)
@@ -1613,7 +1719,10 @@ def train_single_task(
                 FLAGS.use_task_id, adapt_heads_only, actor_mode,
                 dyn_aux_weight=FLAGS.dyn_aux_weight,
                 phi_task_width=FLAGS.phi_task_width,
-                phi_task_depth=FLAGS.phi_task_depth)),
+                phi_task_depth=FLAGS.phi_task_depth,
+                in_trajectory_negative_repeats=
+                    FLAGS.in_trajectory_negative_repeats,
+                single_task=FLAGS.single_task)),
             f'pool_cosine_critic_task{task_id}.npy',
         )
         os.makedirs(os.path.dirname(mat_path), exist_ok=True)
@@ -1705,6 +1814,8 @@ def main(_):
       phi_task_depth=FLAGS.phi_task_depth,
       combine_mode=FLAGS.combine_mode,
       goal_encoder_mode=FLAGS.goal_encoder_mode,
+      in_trajectory_negative_repeats=
+          FLAGS.in_trajectory_negative_repeats,
       bellman_loss_weight=FLAGS.bellman_loss_weight,
       bellman_residual_l2_weight=FLAGS.bellman_residual_l2_weight,
       bellman_discount=FLAGS.bellman_discount,
@@ -1833,7 +1944,10 @@ def main(_):
           phi_task_depth=FLAGS.phi_task_depth,
           rbc_config=(
               _rbc_identity_config()
-              if FLAGS.critic_mode == 'rbc_decomposed' else None))
+              if FLAGS.critic_mode == 'rbc_decomposed' else None),
+          in_trajectory_negative_repeats=
+              FLAGS.in_trajectory_negative_repeats,
+          single_task=FLAGS.single_task)
       if os.path.exists(probe_path):
         start_task = probe_tid + 1  # resume from the NEXT task
         print(f'  [auto-resume] Found checkpoint for task {probe_tid} '
@@ -1858,7 +1972,10 @@ def main(_):
                       phi_task_depth=FLAGS.phi_task_depth,
                       rbc_config=(
                           _rbc_identity_config()
-                          if FLAGS.critic_mode == 'rbc_decomposed' else None))
+                          if FLAGS.critic_mode == 'rbc_decomposed' else None),
+                      in_trajectory_negative_repeats=
+                          FLAGS.in_trajectory_negative_repeats,
+                      single_task=FLAGS.single_task)
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
@@ -1951,6 +2068,8 @@ def main(_):
                   'phi_task_depth': FLAGS.phi_task_depth,
                   'combine_mode': FLAGS.combine_mode,
                   'goal_encoder_mode': FLAGS.goal_encoder_mode,
+                  'in_trajectory_negative_repeats':
+                      FLAGS.in_trajectory_negative_repeats,
                   'bellman_loss_weight': FLAGS.bellman_loss_weight,
                   'bellman_residual_l2_weight':
                       FLAGS.bellman_residual_l2_weight,
@@ -2088,6 +2207,8 @@ def main(_):
         'composed_policy': composed_policy,
         'task_id': task_id,
         'env_name': env_name,
+        'in_trajectory_negative_repeats':
+            FLAGS.in_trajectory_negative_repeats,
     }
     if FLAGS.critic_mode == 'cka':
       ckpt_data['q_base'] = q_base
@@ -2116,7 +2237,10 @@ def main(_):
               phi_task_depth=FLAGS.phi_task_depth,
               rbc_config=(
                   _rbc_identity_config()
-                  if FLAGS.critic_mode == 'rbc_decomposed' else None))
+                  if FLAGS.critic_mode == 'rbc_decomposed' else None),
+              in_trajectory_negative_repeats=
+                  FLAGS.in_trajectory_negative_repeats,
+              single_task=FLAGS.single_task)
 
     # ---- configurable task-boundary evaluation ---------------------------
     if (
