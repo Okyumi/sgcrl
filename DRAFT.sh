@@ -48,6 +48,10 @@ TASKS_PER_GPU=3
 # Torch-specific wrappers can select a subset without duplicating this file.
 CONFIG_INDEX_OFFSET="${CONFIG_INDEX_OFFSET:-0}"
 CONFIG_LIMIT="${CONFIG_LIMIT:-0}"
+# Optional alternate configuration enumerator.  The default preserves the
+# historical experiment matrix; narrow resume wrappers can supply a separate
+# file without editing or reordering experiment_configs.py.
+CONFIG_SCRIPT="${CONFIG_SCRIPT:-experiment_configs.py}"
 
 # ---- shared defaults ------------------------------------------------------
 ALG="${ALG:-contrastive_cpc}"
@@ -297,7 +301,7 @@ _FLAGS="$_FLAGS --post_task_eval_scope=$POST_TASK_EVAL_SCOPE"
 }
 
 cd "$REPO_DIR"
-TOTAL_CONFIGS=$(python experiment_configs.py --total)
+TOTAL_CONFIGS=$(python "$CONFIG_SCRIPT" --total)
 CONFIG_END="$TOTAL_CONFIGS"
 if [ "$CONFIG_LIMIT" -gt 0 ]; then
   CONFIG_END=$(( CONFIG_INDEX_OFFSET + CONFIG_LIMIT ))
@@ -315,6 +319,7 @@ echo "Node               : $(hostname)"
 echo "GPU                : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
 echo "Conda prefix       : ${CONDA_PREFIX:-N/A}"
 echo "Tasks per GPU      : $TASKS_PER_GPU"
+echo "Config script      : $CONFIG_SCRIPT"
 echo "Total configs      : $TOTAL_CONFIGS"
 echo "Selected configs   : [$CONFIG_INDEX_OFFSET, $CONFIG_END)"
 echo "JAX mem fraction   : $XLA_PYTHON_CLIENT_MEM_FRACTION"
@@ -331,7 +336,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     continue
   fi
 
-  eval "$(python experiment_configs.py --setting "$CONFIG_IDX")"
+  eval "$(python "$CONFIG_SCRIPT" --setting "$CONFIG_IDX")"
 
   FLAGS=$(build_flags "$ACTOR_MODE" "$CRITIC_MODE" "$SEED")
 
