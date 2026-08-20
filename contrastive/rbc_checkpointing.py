@@ -31,9 +31,17 @@ def identity_payload(config: Mapping[str, Any]) -> dict:
   return {field: config[field] for field in RBC_IDENTITY_FIELDS}
 
 
+def fingerprint_payload(payload: Mapping[str, Any], length: int = 12) -> str:
+  """Return a stable short hash of an arbitrary identity mapping.
+
+  Used by hybrid modes (DCC-SAC / AC-DCC) whose identity fields are not
+  the RBC Bellman set. RBC itself should keep using ``config_fingerprint``.
+  """
+  encoded = json.dumps(
+      dict(payload), sort_keys=True, separators=(',', ':'), default=str)
+  return hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:length]
+
+
 def config_fingerprint(config: Mapping[str, Any], length: int = 12) -> str:
   """Return a stable short hash of every RBC-defining setting."""
-  payload = json.dumps(
-      identity_payload(config), sort_keys=True, separators=(',', ':'),
-      default=str)
-  return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:length]
+  return fingerprint_payload(identity_payload(config), length=length)
