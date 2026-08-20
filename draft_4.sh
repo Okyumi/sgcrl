@@ -9,7 +9,7 @@
 #SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%A_%a.out
 #SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
-#SBATCH --array=0-2
+#SBATCH --array=0-5
 
 # ==========================================================================
 # Continual Goal-Conditioned Contrastive RL – Batch SLURM Launcher
@@ -53,6 +53,7 @@ K_MAX="${K_MAX:-10}"
 START_TASK="${START_TASK:-0}"
 EVAL_EVERY="${EVAL_EVERY:-50000}"
 USE_WANDB="${USE_WANDB:-true}"
+WANDB_GROUP="${WANDB_GROUP:-}"
 ADD_UID="${ADD_UID:-true}"
 USE_TASK_ID="${USE_TASK_ID:-false}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
@@ -91,6 +92,7 @@ PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
 PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-4}"
 COMBINE_MODE="${COMBINE_MODE:-add}"
 GOAL_ENCODER_MODE="${GOAL_ENCODER_MODE:-shared}"
+IN_TRAJECTORY_NEGATIVE_REPEATS="${IN_TRAJECTORY_NEGATIVE_REPEATS:-1}"
 BELLMAN_LOSS_WEIGHT="${BELLMAN_LOSS_WEIGHT:-1.0}"
 BELLMAN_RESIDUAL_L2_WEIGHT="${BELLMAN_RESIDUAL_L2_WEIGHT:-0.0001}"
 BELLMAN_DISCOUNT="${BELLMAN_DISCOUNT:-0.99}"
@@ -203,6 +205,9 @@ build_flags() {
   if [ "$USE_WANDB" = "true" ]; then
     _FLAGS="$_FLAGS --use_wandb"
   fi
+  if [ -n "$WANDB_GROUP" ]; then
+    _FLAGS="$_FLAGS --wandb_group=$WANDB_GROUP"
+  fi
   if [ "$ADD_UID" = "true" ]; then
     _FLAGS="$_FLAGS --add_uid"
   fi
@@ -282,6 +287,7 @@ build_flags() {
   _FLAGS="$_FLAGS --phi_task_depth=$PHI_TASK_DEPTH"
   _FLAGS="$_FLAGS --combine_mode=$COMBINE_MODE"
   _FLAGS="$_FLAGS --goal_encoder_mode=$GOAL_ENCODER_MODE"
+  _FLAGS="$_FLAGS --in_trajectory_negative_repeats=$IN_TRAJECTORY_NEGATIVE_REPEATS"
   _FLAGS="$_FLAGS --bellman_loss_weight=$BELLMAN_LOSS_WEIGHT"
   _FLAGS="$_FLAGS --bellman_residual_l2_weight=$BELLMAN_RESIDUAL_L2_WEIGHT"
   _FLAGS="$_FLAGS --bellman_discount=$BELLMAN_DISCOUNT"
@@ -400,7 +406,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "K_max          : $K_MAX"
     echo "Start task     : $START_TASK"
     echo "Eval every     : $EVAL_EVERY"
-    echo "W&B            : $USE_WANDB"
+    echo "W&B            : $USE_WANDB (group=${WANDB_GROUP:-legacy-default})"
     echo "Critic mode    : $CRITIC_MODE"
     echo "Actor mode     : $ACTOR_MODE"
     echo "Use task ID    : $USE_TASK_ID"
@@ -421,6 +427,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
     echo "Neg bank       : mode=$NEG_BANK_MODE (M=$NEG_BANK_N_PER_STEP, pool=$NEG_BANK_CANDIDATE_POOL, weight=$NEG_BANK_WEIGHT)"
     echo "Decomp critic  : dyn_aux_weight=$DYN_AUX_WEIGHT (after_task0=$DYN_AUX_AFTER_TASK0) phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
+    echo "In-traj negs   : repeats=$IN_TRAJECTORY_NEGATIVE_REPEATS"
     echo "Diagnostics    : log_pool_cosine=$LOG_POOL_COSINE log_mixture_norm=$LOG_MIXTURE_NORM log_probe_data=$LOG_PROBE_DATA"
     echo "Log dir        : $LOG_DIR"
     echo "Checkpoint dir : $CHECKPOINT_DIR"

@@ -14,6 +14,7 @@ Two sources are concatenated to produce the final list of runs:
        actor_mode, critic_mode, seed,
        dyn_aux_weight, phi_task_width, phi_task_depth,
        combine_mode, goal_encoder_mode,
+       in_trajectory_negative_repeats,
        bellman_loss_weight, bellman_residual_l2_weight,
        bellman_discount, bellman_tau, bellman_hidden_dim,
        her_reward_threshold, step_penalty_reward,
@@ -266,7 +267,7 @@ ARCHIVED_CELLS: list = [
 
 
 # =====================================================================
-# Active batch — persistent-actor DCC ablation
+# Active batch — persistent-actor DCC + in-trajectory-negative probes
 # =====================================================================
 
 # Matched to the reported DCC seeds (5, 6, 7). Both cells keep the DCC
@@ -308,6 +309,49 @@ CELLS: list = [
             'log_probe_data': True,
             'post_task_eval_scope': 'current',
             'wandb_group': 'DCC-persistent-actor-no-dynamics',
+        }
+        for seed in (5, 6, 7)
+    ],
+    # StableCRL/CRTR in-trajectory negatives on the two failure tasks.
+    # Single-task mode isolates the sampler from continual representation
+    # history. r=12 is StableCRL's reported default; the legacy batch size
+    # remains 256, so the sampler uses 21 full twelve-row episode groups and
+    # four rows from a final episode.
+    *[
+        {
+            'actor_mode': 'reset',
+            'critic_mode': 'decomposed',
+            'seed': seed,
+            'dyn_aux_weight': 1.0,
+            'combine_mode': 'add',
+            'goal_encoder_mode': 'shared',
+            'single_task': 'sawyer_handle_press_side',
+            'use_task_id': False,
+            'actor_auto_reset': False,
+            'in_trajectory_negative_repeats': 12,
+            'shortcut_diagnostic_interval': 1000,
+            'log_probe_data': True,
+            'post_task_eval_scope': 'current',
+            'wandb_group': 'DCC-intrajectory-negatives-task5',
+        }
+        for seed in (5, 6, 7)
+    ],
+    *[
+        {
+            'actor_mode': 'reset',
+            'critic_mode': 'decomposed',
+            'seed': seed,
+            'dyn_aux_weight': 1.0,
+            'combine_mode': 'add',
+            'goal_encoder_mode': 'shared',
+            'single_task': 'sawyer_window_close',
+            'use_task_id': False,
+            'actor_auto_reset': False,
+            'in_trajectory_negative_repeats': 12,
+            'shortcut_diagnostic_interval': 1000,
+            'log_probe_data': True,
+            'post_task_eval_scope': 'current',
+            'wandb_group': 'DCC-intrajectory-negatives-task8',
         }
         for seed in (5, 6, 7)
     ],
@@ -358,17 +402,19 @@ def build_configs():
   return configs
 
 
-def _format_cell(c, num_cols=8):
+def _format_cell(c, num_cols=10):
   """Pretty-print one cell as a column-aligned table row."""
   cols = [
       f'{c.get("actor_mode", "-"):<10}',
       f'{c.get("critic_mode", "-"):<11}',
       f'{c.get("seed", "-"):>4}',
+      f'{c.get("single_task", "-"):<26}',
       f'{c.get("dyn_aux_weight", "-")!s:>6}',
       f'{c.get("log_mixture_norm", "-")!s:>6}',
       f'{c.get("log_probe_data", "-")!s:>6}',
       f'{c.get("phi_task_width", "-")!s:>5}',
       f'{c.get("phi_task_depth", "-")!s:>5}',
+      f'{c.get("in_trajectory_negative_repeats", 1)!s:>5}',
   ]
   return '  '.join(cols[:num_cols])
 
@@ -402,8 +448,9 @@ def main():
     print('')
     header = '  '.join([
         f'{"idx":>4}', f'{"actor":<10}', f'{"critic":<11}', f'{"seed":>4}',
+        f'{"single_task":<26}',
         f'{"dynw":>6}', f'{"mixN":>6}', f'{"prob":>6}',
-        f'{"ptw":>5}', f'{"ptd":>5}',
+        f'{"ptw":>5}', f'{"ptd":>5}', f'{"itn-r":>5}',
     ])
     print(header)
     print('-' * len(header))

@@ -11,17 +11,24 @@ LEARNER = (
     ROOT / 'contrastive' / 'continual_learning_decomposed.py').read_text()
 
 
-def test_active_batch_is_the_two_matched_persistent_actor_dcc_cells():
+def test_first_six_cells_remain_the_matched_persistent_actor_dcc_cells():
   configs = experiment_configs.build_configs()
-  assert len(configs) == 6
-  assert {config['actor_mode'] for config in configs} == {'persistent'}
-  assert {config['critic_mode'] for config in configs} == {'decomposed'}
-  assert {config['seed'] for config in configs} == {5, 6, 7}
-  assert {config['dyn_aux_weight'] for config in configs} == {0.0, 1.0}
-  assert all(not config['single_task'] for config in configs)
-  assert all(config['actor_auto_reset'] is False for config in configs)
+  assert len(configs) == 12
+  persistent_configs = configs[:6]
+  assert {config['actor_mode'] for config in persistent_configs} == {
+      'persistent'}
+  assert {config['critic_mode'] for config in persistent_configs} == {
+      'decomposed'}
+  assert {config['seed'] for config in persistent_configs} == {5, 6, 7}
+  assert {config['dyn_aux_weight'] for config in persistent_configs} == {
+      0.0, 1.0}
+  assert all(not config['single_task'] for config in persistent_configs)
+  assert all(config['actor_auto_reset'] is False
+             for config in persistent_configs)
   assert all(config['shortcut_diagnostic_interval'] == 0
-             for config in configs)
+             for config in persistent_configs)
+  assert all(config.get('in_trajectory_negative_repeats', 1) == 1
+             for config in persistent_configs)
 
 
 def test_decomposed_learner_carries_complete_actor_training_state():
