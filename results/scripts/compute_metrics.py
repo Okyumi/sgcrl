@@ -379,6 +379,7 @@ def render_documentation(reference_cell: str) -> str:
 _DIAGNOSTIC_PREFIXES = (
     "learner/shortcut/",
     "learner/action/",
+    "learner/action_landscape/",
     "learner/q/",
     "learner/acdcc/",
     "learner/dcc_sac/",

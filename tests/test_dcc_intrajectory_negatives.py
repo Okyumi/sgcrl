@@ -26,7 +26,7 @@ def test_invalid_repetition_factors_are_rejected(repeats):
 
 
 def test_task5_and_task8_cells_use_reported_seeds_and_r12():
-  probes = experiment_configs.build_configs()[6:]
+  probes = experiment_configs.build_configs()[6:12]
   assert len(probes) == 6
   assert {config['single_task'] for config in probes} == {
       'sawyer_handle_press_side', 'sawyer_window_close'}

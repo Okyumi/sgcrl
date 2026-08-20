@@ -102,9 +102,34 @@ def make_shortcut_diagnostic_fn(
         b_shared_params, h_phi_params, phi_task_params, psi_params,
         obs, zero_action)
 
+    # Coordinate interventions on the goal side.  Unified Sawyer states use
+    # hand xyz at 0:3, gripper opening at 3:4, and the manipulated mechanism
+    # or object at 4:7.  Shuffling one block across batch rows destroys that
+    # cue while leaving all other goal coordinates untouched.  A large
+    # categorical-accuracy drop identifies reliance on that block; it does
+    # not by itself establish causality for control because the mixed goal is
+    # off-manifold.
+    state = obs[:, :obs_dim]
+    goal = obs[:, obs_dim:]
+
+    def coordinate_shuffled_logits(start, end):
+      shuffled_goal = goal.at[:, start:end].set(
+          jnp.roll(goal[:, start:end], 1, axis=0))
+      shuffled_obs = jnp.concatenate([state, shuffled_goal], axis=-1)
+      return decomp_nets.apply_score(
+          b_shared_params, h_phi_params, phi_task_params, psi_params,
+          shuffled_obs, replay_action)
+
+    hand_goal_logits = coordinate_shuffled_logits(0, 3)
+    gripper_goal_logits = coordinate_shuffled_logits(3, 4)
+    mechanism_goal_logits = coordinate_shuffled_logits(4, 7)
+
     categorical_accuracy = _categorical_accuracy(logits)
     shuffled_accuracy = _categorical_accuracy(shuffled_logits)
     zero_accuracy = _categorical_accuracy(zero_logits)
+    hand_goal_accuracy = _categorical_accuracy(hand_goal_logits)
+    gripper_goal_accuracy = _categorical_accuracy(gripper_goal_logits)
+    mechanism_goal_accuracy = _categorical_accuracy(mechanism_goal_logits)
 
     paired_replay = paired(replay_action)
     paired_shuffled = paired(shuffled_action)
@@ -153,6 +178,18 @@ def make_shortcut_diagnostic_fn(
             shuffled_accuracy / jnp.maximum(categorical_accuracy, 1e-6)),
         'shortcut/zero_action_retention': (
             zero_accuracy / jnp.maximum(categorical_accuracy, 1e-6)),
+        'shortcut/hand_goal_shuffled_categorical_accuracy':
+            hand_goal_accuracy,
+        'shortcut/gripper_goal_shuffled_categorical_accuracy':
+            gripper_goal_accuracy,
+        'shortcut/mechanism_goal_shuffled_categorical_accuracy':
+            mechanism_goal_accuracy,
+        'shortcut/hand_goal_shuffle_drop': (
+            categorical_accuracy - hand_goal_accuracy),
+        'shortcut/gripper_goal_shuffle_drop': (
+            categorical_accuracy - gripper_goal_accuracy),
+        'shortcut/mechanism_goal_shuffle_drop': (
+            categorical_accuracy - mechanism_goal_accuracy),
         'shortcut/logit_saturation_fraction': jnp.mean(
             (jnp.abs(logits) > 10.0).astype(jnp.float32)),
         'shortcut/positive_negative_margin': (

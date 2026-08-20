@@ -69,6 +69,7 @@ from contrastive.decomposed_networks import make_decomposed_networks
 from contrastive.rbc_networks import make_rbc_networks
 from contrastive import rbc_checkpointing
 from contrastive import intrajectory
+from contrastive import action_ranking_diagnostics
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
     cosine_matrix_from_vectors,
@@ -313,6 +314,22 @@ flags.DEFINE_integer('shortcut_diagnostic_batch_size', 32,
                      'Replay anchors used by periodic shortcut diagnostics.')
 flags.DEFINE_integer('shortcut_candidate_actions', 16,
                      'Fixed-state candidate actions used by diagnostics.')
+flags.DEFINE_integer(
+    'action_landscape_diagnostic_interval_steps', 0,
+    'Environment-step cadence for causal same-state action ranking; 0 '
+    'disables the probe.')
+flags.DEFINE_integer('action_landscape_num_anchors', 1,
+                     'MuJoCo anchor states tested at each causal probe event.')
+flags.DEFINE_integer(
+    'action_landscape_candidates_per_family', 4,
+    'Actions per policy/local/replay/uniform family in the causal probe.')
+flags.DEFINE_integer('action_landscape_rollout_horizon', 25,
+                     'Counterfactual rollout length including the first '
+                     'intervened action.')
+flags.DEFINE_integer('action_landscape_anchor_prefix_steps', 20,
+                     'Policy steps used to reach each diagnostic anchor.')
+flags.DEFINE_float('action_landscape_local_noise_std', 0.10,
+                   'Standard deviation of local policy-action perturbations.')
 flags.DEFINE_bool('log_pool_cosine', True,
                   'Log per-task pool cosine-similarity matrices on the '
                   'actor / critic CKA pools. Cheap host-side metric. '
@@ -399,6 +416,17 @@ def _dcc_sac_identity_config():
       'shortcut_diagnostic_batch_size':
           FLAGS.shortcut_diagnostic_batch_size,
       'shortcut_candidate_actions': FLAGS.shortcut_candidate_actions,
+      'action_landscape_diagnostic_interval_steps':
+          FLAGS.action_landscape_diagnostic_interval_steps,
+      'action_landscape_num_anchors': FLAGS.action_landscape_num_anchors,
+      'action_landscape_candidates_per_family':
+          FLAGS.action_landscape_candidates_per_family,
+      'action_landscape_rollout_horizon':
+          FLAGS.action_landscape_rollout_horizon,
+      'action_landscape_anchor_prefix_steps':
+          FLAGS.action_landscape_anchor_prefix_steps,
+      'action_landscape_local_noise_std':
+          FLAGS.action_landscape_local_noise_std,
   }
 
 def _git_commit_sha():
@@ -1201,6 +1229,21 @@ def train_single_task(
       eval_env, eval_actor, counter=counting.Counter(),
       logger=evaluator_logger, observers=eval_observers)
 
+  # Separate environment for causal counterfactuals.  It is never attached to
+  # the replay adder and therefore cannot perturb training data or evaluator
+  # episode state.  The default interval is zero, preserving prior runtime.
+  action_landscape_interval = int(getattr(
+      continual_cfg, 'action_landscape_diagnostic_interval_steps', 0))
+  action_landscape_env = None
+  if action_landscape_interval > 0:
+    if decomp_nets is None:
+      raise ValueError(
+          'The causal action-landscape probe requires a DCC-family critic.')
+    action_landscape_env, _ = contrastive_utils.make_environment(
+        env_name, config.start_index, config.end_index,
+        seed + task_id + 400, fixed_start_end=fixed_goal,
+        task_id=_tid, num_tasks=_ntasks)
+
   # ---- training loop (actor-learner loop) --------------------------------
   actor_logger = make_default_logger(
       'actor', save_data=True, save_dir=log_dir,
@@ -1242,6 +1285,11 @@ def train_single_task(
   metrics_every = eval_every if eval_every > 0 else 50000
   next_metrics_frequent = metrics_every if FLAGS.log_rl_metrics else float('inf')
   next_metrics_occasional = 5 * metrics_every if FLAGS.log_rl_metrics else float('inf')
+  next_action_landscape_at = (
+      action_landscape_interval if action_landscape_interval > 0
+      else float('inf'))
+  action_landscape_rng = np.random.default_rng(
+      seed + 88001 + task_id * 101)
   # Automatic actor reset state (task 0 only)
   auto_reset_active = (task_id == 0 and FLAGS.actor_auto_reset)
   actor_reset_count = 0
@@ -1295,6 +1343,83 @@ def train_single_task(
     learner.step()
     if episodes_done == 1:
       print(f'  JIT compilation done.', flush=True)
+
+    # Diagnostic events use a learner-call cadence, whereas ordinary learner
+    # logging uses an environment-step cadence.  Log these values immediately
+    # so a valid event cannot be silently dropped between W&B rows.
+    diagnostic_metrics = getattr(learner, 'last_diagnostic_metrics', {})
+    if diagnostic_metrics and FLAGS.use_wandb and wandb is not None:
+      wandb_diagnostic = {
+          f'learner/{name}': float(value)
+          for name, value in diagnostic_metrics.items()}
+      wandb_diagnostic['learner/env_steps'] = env_steps_done
+      wandb.log(wandb_diagnostic)
+
+    if env_steps_done >= next_action_landscape_at:
+      transitions = learner.last_transitions
+      if transitions is None:
+        raise RuntimeError(
+            'Action-landscape event fired before replay transitions existed.')
+      policy_params = learner.get_variables(['policy'])[0]
+      critic_params = learner.get_variables(['critic'])[0]
+
+      def _diagnostic_policy_action(observation, numpy_rng, stochastic):
+        key = jax.random.PRNGKey(
+            int(numpy_rng.integers(0, np.iinfo(np.int32).max)))
+        observation_batch = jnp.asarray(observation)[None, :]
+        distribution = networks.policy_network.apply(
+            policy_params, observation_batch)
+        sampler = networks.sample if stochastic else networks.sample_eval
+        return np.asarray(sampler(distribution, key))[0]
+
+      def _diagnostic_score_actions(observation, actions):
+        observation_batch = jnp.repeat(
+            jnp.asarray(observation)[None, :], actions.shape[0], axis=0)
+        values = decomp_nets.apply_paired_score(
+            critic_params['b_shared'], critic_params['h_phi'],
+            critic_params['phi_task'], critic_params['psi'],
+            observation_batch, jnp.asarray(actions))
+        return np.asarray(values)
+
+      print(
+          f'  [action-landscape @ {env_steps_done}] running same-state '
+          'counterfactual rollouts...', flush=True)
+      landscape_metrics = (
+          action_ranking_diagnostics.run_causal_action_ranking_probe(
+              environment=action_landscape_env,
+              obs_dim=config.obs_dim,
+              replay_observations=np.asarray(transitions.observation),
+              replay_actions=np.asarray(transitions.action),
+              policy_action_fn=_diagnostic_policy_action,
+              score_actions_fn=_diagnostic_score_actions,
+              rng=action_landscape_rng,
+              num_anchors=int(getattr(
+                  continual_cfg, 'action_landscape_num_anchors', 1)),
+              candidates_per_family=int(getattr(
+                  continual_cfg,
+                  'action_landscape_candidates_per_family', 4)),
+              rollout_horizon=int(getattr(
+                  continual_cfg, 'action_landscape_rollout_horizon', 25)),
+              anchor_prefix_steps=int(getattr(
+                  continual_cfg,
+                  'action_landscape_anchor_prefix_steps', 20)),
+              local_noise_std=float(getattr(
+                  continual_cfg, 'action_landscape_local_noise_std', 0.10)),
+          ))
+      if FLAGS.use_wandb and wandb is not None:
+        wandb_landscape = {
+            f'learner/{name}': float(value)
+            for name, value in landscape_metrics.items()}
+        wandb_landscape['learner/env_steps'] = env_steps_done
+        wandb.log(wandb_landscape)
+      print(
+          '  [action-landscape] '
+          f"rho_replay={landscape_metrics.get('action_landscape/replay_score_vs_rollout_mechanism_spearman', float('nan')):.3f} "
+          f"policy_score_pct={landscape_metrics.get('action_landscape/policy_score_percentile', float('nan')):.3f} "
+          f"policy_outcome_pct={landscape_metrics.get('action_landscape/policy_outcome_percentile', float('nan')):.3f}",
+          flush=True)
+      next_action_landscape_at = (
+          env_steps_done + action_landscape_interval)
 
     # Log learner metrics to W&B with global env_steps as x-axis
     if FLAGS.use_wandb and wandb is not None and env_steps_done >= next_log_at:
@@ -1568,6 +1693,11 @@ def train_single_task(
       eval_env.close()
     except Exception:
       pass
+    if action_landscape_env is not None:
+      try:
+        action_landscape_env.close()
+      except Exception:
+        pass
     del learner, variable_client, eval_variable_client
 
     return (
@@ -1764,6 +1894,11 @@ def train_single_task(
     eval_env.close()
   except Exception:
     pass
+  if action_landscape_env is not None:
+    try:
+      action_landscape_env.close()
+    except Exception:
+      pass
   del learner, variable_client, eval_variable_client
 
   return (
@@ -1844,6 +1979,17 @@ def main(_):
       shortcut_diagnostic_interval=FLAGS.shortcut_diagnostic_interval,
       shortcut_diagnostic_batch_size=FLAGS.shortcut_diagnostic_batch_size,
       shortcut_candidate_actions=FLAGS.shortcut_candidate_actions,
+      action_landscape_diagnostic_interval_steps=
+          FLAGS.action_landscape_diagnostic_interval_steps,
+      action_landscape_num_anchors=FLAGS.action_landscape_num_anchors,
+      action_landscape_candidates_per_family=
+          FLAGS.action_landscape_candidates_per_family,
+      action_landscape_rollout_horizon=
+          FLAGS.action_landscape_rollout_horizon,
+      action_landscape_anchor_prefix_steps=
+          FLAGS.action_landscape_anchor_prefix_steps,
+      action_landscape_local_noise_std=
+          FLAGS.action_landscape_local_noise_std,
       log_pool_cosine=FLAGS.log_pool_cosine,
       log_mixture_norm=FLAGS.log_mixture_norm,
       log_probe_data=FLAGS.log_probe_data,
@@ -2108,6 +2254,18 @@ def main(_):
                       FLAGS.shortcut_diagnostic_batch_size,
                   'shortcut_candidate_actions':
                       FLAGS.shortcut_candidate_actions,
+                  'action_landscape_diagnostic_interval_steps':
+                      FLAGS.action_landscape_diagnostic_interval_steps,
+                  'action_landscape_num_anchors':
+                      FLAGS.action_landscape_num_anchors,
+                  'action_landscape_candidates_per_family':
+                      FLAGS.action_landscape_candidates_per_family,
+                  'action_landscape_rollout_horizon':
+                      FLAGS.action_landscape_rollout_horizon,
+                  'action_landscape_anchor_prefix_steps':
+                      FLAGS.action_landscape_anchor_prefix_steps,
+                  'action_landscape_local_noise_std':
+                      FLAGS.action_landscape_local_noise_std,
                   'post_task_eval_scope':
                       FLAGS.post_task_eval_scope},
           name=f'task{task_id}_{env_name}_s{seed}',

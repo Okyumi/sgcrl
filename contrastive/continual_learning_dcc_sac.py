@@ -238,6 +238,7 @@ class ContinualDCCSACLearner(acme.Learner):
     self._diagnostic_interval = int(getattr(
         continual_config, 'shortcut_diagnostic_interval', 0))
     self._diagnostic_counter = 0
+    self._last_diagnostic_metrics: Dict[str, float] = {}
     self._diagnostic_fn = None
     if self._diagnostic_interval > 0:
       self._diagnostic_fn = shortcut_diagnostics.make_shortcut_diagnostic_fn(
@@ -772,6 +773,7 @@ class ContinualDCCSACLearner(acme.Learner):
     self._last_transitions = transitions
     self._state, metrics = self._update_step(self._state, transitions)
 
+    self._last_diagnostic_metrics = {}
     self._diagnostic_counter += 1
     if (
         self._diagnostic_fn is not None
@@ -787,6 +789,8 @@ class ContinualDCCSACLearner(acme.Learner):
           self._state.q_params,
           transitions,
           diagnostic_key)
+      self._last_diagnostic_metrics = {
+          name: float(value) for name, value in diagnostic_metrics.items()}
       metrics = {**metrics, **diagnostic_metrics}
 
     timestamp = time.time()
@@ -840,6 +844,11 @@ class ContinualDCCSACLearner(acme.Learner):
   @property
   def last_transitions(self):
     return getattr(self, '_last_transitions', None)
+
+  @property
+  def last_diagnostic_metrics(self):
+    """Metrics emitted on this step, empty between diagnostic events."""
+    return getattr(self, '_last_diagnostic_metrics', {})
 
   @property
   def q_params(self):

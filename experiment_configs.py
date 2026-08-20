@@ -440,6 +440,61 @@ CELLS: list = [
         }
         for seed in (5, 6, 7)
     ],
+    # Causal DCC action-landscape diagnostics.  These are deliberately plain
+    # DCC (r=1, no Bellman or action-identification loss): the experiment is
+    # observational and separates an already-bad replay-action landscape from
+    # actor exploitation of high-scoring off-support actions.  With the six
+    # batches above, these resolve to config indices 12--17.
+    *[
+        {
+            'actor_mode': 'reset',
+            'critic_mode': 'decomposed',
+            'seed': seed,
+            'dyn_aux_weight': 1.0,
+            'combine_mode': 'add',
+            'goal_encoder_mode': 'shared',
+            'single_task': 'sawyer_handle_press_side',
+            'use_task_id': False,
+            'actor_auto_reset': False,
+            'in_trajectory_negative_repeats': 1,
+            'shortcut_diagnostic_interval': 50,
+            'action_landscape_diagnostic_interval_steps': 500_000,
+            'action_landscape_num_anchors': 2,
+            'action_landscape_candidates_per_family': 4,
+            'action_landscape_rollout_horizon': 25,
+            'action_landscape_anchor_prefix_steps': 20,
+            'action_landscape_local_noise_std': 0.10,
+            'log_probe_data': False,
+            'post_task_eval_scope': 'current',
+            'wandb_group': 'DCC-action-landscape-task5',
+        }
+        for seed in (5, 6, 7)
+    ],
+    *[
+        {
+            'actor_mode': 'reset',
+            'critic_mode': 'decomposed',
+            'seed': seed,
+            'dyn_aux_weight': 1.0,
+            'combine_mode': 'add',
+            'goal_encoder_mode': 'shared',
+            'single_task': 'sawyer_window_close',
+            'use_task_id': False,
+            'actor_auto_reset': False,
+            'in_trajectory_negative_repeats': 1,
+            'shortcut_diagnostic_interval': 50,
+            'action_landscape_diagnostic_interval_steps': 500_000,
+            'action_landscape_num_anchors': 2,
+            'action_landscape_candidates_per_family': 4,
+            'action_landscape_rollout_horizon': 25,
+            'action_landscape_anchor_prefix_steps': 20,
+            'action_landscape_local_noise_std': 0.10,
+            'log_probe_data': False,
+            'post_task_eval_scope': 'current',
+            'wandb_group': 'DCC-action-landscape-task8',
+        }
+        for seed in (5, 6, 7)
+    ],
 ]
 
 

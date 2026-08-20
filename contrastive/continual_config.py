@@ -128,6 +128,18 @@ class ContinualConfig:
   shortcut_diagnostic_batch_size: int = 32
   shortcut_candidate_actions: int = 16
 
+  # -- Causal same-state action-landscape probe ----------------------------
+  # Environment-step cadence (rather than learner-call cadence) avoids the
+  # silent non-firing bug in the first task-5/task-8 diagnostics.  Each event
+  # snapshots a separate MuJoCo evaluator state and rolls out policy, local,
+  # replay-neighbour, and uniform candidate actions from that identical state.
+  action_landscape_diagnostic_interval_steps: int = 0
+  action_landscape_num_anchors: int = 1
+  action_landscape_candidates_per_family: int = 4
+  action_landscape_rollout_horizon: int = 25
+  action_landscape_anchor_prefix_steps: int = 20
+  action_landscape_local_noise_std: float = 0.10
+
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.
   # Off by default so existing runs are bit-for-bit identical. Turn on for
