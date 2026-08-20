@@ -54,3 +54,14 @@ def test_all_launchers_forward_sampler():
     launcher = (ROOT / name).read_text()
     assert 'IN_TRAJECTORY_NEGATIVE_REPEATS="${IN_TRAJECTORY_NEGATIVE_REPEATS:-1}"' in launcher
     assert '--in_trajectory_negative_repeats=$IN_TRAJECTORY_NEGATIVE_REPEATS' in launcher
+
+
+def test_torch_wrapper_selects_only_new_intrajectory_cells():
+  canonical = (ROOT / 'DRAFT.sh').read_text()
+  wrapper = (ROOT / 'DRAFT_intrajectory.sh').read_text()
+  assert 'CONFIG_INDEX_OFFSET="${CONFIG_INDEX_OFFSET:-0}"' in canonical
+  assert 'CONFIG_LIMIT="${CONFIG_LIMIT:-0}"' in canonical
+  assert 'CONFIG_INDEX_OFFSET=6' in wrapper
+  assert 'CONFIG_LIMIT=6' in wrapper
+  assert '#SBATCH --array=0-1' in wrapper
+  assert 'exec bash /scratch/yd2247/sgcrl/DRAFT.sh' in wrapper

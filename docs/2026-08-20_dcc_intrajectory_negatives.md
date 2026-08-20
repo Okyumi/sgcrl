@@ -41,3 +41,15 @@ from this first comparison.
 
 Run a short TensorFlow/Reverb/Meta-World cluster smoke test before the full
 8-million-step jobs.
+
+## Torch HPC launch
+
+`DRAFT.sh` remains the canonical Torch launcher and still runs the full active
+configuration matrix by default. `DRAFT_intrajectory.sh` selects only indices
+6--11 and maps three experiments to each L40S GPU:
+
+```bash
+sbatch DRAFT_intrajectory.sh
+```
+
+Array task 0 runs Task 5 seeds 5/6/7; array task 1 runs Task 8 seeds 5/6/7.

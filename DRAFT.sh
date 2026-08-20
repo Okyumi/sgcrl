@@ -43,6 +43,12 @@ set -euo pipefail
 # ---- number of parallel tasks per GPU ------------------------------------
 TASKS_PER_GPU=3
 
+# Optional contiguous config window. Defaults preserve the historical
+# behaviour (start at config 0 and run through experiment_configs.py --total).
+# Torch-specific wrappers can select a subset without duplicating this file.
+CONFIG_INDEX_OFFSET="${CONFIG_INDEX_OFFSET:-0}"
+CONFIG_LIMIT="${CONFIG_LIMIT:-0}"
+
 # ---- shared defaults ------------------------------------------------------
 ALG="${ALG:-contrastive_cpc}"
 NUM_TASKS="${NUM_TASKS:-10}"
@@ -292,6 +298,13 @@ _FLAGS="$_FLAGS --post_task_eval_scope=$POST_TASK_EVAL_SCOPE"
 
 cd "$REPO_DIR"
 TOTAL_CONFIGS=$(python experiment_configs.py --total)
+CONFIG_END="$TOTAL_CONFIGS"
+if [ "$CONFIG_LIMIT" -gt 0 ]; then
+  CONFIG_END=$(( CONFIG_INDEX_OFFSET + CONFIG_LIMIT ))
+  if [ "$CONFIG_END" -gt "$TOTAL_CONFIGS" ]; then
+    CONFIG_END="$TOTAL_CONFIGS"
+  fi
+fi
 
 echo "============================================================"
 echo "Continual Goal-Conditioned Contrastive RL — Torch Batch"
@@ -303,16 +316,18 @@ echo "GPU                : $(nvidia-smi --query-gpu=name --format=csv,noheader 2
 echo "Conda prefix       : ${CONDA_PREFIX:-N/A}"
 echo "Tasks per GPU      : $TASKS_PER_GPU"
 echo "Total configs      : $TOTAL_CONFIGS"
+echo "Selected configs   : [$CONFIG_INDEX_OFFSET, $CONFIG_END)"
 echo "JAX mem fraction   : $XLA_PYTHON_CLIENT_MEM_FRACTION"
 echo "============================================================"
 
 PIDS=()
 
 for ((i = 0; i < TASKS_PER_GPU; i++)); do
-  CONFIG_IDX=$(( TASKS_PER_GPU * ${SLURM_ARRAY_TASK_ID:-0} + i ))
+  CONFIG_IDX=$(( CONFIG_INDEX_OFFSET
+      + TASKS_PER_GPU * ${SLURM_ARRAY_TASK_ID:-0} + i ))
 
-  if [ "$CONFIG_IDX" -ge "$TOTAL_CONFIGS" ]; then
-    echo "[slot $i] Config index $CONFIG_IDX >= $TOTAL_CONFIGS - skipping."
+  if [ "$CONFIG_IDX" -ge "$CONFIG_END" ]; then
+    echo "[slot $i] Config index $CONFIG_IDX >= selected end $CONFIG_END - skipping."
     continue
   fi
 
