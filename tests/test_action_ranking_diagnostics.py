@@ -131,7 +131,7 @@ def test_summary_detects_bad_replay_landscape_and_actor_score_gap():
 def test_config_indices_12_to_17_are_matched_plain_dcc_probes():
   configs = experiment_configs.build_configs()
   probes = configs[12:18]
-  assert len(configs) == 18
+  assert len(configs) == 36
   assert len(probes) == 6
   assert {config['seed'] for config in probes} == {5, 6, 7}
   assert {config['single_task'] for config in probes} == {

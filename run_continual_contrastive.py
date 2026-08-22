@@ -93,8 +93,13 @@ _HYBRID_CRITIC_MODES = (
     'dcc_sac', 'dcc_sac_separate', 'action_dcc', 'action_dcc_sac')
 _Q_HYBRID_CRITIC_MODES = (
     'dcc_sac', 'dcc_sac_separate', 'action_dcc_sac')
+_PLAIN_DCC_MODES = (
+    'decomposed', 'iwr_decomposed', 'advantage_decomposed',
+    'bridge_decomposed')
+_ACTION_EFFECT_MODES = ('advantage_decomposed', 'bridge_decomposed')
+_IWR_MODES = ('iwr_decomposed', 'bridge_decomposed')
 _DECOMPOSED_CRITIC_MODES = (
-    'decomposed', 'rbc_decomposed') + _HYBRID_CRITIC_MODES
+    _PLAIN_DCC_MODES + ('rbc_decomposed',) + _HYBRID_CRITIC_MODES)
 _HER_CRITIC_MODES = ('rbc_decomposed',) + _Q_HYBRID_CRITIC_MODES
 
 # ---- flags ----------------------------------------------------------------
@@ -258,6 +263,33 @@ flags.DEFINE_integer(
     'Number of independently relabeled state--future-goal pairs sampled '
     'from each replay episode. 1 preserves the legacy sampler; values >1 '
     'enable CRTR/StableCRL in-trajectory negatives. StableCRL uses 12.')
+flags.DEFINE_bool(
+    'interaction_weighted_relabeling', False,
+    'Reweight future-goal relabeling toward the hand/object interaction '
+    'boundary (IWR); enabled by iwr_decomposed and bridge_decomposed.')
+flags.DEFINE_float('interaction_threshold', 0.09,
+                   'Hand/object distance defining the interaction bridge.')
+flags.DEFINE_float('interaction_bandwidth', 0.03,
+                   'Gaussian bandwidth around the interaction threshold.')
+flags.DEFINE_float('interaction_weight_floor', 0.05,
+                   'Minimum IWR weight, preserving support everywhere.')
+flags.DEFINE_bool(
+    'action_effect_enabled', False,
+    'Enable the task-local forward action-effect/dual-advantage head.')
+flags.DEFINE_float('action_effect_loss_weight', 1.0,
+                   'Gradient weight for the action-effect prediction loss.')
+flags.DEFINE_float('action_effect_discount', 0.99,
+                   'Discount in gamma*psi(s_next)-psi(s).')
+flags.DEFINE_float('action_effect_temperature', 1.0,
+                   'Temperature before tanh-bounding local advantage.')
+flags.DEFINE_float('action_effect_actor_weight', 1.0,
+                   'Weight of local advantage in the actor objective.')
+flags.DEFINE_float('action_effect_normalization_eps', 1e-3,
+                   'Floor for DCC-logit actor normalization.')
+flags.DEFINE_float('action_effect_q_scale_ema_decay', 0.99,
+                   'EMA decay for the DCC-logit scale in the actor objective.')
+flags.DEFINE_integer('action_effect_hidden_dim', 256,
+                     'Hidden width of the task-local action-effect MLP.')
 flags.DEFINE_float('bellman_loss_weight', 1.0,
                    'RBC-DCC weight lambda_Q on the twin scalar TD loss.')
 flags.DEFINE_float('bellman_residual_l2_weight', 1e-4,
@@ -330,6 +362,13 @@ flags.DEFINE_integer('action_landscape_anchor_prefix_steps', 20,
                      'Policy steps used to reach each diagnostic anchor.')
 flags.DEFINE_float('action_landscape_local_noise_std', 0.10,
                    'Standard deviation of local policy-action perturbations.')
+flags.DEFINE_bool(
+    'action_landscape_interaction_aware_anchor', False,
+    'Search a policy prefix for the closest hand/object interaction state.')
+flags.DEFINE_integer('action_landscape_anchor_search_steps', 200,
+                     'Maximum prefix length for interaction-aware anchors.')
+flags.DEFINE_float('action_landscape_interaction_threshold', 0.09,
+                   'Near-interaction distance used by the causal probe.')
 flags.DEFINE_bool('log_pool_cosine', True,
                   'Log per-task pool cosine-similarity matrices on the '
                   'actor / critic CKA pools. Cheap host-side metric. '
@@ -429,6 +468,35 @@ def _dcc_sac_identity_config():
           FLAGS.action_landscape_local_noise_std,
   }
 
+
+def _bridge_identity_config():
+  """Resolved settings defining IWR/action-effect DCC checkpoints."""
+  return {
+      'critic_mode': FLAGS.critic_mode,
+      'dyn_aux_weight': FLAGS.dyn_aux_weight,
+      'phi_task_width': FLAGS.phi_task_width,
+      'phi_task_depth': FLAGS.phi_task_depth,
+      'combine_mode': FLAGS.combine_mode,
+      'goal_encoder_mode': FLAGS.goal_encoder_mode,
+      'in_trajectory_negative_repeats':
+          FLAGS.in_trajectory_negative_repeats,
+      'interaction_weighted_relabeling':
+          FLAGS.interaction_weighted_relabeling,
+      'interaction_threshold': FLAGS.interaction_threshold,
+      'interaction_bandwidth': FLAGS.interaction_bandwidth,
+      'interaction_weight_floor': FLAGS.interaction_weight_floor,
+      'action_effect_enabled': FLAGS.action_effect_enabled,
+      'action_effect_loss_weight': FLAGS.action_effect_loss_weight,
+      'action_effect_discount': FLAGS.action_effect_discount,
+      'action_effect_temperature': FLAGS.action_effect_temperature,
+      'action_effect_actor_weight': FLAGS.action_effect_actor_weight,
+      'action_effect_normalization_eps':
+          FLAGS.action_effect_normalization_eps,
+      'action_effect_q_scale_ema_decay':
+          FLAGS.action_effect_q_scale_ema_decay,
+      'action_effect_hidden_dim': FLAGS.action_effect_hidden_dim,
+  }
+
 def _git_commit_sha():
   """Best-effort source revision for run manifests."""
   try:
@@ -463,11 +531,11 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
   """
   config_key = (f'actor_{actor_mode}_critic_{critic_mode}'
                 f'_tid_{use_task_id}_heads_{adapt_heads_only}')
-  if critic_mode == 'decomposed' and all(
+  if critic_mode in _PLAIN_DCC_MODES and all(
       v is not None for v in (dyn_aux_weight, phi_task_width, phi_task_depth)):
     config_key += (f'_dyn{float(dyn_aux_weight):.3f}'
                    f'_pt{int(phi_task_width)}x{int(phi_task_depth)}')
-  if (critic_mode == 'decomposed'
+  if (critic_mode in _PLAIN_DCC_MODES
       and int(in_trajectory_negative_repeats) > 1):
     config_key += f'_itn{int(in_trajectory_negative_repeats)}'
     if single_task:
@@ -480,6 +548,9 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
   if critic_mode in _HYBRID_CRITIC_MODES:
     config_key += (
         f"_hybrid_{rbc_checkpointing.fingerprint_payload(_dcc_sac_identity_config())}")
+  if critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES):
+    config_key += (
+        f"_bridge_{rbc_checkpointing.fingerprint_payload(_bridge_identity_config())}")
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
@@ -708,6 +779,22 @@ def train_single_task(
   if critic_mode in _HYBRID_CRITIC_MODES and actor_mode != 'reset':
     raise ValueError(
         f'critic_mode={critic_mode!r} requires actor_mode=reset.')
+  if critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES):
+    if actor_mode != 'reset':
+      raise ValueError(
+          f'critic_mode={critic_mode!r} requires actor_mode=reset.')
+    expected_iwr = critic_mode in _IWR_MODES
+    expected_effect = critic_mode in _ACTION_EFFECT_MODES
+    if bool(getattr(
+        continual_cfg, 'interaction_weighted_relabeling', False)) != expected_iwr:
+      raise ValueError(
+          f'critic_mode={critic_mode!r} requires '
+          f'interaction_weighted_relabeling={expected_iwr}.')
+    if bool(getattr(
+        continual_cfg, 'action_effect_enabled', False)) != expected_effect:
+      raise ValueError(
+          f'critic_mode={critic_mode!r} requires '
+          f'action_effect_enabled={expected_effect}.')
   if critic_mode == 'rbc_decomposed':
     if actor_mode != 'reset':
       raise ValueError(
@@ -764,7 +851,7 @@ def train_single_task(
   decomp_nets = None
   rbc_nets = None
   hybrid_sac_nets = None
-  if critic_mode == 'decomposed':
+  if critic_mode in _PLAIN_DCC_MODES:
     decomp_nets = make_decomposed_networks(
         env_spec, obs_dim=obs_dim,
         repr_dim=config.repr_dim,
@@ -778,6 +865,8 @@ def train_single_task(
         combine_mode=getattr(continual_cfg, 'combine_mode', 'add'),
         goal_encoder_mode=getattr(
             continual_cfg, 'goal_encoder_mode', 'shared'),
+        action_effect_hidden_dim=getattr(
+            continual_cfg, 'action_effect_hidden_dim', 256),
     )
   elif critic_mode in _HYBRID_CRITIC_MODES:
     decomp_nets = make_decomposed_networks(
@@ -856,10 +945,10 @@ def train_single_task(
       in_trajectory_repeats,
       batch_size=config.batch_size,
       episode_transitions=config.max_episode_steps)
-  if in_trajectory_repeats > 1 and critic_mode != 'decomposed':
+  if in_trajectory_repeats > 1 and critic_mode not in _PLAIN_DCC_MODES:
     raise ValueError(
         'In-trajectory negatives are currently implemented only for plain '
-        'DCC (critic_mode="decomposed"); got '
+        'DCC-family plain modes; got '
         f'critic_mode={critic_mode!r}.')
   trajectories_per_critic_batch = intrajectory.trajectories_per_batch(
       config.batch_size, in_trajectory_repeats)
@@ -873,13 +962,48 @@ def train_single_task(
         f'{config.batch_size}-row critic batch; group sizes={counts}.',
         flush=True)
 
+  iwr_enabled = bool(getattr(
+      continual_cfg, 'interaction_weighted_relabeling', False))
+  interaction_threshold = float(getattr(
+      continual_cfg, 'interaction_threshold', 0.09))
+  interaction_bandwidth = float(getattr(
+      continual_cfg, 'interaction_bandwidth', 0.03))
+  interaction_weight_floor = float(getattr(
+      continual_cfg, 'interaction_weight_floor', 0.05))
+  if iwr_enabled:
+    if config.obs_dim < 7:
+      raise ValueError(
+          'Interaction-weighted relabeling requires state coordinates '
+          '[hand_xyz, gripper, mechanism_xyz] (obs_dim >= 7).')
+    if interaction_bandwidth <= 0 or interaction_weight_floor <= 0:
+      raise ValueError(
+          'IWR bandwidth and weight floor must both be positive.')
+    print(
+        '  [IWR] future relabeling weighted near '
+        f'd(hand, mechanism)={interaction_threshold:.3f} '
+        f'(bandwidth={interaction_bandwidth:.3f}, '
+        f'floor={interaction_weight_floor:.3f}).',
+        flush=True)
+
+  def _interaction_candidate_weights(all_state):
+    """Per-future-state IWR weights; returns ones when disabled."""
+    if not iwr_enabled:
+      return tf.ones((tf.shape(all_state)[0],), dtype=tf.float32)
+    distance = tf.linalg.norm(
+        all_state[:, :3] - all_state[:, 4:7], axis=1)
+    standardized = (
+        (distance - interaction_threshold) / interaction_bandwidth)
+    return interaction_weight_floor + tf.exp(-0.5 * standardized ** 2)
+
   @tf.function
   def flatten_fn(sample):
     seq_len = tf.shape(sample.data.observation)[0]
     arange = tf.range(seq_len)
     is_future = tf.cast(arange[:, None] < arange[None], tf.float32)
     discount = config.discount ** tf.cast(arange[None] - arange[:, None], tf.float32)
-    probs = is_future * discount
+    all_state = sample.data.observation[:, :config.obs_dim]
+    probs = is_future * discount * _interaction_candidate_weights(
+        all_state)[None, :]
     goal_index = tf.random.categorical(
         logits=tf.math.log(probs), num_samples=1)[:, 0]
     state = sample.data.observation[:-1, :config.obs_dim]
@@ -908,11 +1032,22 @@ def train_single_task(
               getattr(continual_cfg, 'step_penalty_reward', True)),
           ops=her_ops)
 
+    extras = {'next_action': sample.data.action[1:]}
+    if iwr_enabled:
+      selected_future_state = tf.gather(all_state, goal_index[:-1])
+      selected_distance = tf.linalg.norm(
+          selected_future_state[:, :3] - selected_future_state[:, 4:7],
+          axis=1)
+      extras['iwr_interaction_distance'] = selected_distance
+      extras['iwr_sampling_weight'] = (
+          interaction_weight_floor + tf.exp(
+              -0.5 * ((selected_distance - interaction_threshold)
+                      / interaction_bandwidth) ** 2))
     transition = types.Transition(
         observation=new_obs, action=sample.data.action[:-1],
         reward=replay_reward, discount=replay_discount,
         next_observation=new_next_obs,
-        extras={'next_action': sample.data.action[1:]})
+        extras=extras)
     shift = tf.random.uniform((), 0, seq_len, tf.int32)
     transition = tree.map_structure(lambda t: tf.roll(t, shift, axis=0), transition)
     return transition
@@ -929,27 +1064,39 @@ def train_single_task(
     is_future = tf.cast(
         anchor_index[:, None] < candidate_index[None, :], tf.float32)
     delta = candidate_index[None, :] - anchor_index[:, None]
+    all_state = sample.data.observation[:, :config.obs_dim]
     probs = is_future * (
         config.discount ** tf.cast(delta, tf.float32))
+    probs *= _interaction_candidate_weights(all_state)[None, :]
     goal_index = tf.random.categorical(
         logits=tf.math.log(probs), num_samples=1)[:, 0]
-    all_state = sample.data.observation[:, :config.obs_dim]
     all_goal = contrastive_utils.obs_to_goal_2d(
         all_state, start_index=config.start_index,
         end_index=config.end_index)
     state = tf.gather(all_state, anchor_index)
     next_state = tf.gather(all_state, anchor_index + 1)
     goal = tf.gather(all_goal, goal_index)
+    extras = {
+        'next_action': tf.gather(
+            sample.data.action, anchor_index + 1),
+    }
+    if iwr_enabled:
+      selected_future_state = tf.gather(all_state, goal_index)
+      selected_distance = tf.linalg.norm(
+          selected_future_state[:, :3] - selected_future_state[:, 4:7],
+          axis=1)
+      extras['iwr_interaction_distance'] = selected_distance
+      extras['iwr_sampling_weight'] = (
+          interaction_weight_floor + tf.exp(
+              -0.5 * ((selected_distance - interaction_threshold)
+                      / interaction_bandwidth) ** 2))
     return types.Transition(
         observation=tf.concat([state, goal], axis=1),
         action=tf.gather(sample.data.action, anchor_index),
         reward=tf.gather(sample.data.reward, anchor_index),
         discount=tf.gather(sample.data.discount, anchor_index),
         next_observation=tf.concat([next_state, goal], axis=1),
-        extras={
-            'next_action': tf.gather(
-                sample.data.action, anchor_index + 1),
-        })
+        extras=extras)
 
   # Use a single interleave worker to avoid deadlocks with drop_remainder
   # batching during early sampling when the replay buffer is small.
@@ -1011,7 +1158,7 @@ def train_single_task(
   # ---- learner -----------------------------------------------------------
   config_tag = (f'actor_{FLAGS.actor_mode}_critic_{critic_mode}'
                 f'_tid_{FLAGS.use_task_id}_heads_{FLAGS.adapt_heads_only}')
-  if (critic_mode == 'decomposed'
+  if (critic_mode in _PLAIN_DCC_MODES
       and FLAGS.in_trajectory_negative_repeats > 1):
     config_tag += f'_itn{FLAGS.in_trajectory_negative_repeats}'
   if critic_mode == 'rbc_decomposed':
@@ -1020,17 +1167,23 @@ def train_single_task(
   elif critic_mode in _HYBRID_CRITIC_MODES:
     config_tag += (
         f"_hybrid_{rbc_checkpointing.fingerprint_payload(_dcc_sac_identity_config())}")
+  if critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES):
+    config_tag += (
+        f"_bridge_{rbc_checkpointing.fingerprint_payload(_bridge_identity_config())}")
   log_dir = os.path.join(
       FLAGS.log_dir, f'continual_{config.alg_name}', config_tag,
       f'task{task_id}_{env_name}_s{seed}')
   os.makedirs(log_dir, exist_ok=True)
   if (
       critic_mode == 'rbc_decomposed'
-      or critic_mode in _HYBRID_CRITIC_MODES):
+      or critic_mode in _HYBRID_CRITIC_MODES
+      or critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES)):
     identity = (
         _rbc_identity_config()
         if critic_mode == 'rbc_decomposed'
-        else _dcc_sac_identity_config())
+        else (_dcc_sac_identity_config()
+              if critic_mode in _HYBRID_CRITIC_MODES
+              else _bridge_identity_config()))
     manifest = {
         'git_commit': _git_commit_sha(),
         'critic_mode': critic_mode,
@@ -1057,7 +1210,7 @@ def train_single_task(
   beta_optimizer = optax.adam(learning_rate=1e-3)
   alpha_scale_optimizer = optax.adam(learning_rate=1e-3)
 
-  if critic_mode == 'decomposed':
+  if critic_mode in _PLAIN_DCC_MODES:
     # Sibling learner: shares the actor with `make_networks` (we hand it
     # the policy_network + sample / log_prob fns) but maintains its own
     # 4-component critic + h_dyn head. CKA / persistent / reset paths
@@ -1373,6 +1526,8 @@ def train_single_task(
         return np.asarray(sampler(distribution, key))[0]
 
       def _diagnostic_score_actions(observation, actions):
+        if hasattr(learner, 'score_actions'):
+          return np.asarray(learner.score_actions(observation, actions))
         observation_batch = jnp.repeat(
             jnp.asarray(observation)[None, :], actions.shape[0], axis=0)
         values = decomp_nets.apply_paired_score(
@@ -1405,6 +1560,15 @@ def train_single_task(
                   'action_landscape_anchor_prefix_steps', 20)),
               local_noise_std=float(getattr(
                   continual_cfg, 'action_landscape_local_noise_std', 0.10)),
+              interaction_aware_anchor=bool(getattr(
+                  continual_cfg,
+                  'action_landscape_interaction_aware_anchor', False)),
+              interaction_threshold=float(getattr(
+                  continual_cfg,
+                  'action_landscape_interaction_threshold', 0.09)),
+              anchor_search_steps=int(getattr(
+                  continual_cfg,
+                  'action_landscape_anchor_search_steps', 200)),
           ))
       if FLAGS.use_wandb and wandb is not None:
         wandb_landscape = {
@@ -1951,6 +2115,21 @@ def main(_):
       goal_encoder_mode=FLAGS.goal_encoder_mode,
       in_trajectory_negative_repeats=
           FLAGS.in_trajectory_negative_repeats,
+      interaction_weighted_relabeling=
+          FLAGS.interaction_weighted_relabeling,
+      interaction_threshold=FLAGS.interaction_threshold,
+      interaction_bandwidth=FLAGS.interaction_bandwidth,
+      interaction_weight_floor=FLAGS.interaction_weight_floor,
+      action_effect_enabled=FLAGS.action_effect_enabled,
+      action_effect_loss_weight=FLAGS.action_effect_loss_weight,
+      action_effect_discount=FLAGS.action_effect_discount,
+      action_effect_temperature=FLAGS.action_effect_temperature,
+      action_effect_actor_weight=FLAGS.action_effect_actor_weight,
+      action_effect_normalization_eps=
+          FLAGS.action_effect_normalization_eps,
+      action_effect_q_scale_ema_decay=
+          FLAGS.action_effect_q_scale_ema_decay,
+      action_effect_hidden_dim=FLAGS.action_effect_hidden_dim,
       bellman_loss_weight=FLAGS.bellman_loss_weight,
       bellman_residual_l2_weight=FLAGS.bellman_residual_l2_weight,
       bellman_discount=FLAGS.bellman_discount,
@@ -1990,6 +2169,12 @@ def main(_):
           FLAGS.action_landscape_anchor_prefix_steps,
       action_landscape_local_noise_std=
           FLAGS.action_landscape_local_noise_std,
+      action_landscape_interaction_aware_anchor=
+          FLAGS.action_landscape_interaction_aware_anchor,
+      action_landscape_anchor_search_steps=
+          FLAGS.action_landscape_anchor_search_steps,
+      action_landscape_interaction_threshold=
+          FLAGS.action_landscape_interaction_threshold,
       log_pool_cosine=FLAGS.log_pool_cosine,
       log_mixture_norm=FLAGS.log_mixture_norm,
       log_probe_data=FLAGS.log_probe_data,
@@ -2216,6 +2401,25 @@ def main(_):
                   'goal_encoder_mode': FLAGS.goal_encoder_mode,
                   'in_trajectory_negative_repeats':
                       FLAGS.in_trajectory_negative_repeats,
+                  'interaction_weighted_relabeling':
+                      FLAGS.interaction_weighted_relabeling,
+                  'interaction_threshold': FLAGS.interaction_threshold,
+                  'interaction_bandwidth': FLAGS.interaction_bandwidth,
+                  'interaction_weight_floor': FLAGS.interaction_weight_floor,
+                  'action_effect_enabled': FLAGS.action_effect_enabled,
+                  'action_effect_loss_weight':
+                      FLAGS.action_effect_loss_weight,
+                  'action_effect_discount': FLAGS.action_effect_discount,
+                  'action_effect_temperature':
+                      FLAGS.action_effect_temperature,
+                  'action_effect_actor_weight':
+                      FLAGS.action_effect_actor_weight,
+                  'action_effect_normalization_eps':
+                      FLAGS.action_effect_normalization_eps,
+                  'action_effect_q_scale_ema_decay':
+                      FLAGS.action_effect_q_scale_ema_decay,
+                  'action_effect_hidden_dim':
+                      FLAGS.action_effect_hidden_dim,
                   'bellman_loss_weight': FLAGS.bellman_loss_weight,
                   'bellman_residual_l2_weight':
                       FLAGS.bellman_residual_l2_weight,
@@ -2266,6 +2470,12 @@ def main(_):
                       FLAGS.action_landscape_anchor_prefix_steps,
                   'action_landscape_local_noise_std':
                       FLAGS.action_landscape_local_noise_std,
+                  'action_landscape_interaction_aware_anchor':
+                      FLAGS.action_landscape_interaction_aware_anchor,
+                  'action_landscape_anchor_search_steps':
+                      FLAGS.action_landscape_anchor_search_steps,
+                  'action_landscape_interaction_threshold':
+                      FLAGS.action_landscape_interaction_threshold,
                   'post_task_eval_scope':
                       FLAGS.post_task_eval_scope},
           name=f'task{task_id}_{env_name}_s{seed}',

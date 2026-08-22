@@ -272,6 +272,14 @@ def _goal_distances(observation: np.ndarray, obs_dim: int) -> tuple[float, float
   return full, mechanism
 
 
+def _interaction_distance(observation: np.ndarray, obs_dim: int) -> float:
+  """Hand-to-mechanism distance for unified Sawyer observations."""
+  state = np.asarray(observation, dtype=np.float64)[:obs_dim]
+  if state.shape[0] < 7:
+    return float('nan')
+  return float(np.linalg.norm(state[:3] - state[4:7]))
+
+
 def _percentile(value: float, reference: np.ndarray) -> float:
   reference = np.asarray(reference, dtype=np.float64)
   if not reference.size:
@@ -321,6 +329,7 @@ def summarize_action_ranking(
     score_choice_outcome = float(values[int(np.argmax(scores))])
     metrics[f'action_landscape/top_score_{outcome_name}_regret'] = (
         best_outcome - score_choice_outcome)
+    metrics[f'action_landscape/{outcome_name}_std'] = float(np.std(values))
 
   replay_mask = family == 'replay'
   if np.sum(replay_mask) >= 2:
@@ -429,6 +438,9 @@ def run_causal_action_ranking_probe(
     rollout_horizon: int = 25,
     anchor_prefix_steps: int = 20,
     local_noise_std: float = 0.10,
+    interaction_aware_anchor: bool = False,
+    interaction_threshold: float = 0.09,
+    anchor_search_steps: int = 200,
 ) -> Dict[str, float]:
   """Run same-state action interventions and return W&B-ready metrics."""
   action_spec = environment.action_spec()
@@ -440,16 +452,39 @@ def run_causal_action_ranking_probe(
 
   for anchor_id in range(int(num_anchors)):
     timestep = environment.reset()
-    prefix = int(anchor_prefix_steps) + 5 * anchor_id
-    for _ in range(prefix):
-      action = policy_action_fn(
-          np.asarray(timestep.observation), rng, True)
-      timestep = environment.step(np.clip(action, action_min, action_max))
-      if hasattr(timestep, 'last') and timestep.last():
-        timestep = environment.reset()
-
-    anchor_observation = np.asarray(timestep.observation).copy()
-    snapshot = snapshot_environment(environment)
+    if interaction_aware_anchor:
+      best_observation = np.asarray(timestep.observation).copy()
+      best_snapshot = snapshot_environment(environment)
+      best_distance = _interaction_distance(best_observation, obs_dim)
+      for _ in range(int(anchor_search_steps)):
+        action = policy_action_fn(
+            np.asarray(timestep.observation), rng, True)
+        timestep = environment.step(np.clip(action, action_min, action_max))
+        observation = np.asarray(timestep.observation).copy()
+        distance = _interaction_distance(observation, obs_dim)
+        if np.isfinite(distance) and (
+            not np.isfinite(best_distance) or distance < best_distance):
+          best_distance = distance
+          best_observation = observation
+          best_snapshot = snapshot_environment(environment)
+        if np.isfinite(best_distance) and best_distance <= interaction_threshold:
+          break
+        if hasattr(timestep, 'last') and timestep.last():
+          break
+      restore_environment(best_snapshot)
+      anchor_observation = best_observation
+      snapshot = best_snapshot
+    else:
+      prefix = int(anchor_prefix_steps) + 5 * anchor_id
+      for _ in range(prefix):
+        action = policy_action_fn(
+            np.asarray(timestep.observation), rng, True)
+        timestep = environment.step(np.clip(action, action_min, action_max))
+        if hasattr(timestep, 'last') and timestep.last():
+          timestep = environment.reset()
+      anchor_observation = np.asarray(timestep.observation).copy()
+      snapshot = snapshot_environment(environment)
+      best_distance = _interaction_distance(anchor_observation, obs_dim)
     initial_full, initial_mechanism = _goal_distances(
         anchor_observation, obs_dim)
     actions, family = _candidate_actions(
@@ -507,13 +542,18 @@ def run_causal_action_ranking_probe(
       outcomes['success'].append(success)
 
     restore_environment(snapshot)
-    per_anchor.append(summarize_action_ranking(
+    anchor_metrics = summarize_action_ranking(
         scores=scores,
         outcomes=outcomes,
         family=family,
         actions=actions,
         replay_actions=replay_actions,
-    ))
+    )
+    anchor_metrics['action_landscape/anchor_interaction_distance'] = float(
+        best_distance)
+    anchor_metrics['action_landscape/anchor_near_interaction'] = float(
+        np.isfinite(best_distance) and best_distance <= interaction_threshold)
+    per_anchor.append(anchor_metrics)
 
   keys = sorted(set().union(*(metrics.keys() for metrics in per_anchor)))
   aggregated = {

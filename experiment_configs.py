@@ -495,6 +495,116 @@ CELLS: list = [
         }
         for seed in (5, 6, 7)
     ],
+    # Literature-grounded remedy ablations, indices 18--35. All retain the
+    # successful CRTR r=12 regularizer so the comparison isolates IWR and the
+    # forward action-effect head against the completed task-5/task-8 runs.
+    *[
+        {
+            'actor_mode': 'reset', 'critic_mode': 'iwr_decomposed',
+            'seed': seed, 'dyn_aux_weight': 1.0,
+            'combine_mode': 'add', 'goal_encoder_mode': 'shared',
+            'single_task': task, 'use_task_id': False,
+            'actor_auto_reset': False,
+            'in_trajectory_negative_repeats': 12,
+            'interaction_weighted_relabeling': True,
+            'interaction_threshold': 0.09,
+            'interaction_bandwidth': 0.03,
+            'interaction_weight_floor': 0.05,
+            'action_effect_enabled': False,
+            'shortcut_diagnostic_interval': 50,
+            'action_landscape_diagnostic_interval_steps': 500_000,
+            'action_landscape_num_anchors': 2,
+            'action_landscape_candidates_per_family': 4,
+            'action_landscape_rollout_horizon': 100,
+            'action_landscape_anchor_prefix_steps': 20,
+            'action_landscape_local_noise_std': 0.10,
+            'action_landscape_interaction_aware_anchor': True,
+            'action_landscape_anchor_search_steps': 200,
+            'action_landscape_interaction_threshold': 0.09,
+            'log_probe_data': False,
+            'post_task_eval_scope': 'current',
+            'wandb_group': f'Bridge-DCC-IWR-{label}',
+        }
+        for task, label in (
+            ('sawyer_handle_press_side', 'task5'),
+            ('sawyer_window_close', 'task8'))
+        for seed in (5, 6, 7)
+    ],
+    *[
+        {
+            'actor_mode': 'reset', 'critic_mode': 'advantage_decomposed',
+            'seed': seed, 'dyn_aux_weight': 1.0,
+            'combine_mode': 'add', 'goal_encoder_mode': 'shared',
+            'single_task': task, 'use_task_id': False,
+            'actor_auto_reset': False,
+            'in_trajectory_negative_repeats': 12,
+            'interaction_weighted_relabeling': False,
+            'action_effect_enabled': True,
+            'action_effect_loss_weight': 1.0,
+            'action_effect_discount': 0.99,
+            'action_effect_temperature': 1.0,
+            'action_effect_actor_weight': 1.0,
+            'action_effect_normalization_eps': 0.001,
+            'action_effect_q_scale_ema_decay': 0.99,
+            'action_effect_hidden_dim': 256,
+            'shortcut_diagnostic_interval': 50,
+            'action_landscape_diagnostic_interval_steps': 500_000,
+            'action_landscape_num_anchors': 2,
+            'action_landscape_candidates_per_family': 4,
+            'action_landscape_rollout_horizon': 100,
+            'action_landscape_anchor_prefix_steps': 20,
+            'action_landscape_local_noise_std': 0.10,
+            'action_landscape_interaction_aware_anchor': True,
+            'action_landscape_anchor_search_steps': 200,
+            'action_landscape_interaction_threshold': 0.09,
+            'log_probe_data': False,
+            'post_task_eval_scope': 'current',
+            'wandb_group': f'Bridge-DCC-Advantage-{label}',
+        }
+        for task, label in (
+            ('sawyer_handle_press_side', 'task5'),
+            ('sawyer_window_close', 'task8'))
+        for seed in (5, 6, 7)
+    ],
+    *[
+        {
+            'actor_mode': 'reset', 'critic_mode': 'bridge_decomposed',
+            'seed': seed, 'dyn_aux_weight': 1.0,
+            'combine_mode': 'add', 'goal_encoder_mode': 'shared',
+            'single_task': task, 'use_task_id': False,
+            'actor_auto_reset': False,
+            'in_trajectory_negative_repeats': 12,
+            'interaction_weighted_relabeling': True,
+            'interaction_threshold': 0.09,
+            'interaction_bandwidth': 0.03,
+            'interaction_weight_floor': 0.05,
+            'action_effect_enabled': True,
+            'action_effect_loss_weight': 1.0,
+            'action_effect_discount': 0.99,
+            'action_effect_temperature': 1.0,
+            'action_effect_actor_weight': 1.0,
+            'action_effect_normalization_eps': 0.001,
+            'action_effect_q_scale_ema_decay': 0.99,
+            'action_effect_hidden_dim': 256,
+            'shortcut_diagnostic_interval': 50,
+            'action_landscape_diagnostic_interval_steps': 500_000,
+            'action_landscape_num_anchors': 2,
+            'action_landscape_candidates_per_family': 4,
+            'action_landscape_rollout_horizon': 100,
+            'action_landscape_anchor_prefix_steps': 20,
+            'action_landscape_local_noise_std': 0.10,
+            'action_landscape_interaction_aware_anchor': True,
+            'action_landscape_anchor_search_steps': 200,
+            'action_landscape_interaction_threshold': 0.09,
+            'log_probe_data': False,
+            'post_task_eval_scope': 'current',
+            'wandb_group': f'Bridge-DCC-Combined-{label}',
+        }
+        for task, label in (
+            ('sawyer_handle_press_side', 'task5'),
+            ('sawyer_window_close', 'task8'))
+        for seed in (5, 6, 7)
+    ],
 ]
 
 

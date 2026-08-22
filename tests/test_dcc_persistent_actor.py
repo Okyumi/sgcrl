@@ -13,7 +13,7 @@ LEARNER = (
 
 def test_first_six_cells_remain_the_matched_persistent_actor_dcc_cells():
   configs = experiment_configs.build_configs()
-  assert len(configs) == 12
+  assert len(configs) == 36
   persistent_configs = configs[:6]
   assert {config['actor_mode'] for config in persistent_configs} == {'persistent'}
   assert {config['critic_mode'] for config in persistent_configs} == {'decomposed'}

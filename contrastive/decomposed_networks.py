@@ -85,6 +85,12 @@ class DecomposedCriticNetworks:
   repr_dim: int
   hidden_dim: int
 
+  # Optional task-local forward action-effect head used by Bridge-DCC.
+  # It predicts a displacement in the goal-embedding geometry rather than
+  # identifying which replay action generated a transition.
+  init_u_task: Optional[Callable[[jax.Array], Params]] = None
+  apply_u_task: Optional[Apply] = None  # (params, obs, action) -> (B, repr_dim)
+
   # Convenience apply fns that callers may use directly.
   apply_sa_repr: Optional[Callable] = None  # composed phi(s,a)
   apply_score: Optional[Callable] = None    # full (B, B) critic score
@@ -110,6 +116,7 @@ def make_decomposed_networks(
     repr_norm: bool = False,
     combine_mode: str = 'add',
     goal_encoder_mode: str = 'shared',
+    action_effect_hidden_dim: int = 256,
 ) -> DecomposedCriticNetworks:
   """Build the decomposed critic networks for the given spec.
 
@@ -241,6 +248,17 @@ def make_decomposed_networks(
           name='psi')
       return body(goal)
 
+  # ---- u_task: local forward action effect in psi geometry ----------------
+  def _u_task_fn(obs, action):
+    state = obs[:, :obs_dim]
+    return hk.nets.MLP(
+        [action_effect_hidden_dim, action_effect_hidden_dim, repr_dim],
+        w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
+        activation=jax.nn.relu,
+        activate_final=False,
+        name='u_task')(
+            jnp.concatenate([state, action], axis=-1))
+
   # ---- optional psi projector (concat-combine or 'projected' goal mode) ---
   def _psi_proj_fn(z):
     return hk.Linear(z_sa_dim, name='psi_proj')(z)
@@ -250,6 +268,7 @@ def make_decomposed_networks(
   h_dyn = hk.without_apply_rng(hk.transform(_h_dyn_fn))
   phi_task = hk.without_apply_rng(hk.transform(_phi_task_fn))
   psi = hk.without_apply_rng(hk.transform(_psi_fn))
+  u_task = hk.without_apply_rng(hk.transform(_u_task_fn))
   psi_proj = (hk.without_apply_rng(hk.transform(_psi_proj_fn))
               if use_psi_proj else None)
 
@@ -270,6 +289,7 @@ def make_decomposed_networks(
   init_h_phi = lambda key: h_phi.init(key, dummy_hidden)
   init_h_dyn = lambda key: h_dyn.init(key, dummy_hidden)
   init_phi_task = lambda key: phi_task.init(key, dummy_obs, dummy_action)
+  init_u_task = lambda key: u_task.init(key, dummy_obs, dummy_action)
   # Standalone projector init for callers that want psi_proj separately.
   # ``init_psi`` below already folds this into the combined bundle when
   # use_psi_proj is True; keep a None sentinel when the projector is off.
@@ -382,6 +402,7 @@ def make_decomposed_networks(
       init_h_dyn=init_h_dyn, apply_h_dyn=h_dyn.apply,
       init_phi_task=init_phi_task, apply_phi_task=phi_task.apply,
       init_psi=init_psi, apply_psi=apply_psi,
+      init_u_task=init_u_task, apply_u_task=u_task.apply,
       obs_dim=obs_dim, state_dim=state_dim, d_M=d_M,
       repr_dim=repr_dim, hidden_dim=hidden_dim_actual,
       apply_sa_repr=apply_sa_repr,

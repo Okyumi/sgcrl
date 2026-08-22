@@ -83,6 +83,26 @@ class ContinualConfig:
   # negatives. StableCRL uses 12 by default.
   in_trajectory_negative_repeats: int = 1
 
+  # -- Bridge-DCC: interaction bridge sampling ----------------------------
+  # IWR keeps the original contrastive loss but gives future states near the
+  # hand/object interaction boundary non-negligible relabeling probability.
+  interaction_weighted_relabeling: bool = False
+  interaction_threshold: float = 0.09
+  interaction_bandwidth: float = 0.03
+  interaction_weight_floor: float = 0.05
+
+  # -- Bridge-DCC: task-local forward action-effect / advantage head -------
+  # u(s,a) predicts gamma*psi(s')-psi(s); u(s,a)^T psi(g) is a local,
+  # goal-conditioned action-comparative signal. It is reset each task.
+  action_effect_enabled: bool = False
+  action_effect_loss_weight: float = 1.0
+  action_effect_discount: float = 0.99
+  action_effect_temperature: float = 1.0
+  action_effect_actor_weight: float = 1.0
+  action_effect_normalization_eps: float = 1e-3
+  action_effect_q_scale_ema_decay: float = 0.99
+  action_effect_hidden_dim: int = 256
+
   # -- RBC-DCC Bellman calibration ------------------------------------------
   bellman_loss_weight: float = 1.0
   bellman_residual_l2_weight: float = 1e-4
@@ -139,6 +159,9 @@ class ContinualConfig:
   action_landscape_rollout_horizon: int = 25
   action_landscape_anchor_prefix_steps: int = 20
   action_landscape_local_noise_std: float = 0.10
+  action_landscape_interaction_aware_anchor: bool = False
+  action_landscape_anchor_search_steps: int = 200
+  action_landscape_interaction_threshold: float = 0.09
 
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.
