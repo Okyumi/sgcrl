@@ -109,6 +109,18 @@ ACTION_EFFECT_ACTOR_WEIGHT="${ACTION_EFFECT_ACTOR_WEIGHT:-1.0}"
 ACTION_EFFECT_NORMALIZATION_EPS="${ACTION_EFFECT_NORMALIZATION_EPS:-0.001}"
 ACTION_EFFECT_Q_SCALE_EMA_DECAY="${ACTION_EFFECT_Q_SCALE_EMA_DECAY:-0.99}"
 ACTION_EFFECT_HIDDEN_DIM="${ACTION_EFFECT_HIDDEN_DIM:-256}"
+ACTION_EFFECT_ACTOR_MODE="${ACTION_EFFECT_ACTOR_MODE:-combined}"
+ACTION_EFFECT_TARGET_MODE="${ACTION_EFFECT_TARGET_MODE:-psi_one_step}"
+OUTCOME_HORIZON="${OUTCOME_HORIZON:-25}"
+OUTCOME_SUCCESS_THRESHOLD="${OUTCOME_SUCCESS_THRESHOLD:-0.05}"
+OUTCOME_PROGRESS_LOSS_WEIGHT="${OUTCOME_PROGRESS_LOSS_WEIGHT:-1.0}"
+OUTCOME_SUCCESS_LOSS_WEIGHT="${OUTCOME_SUCCESS_LOSS_WEIGHT:-1.0}"
+OUTCOME_SUCCESS_ACTOR_WEIGHT="${OUTCOME_SUCCESS_ACTOR_WEIGHT:-1.0}"
+OUTCOME_PROGRESS_EMA_DECAY="${OUTCOME_PROGRESS_EMA_DECAY:-0.99}"
+OUTCOME_PROGRESS_STD_FLOOR="${OUTCOME_PROGRESS_STD_FLOOR:-0.01}"
+SUCCESS_BC_WEIGHT="${SUCCESS_BC_WEIGHT:-0.0}"
+SUCCESS_BUFFER_CAPACITY="${SUCCESS_BUFFER_CAPACITY:-4096}"
+SUCCESS_BC_BATCH_SIZE="${SUCCESS_BC_BATCH_SIZE:-64}"
 BELLMAN_LOSS_WEIGHT="${BELLMAN_LOSS_WEIGHT:-1.0}"
 BELLMAN_RESIDUAL_L2_WEIGHT="${BELLMAN_RESIDUAL_L2_WEIGHT:-0.0001}"
 BELLMAN_DISCOUNT="${BELLMAN_DISCOUNT:-0.99}"
@@ -179,6 +191,10 @@ if [ "${ACTION_LANDSCAPE_SELF_TEST:-false}" = "true" ]; then
     --self-test-env=sawyer_handle_press_side \
     --self-test-env=sawyer_window_close \
     --seed=5
+fi
+if [ "${OUTCOME_FALSIFICATION_SELF_TEST:-false}" = "true" ]; then
+  python -m contrastive.outcome_credit --self-test
+  python tests/test_outcome_falsification.py
 fi
 
 mkdir -p "$LOG_DIR" "$CHECKPOINT_DIR"
@@ -299,6 +315,18 @@ build_flags() {
   _FLAGS="$_FLAGS --action_effect_normalization_eps=$ACTION_EFFECT_NORMALIZATION_EPS"
   _FLAGS="$_FLAGS --action_effect_q_scale_ema_decay=$ACTION_EFFECT_Q_SCALE_EMA_DECAY"
   _FLAGS="$_FLAGS --action_effect_hidden_dim=$ACTION_EFFECT_HIDDEN_DIM"
+  _FLAGS="$_FLAGS --action_effect_actor_mode=$ACTION_EFFECT_ACTOR_MODE"
+  _FLAGS="$_FLAGS --action_effect_target_mode=$ACTION_EFFECT_TARGET_MODE"
+  _FLAGS="$_FLAGS --outcome_horizon=$OUTCOME_HORIZON"
+  _FLAGS="$_FLAGS --outcome_success_threshold=$OUTCOME_SUCCESS_THRESHOLD"
+  _FLAGS="$_FLAGS --outcome_progress_loss_weight=$OUTCOME_PROGRESS_LOSS_WEIGHT"
+  _FLAGS="$_FLAGS --outcome_success_loss_weight=$OUTCOME_SUCCESS_LOSS_WEIGHT"
+  _FLAGS="$_FLAGS --outcome_success_actor_weight=$OUTCOME_SUCCESS_ACTOR_WEIGHT"
+  _FLAGS="$_FLAGS --outcome_progress_ema_decay=$OUTCOME_PROGRESS_EMA_DECAY"
+  _FLAGS="$_FLAGS --outcome_progress_std_floor=$OUTCOME_PROGRESS_STD_FLOOR"
+  _FLAGS="$_FLAGS --success_bc_weight=$SUCCESS_BC_WEIGHT"
+  _FLAGS="$_FLAGS --success_buffer_capacity=$SUCCESS_BUFFER_CAPACITY"
+  _FLAGS="$_FLAGS --success_bc_batch_size=$SUCCESS_BC_BATCH_SIZE"
   _FLAGS="$_FLAGS --bellman_loss_weight=$BELLMAN_LOSS_WEIGHT"
   _FLAGS="$_FLAGS --bellman_residual_l2_weight=$BELLMAN_RESIDUAL_L2_WEIGHT"
   _FLAGS="$_FLAGS --bellman_discount=$BELLMAN_DISCOUNT"
@@ -455,7 +483,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "Decomp critic   : dyn_aux_weight=$DYN_AUX_WEIGHT (after_task0=$DYN_AUX_AFTER_TASK0) phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
     echo "In-traj negs    : repeats=$IN_TRAJECTORY_NEGATIVE_REPEATS"
     echo "Bridge sampling : iwr=$INTERACTION_WEIGHTED_RELABELING threshold=$INTERACTION_THRESHOLD bandwidth=$INTERACTION_BANDWIDTH floor=$INTERACTION_WEIGHT_FLOOR"
-    echo "Action effect   : enabled=$ACTION_EFFECT_ENABLED weight=$ACTION_EFFECT_ACTOR_WEIGHT hidden=$ACTION_EFFECT_HIDDEN_DIM"
+    echo "Action effect   : enabled=$ACTION_EFFECT_ENABLED actor=$ACTION_EFFECT_ACTOR_MODE target=$ACTION_EFFECT_TARGET_MODE H=$OUTCOME_HORIZON bc=$SUCCESS_BC_WEIGHT"
     echo "Diagnostics     : log_pool_cosine=$LOG_POOL_COSINE log_mixture_norm=$LOG_MIXTURE_NORM log_probe_data=$LOG_PROBE_DATA"
     echo "Log dir         : $LOG_DIR"
     echo "Checkpoint dir  : $CHECKPOINT_DIR"

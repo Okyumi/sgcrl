@@ -113,6 +113,12 @@ class DecomposedTrainingState(NamedTuple):
   u_task_params: Optional[networks_lib.Params] = None
   u_task_opt_state: Optional[optax.OptState] = None
   control_q_scale_ema: Optional[jnp.ndarray] = None
+  outcome_progress_mean_ema: Optional[jnp.ndarray] = None
+  outcome_progress_var_ema: Optional[jnp.ndarray] = None
+  success_buffer_observation: Optional[jnp.ndarray] = None
+  success_buffer_action: Optional[jnp.ndarray] = None
+  success_buffer_size: Optional[jnp.ndarray] = None
+  success_buffer_index: Optional[jnp.ndarray] = None
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +216,43 @@ class ContinualDecomposedLearner(acme.Learner):
         getattr(continual_config, 'action_effect_normalization_eps', 1e-3))
     self._action_effect_q_scale_ema_decay = float(getattr(
         continual_config, 'action_effect_q_scale_ema_decay', 0.99))
+    self._action_effect_actor_mode = getattr(
+        continual_config, 'action_effect_actor_mode', 'combined')
+    self._action_effect_target_mode = getattr(
+        continual_config, 'action_effect_target_mode', 'psi_one_step')
+    self._outcome_success_actor_weight = float(getattr(
+        continual_config, 'outcome_success_actor_weight', 1.0))
+    self._outcome_progress_ema_decay = float(getattr(
+        continual_config, 'outcome_progress_ema_decay', 0.99))
+    self._outcome_progress_std_floor = float(getattr(
+        continual_config, 'outcome_progress_std_floor', 0.01))
+    self._success_bc_weight = float(getattr(
+        continual_config, 'success_bc_weight', 0.0))
+    self._success_buffer_capacity = int(getattr(
+        continual_config, 'success_buffer_capacity', 4096))
+    self._success_bc_batch_size = int(getattr(
+        continual_config, 'success_bc_batch_size', 64))
+    if self._action_effect_actor_mode not in ('combined', 'effect_only'):
+      raise ValueError(
+          'action_effect_actor_mode must be combined or effect_only.')
+    if self._action_effect_target_mode not in ('psi_one_step', 'raw_horizon'):
+      raise ValueError(
+          'action_effect_target_mode must be psi_one_step or raw_horizon.')
+    if (self._action_effect_actor_mode == 'effect_only'
+        and not self._action_effect_enabled):
+      raise ValueError('effect_only actor mode requires action_effect_enabled.')
+    if (self._action_effect_target_mode == 'raw_horizon'
+        and not self._action_effect_enabled):
+      raise ValueError('raw_horizon target mode requires action_effect_enabled.')
+    if self._success_bc_weight > 0:
+      if self._action_effect_target_mode != 'raw_horizon':
+        raise ValueError('success retention requires raw_horizon targets.')
+      if self._success_buffer_capacity <= 0 or self._success_bc_batch_size <= 0:
+        raise ValueError('Success-buffer capacity and batch size must be > 0.')
     if self._action_effect_enabled:
-      if (getattr(decomp_nets, 'combine_mode', 'add') != 'add'
-          or getattr(decomp_nets, 'goal_encoder_mode', 'shared') != 'shared'):
+      if (self._action_effect_target_mode == 'psi_one_step'
+          and (getattr(decomp_nets, 'combine_mode', 'add') != 'add'
+          or getattr(decomp_nets, 'goal_encoder_mode', 'shared') != 'shared')):
         raise ValueError(
             'The action-effect head requires combine_mode=add and '
             'goal_encoder_mode=shared so its output and psi(g) share the '
@@ -311,6 +351,28 @@ class ContinualDecomposedLearner(acme.Learner):
       u_task_opt_state = None
       control_q_scale_ema = None
 
+    if self._action_effect_target_mode == 'raw_horizon':
+      outcome_progress_mean_ema = jnp.asarray(0.0, dtype=jnp.float32)
+      outcome_progress_var_ema = jnp.asarray(
+          self._outcome_progress_std_floor ** 2, dtype=jnp.float32)
+    else:
+      outcome_progress_mean_ema = None
+      outcome_progress_var_ema = None
+    if self._success_bc_weight > 0:
+      success_buffer_observation = jnp.zeros(
+          (self._success_buffer_capacity, 2 * config.obs_dim),
+          dtype=jnp.float32)
+      success_buffer_action = jnp.zeros(
+          (self._success_buffer_capacity, decomp_nets.action_dim),
+          dtype=jnp.float32)
+      success_buffer_size = jnp.asarray(0, dtype=jnp.int32)
+      success_buffer_index = jnp.asarray(0, dtype=jnp.int32)
+    else:
+      success_buffer_observation = None
+      success_buffer_action = None
+      success_buffer_size = None
+      success_buffer_index = None
+
     self._state = DecomposedTrainingState(
         policy_params=policy_params,
         policy_opt_state=policy_opt_state,
@@ -330,6 +392,12 @@ class ContinualDecomposedLearner(acme.Learner):
         u_task_params=u_task_params,
         u_task_opt_state=u_task_opt_state,
         control_q_scale_ema=control_q_scale_ema,
+        outcome_progress_mean_ema=outcome_progress_mean_ema,
+        outcome_progress_var_ema=outcome_progress_var_ema,
+        success_buffer_observation=success_buffer_observation,
+        success_buffer_action=success_buffer_action,
+        success_buffer_size=success_buffer_size,
+        success_buffer_index=success_buffer_index,
     )
 
     self._update_step = self._make_update_step()
@@ -380,6 +448,18 @@ class ContinualDecomposedLearner(acme.Learner):
     action_effect_actor_weight = self._action_effect_actor_weight
     action_effect_eps = self._action_effect_normalization_eps
     q_scale_ema_decay = self._action_effect_q_scale_ema_decay
+    action_effect_actor_mode = self._action_effect_actor_mode
+    action_effect_target_mode = self._action_effect_target_mode
+    outcome_progress_loss_weight = float(getattr(
+        self._continual_cfg, 'outcome_progress_loss_weight', 1.0))
+    outcome_success_loss_weight = float(getattr(
+        self._continual_cfg, 'outcome_success_loss_weight', 1.0))
+    outcome_success_actor_weight = self._outcome_success_actor_weight
+    outcome_progress_ema_decay = self._outcome_progress_ema_decay
+    outcome_progress_std_floor = self._outcome_progress_std_floor
+    success_bc_weight = self._success_bc_weight
+    success_buffer_capacity = self._success_buffer_capacity
+    success_bc_batch_size = self._success_bc_batch_size
     iwr_enabled = bool(getattr(
         self._continual_cfg, 'interaction_weighted_relabeling', False))
     interaction_threshold = float(getattr(
@@ -460,25 +540,93 @@ class ContinualDecomposedLearner(acme.Learner):
       mse = jnp.mean((pred - target) ** 2)
       return mse, dict(dyn_mse=mse)
 
-    def action_effect_loss_fn(p_u, p_psi, transitions):
-      """Predict the forward change in normalized achieved-goal geometry."""
-      state = transitions.observation[:, :obs_dim]
-      next_state = transitions.next_observation[:, :obs_dim]
-      state_as_goal = jnp.concatenate([state, state], axis=1)
-      next_state_as_goal = jnp.concatenate([next_state, next_state], axis=1)
-      psi_state = decomp_nets.apply_psi(p_psi, state_as_goal)
-      psi_next = decomp_nets.apply_psi(p_psi, next_state_as_goal)
-      psi_state = psi_state / jnp.maximum(
-          jnp.linalg.norm(psi_state, axis=1, keepdims=True), 1e-8)
-      psi_next = psi_next / jnp.maximum(
-          jnp.linalg.norm(psi_next, axis=1, keepdims=True), 1e-8)
-      continuation = transitions.discount[:, None]
-      target = jax.lax.stop_gradient(
-          action_effect_discount * continuation * psi_next - psi_state)
+    def action_effect_loss_fn(p_u, p_psi, progress_mean, progress_var,
+                              transitions):
+      """Train either the legacy psi-effect head or raw H-step outcome head."""
       prediction = decomp_nets.apply_u_task(
           p_u, transitions.observation, transitions.action)
-      per_transition_loss = jnp.mean(
-          optax.huber_loss(prediction, target, delta=1.0), axis=1)
+      if action_effect_target_mode == 'raw_horizon':
+        raw_progress = transitions.extras['outcome_progress']
+        success = transitions.extras['outcome_success']
+        progress_std = jnp.sqrt(jnp.maximum(
+            progress_var, outcome_progress_std_floor ** 2))
+        progress_target = jax.lax.stop_gradient(
+            (raw_progress - progress_mean) / progress_std)
+        progress_prediction = prediction[:, 0]
+        diagnostic_prediction = progress_prediction
+        success_logit = prediction[:, 1]
+        progress_loss = optax.huber_loss(
+            progress_prediction, progress_target, delta=1.0)
+        success_loss = optax.sigmoid_binary_cross_entropy(
+            success_logit, success)
+        per_transition_loss = (
+            outcome_progress_loss_weight * progress_loss
+            + outcome_success_loss_weight * success_loss)
+        pred_centered = progress_prediction - jnp.mean(progress_prediction)
+        target_centered = raw_progress - jnp.mean(raw_progress)
+        progress_corr = jnp.sum(pred_centered * target_centered) / jnp.maximum(
+            jnp.linalg.norm(pred_centered) * jnp.linalg.norm(target_centered),
+            1e-8)
+        shuffled_prediction = decomp_nets.apply_u_task(
+            p_u, transitions.observation, jnp.roll(
+                transitions.action, 1, axis=0))[:, 0]
+        shuffled_centered = shuffled_prediction - jnp.mean(
+            shuffled_prediction)
+        prediction_centered = diagnostic_prediction - jnp.mean(
+            diagnostic_prediction)
+        action_shuffle_retention = jnp.sum(
+            prediction_centered * shuffled_centered) / jnp.maximum(
+                jnp.linalg.norm(prediction_centered)
+                * jnp.linalg.norm(shuffled_centered), 1e-8)
+        fixed_observation = jnp.repeat(
+            transitions.observation[:1], transitions.action.shape[0], axis=0)
+        fixed_action_scores = decomp_nets.apply_u_task(
+            p_u, fixed_observation, transitions.action)[:, 0]
+      else:
+        progress_loss = jnp.zeros((prediction.shape[0],))
+        success_loss = jnp.zeros((prediction.shape[0],))
+        progress_corr = jnp.asarray(0.0)
+      state = transitions.observation[:, :obs_dim]
+      if action_effect_target_mode == 'psi_one_step':
+        next_state = transitions.next_observation[:, :obs_dim]
+        state_as_goal = jnp.concatenate([state, state], axis=1)
+        next_state_as_goal = jnp.concatenate([next_state, next_state], axis=1)
+        psi_state = decomp_nets.apply_psi(p_psi, state_as_goal)
+        psi_next = decomp_nets.apply_psi(p_psi, next_state_as_goal)
+        psi_state = psi_state / jnp.maximum(
+            jnp.linalg.norm(psi_state, axis=1, keepdims=True), 1e-8)
+        psi_next = psi_next / jnp.maximum(
+            jnp.linalg.norm(psi_next, axis=1, keepdims=True), 1e-8)
+        continuation = transitions.discount[:, None]
+        target = jax.lax.stop_gradient(
+            action_effect_discount * continuation * psi_next - psi_state)
+        per_transition_loss = jnp.mean(
+            optax.huber_loss(prediction, target, delta=1.0), axis=1)
+        goal_repr = decomp_nets.apply_psi(p_psi, transitions.observation)
+        goal_repr = goal_repr / jnp.maximum(
+            jnp.linalg.norm(goal_repr, axis=1, keepdims=True), 1e-8)
+        diagnostic_prediction = jnp.sum(prediction * goal_repr, axis=1)
+        shuffled_effect = decomp_nets.apply_u_task(
+            p_u, transitions.observation,
+            jnp.roll(transitions.action, 1, axis=0))
+        shuffled_prediction = jnp.sum(shuffled_effect * goal_repr, axis=1)
+        fixed_observation = jnp.repeat(
+            transitions.observation[:1], transitions.action.shape[0], axis=0)
+        fixed_effect = decomp_nets.apply_u_task(
+            p_u, fixed_observation, transitions.action)
+        fixed_goal_repr = decomp_nets.apply_psi(p_psi, fixed_observation)
+        fixed_goal_repr = fixed_goal_repr / jnp.maximum(
+            jnp.linalg.norm(fixed_goal_repr, axis=1, keepdims=True), 1e-8)
+        fixed_action_scores = jnp.sum(
+            fixed_effect * fixed_goal_repr, axis=1)
+        prediction_centered = diagnostic_prediction - jnp.mean(
+            diagnostic_prediction)
+        shuffled_centered = shuffled_prediction - jnp.mean(
+            shuffled_prediction)
+        action_shuffle_retention = jnp.sum(
+            prediction_centered * shuffled_centered) / jnp.maximum(
+                jnp.linalg.norm(prediction_centered)
+                * jnp.linalg.norm(shuffled_centered), 1e-8)
       if iwr_enabled:
         interaction_distance = jnp.linalg.norm(
             state[:, :3] - state[:, 4:7], axis=1)
@@ -493,10 +641,15 @@ class ContinualDecomposedLearner(acme.Learner):
       else:
         interaction_weight = jnp.ones_like(per_transition_loss)
         loss = jnp.mean(per_transition_loss)
-      pred_norm = jnp.linalg.norm(prediction, axis=1)
-      target_norm = jnp.linalg.norm(target, axis=1)
-      cosine = jnp.sum(prediction * target, axis=1) / jnp.maximum(
-          pred_norm * target_norm, 1e-8)
+      if action_effect_target_mode == 'psi_one_step':
+        pred_norm = jnp.linalg.norm(prediction, axis=1)
+        target_norm = jnp.linalg.norm(target, axis=1)
+        cosine = jnp.sum(prediction * target, axis=1) / jnp.maximum(
+            pred_norm * target_norm, 1e-8)
+      else:
+        pred_norm = jnp.abs(prediction[:, 0])
+        target_norm = jnp.abs(raw_progress)
+        cosine = jnp.zeros_like(pred_norm)
       return loss, {
           'action_effect/loss': loss,
           'action_effect/cosine': jnp.mean(cosine),
@@ -504,11 +657,32 @@ class ContinualDecomposedLearner(acme.Learner):
           'action_effect/target_norm': jnp.mean(target_norm),
           'action_effect/interaction_weight_mean':
               jnp.mean(interaction_weight),
+          'outcome/progress_loss': jnp.mean(progress_loss),
+          'outcome/success_loss': jnp.mean(success_loss),
+          'outcome/progress_target_mean': (
+              jnp.mean(raw_progress)
+              if action_effect_target_mode == 'raw_horizon' else 0.0),
+          'outcome/progress_target_std': (
+              jnp.std(raw_progress)
+              if action_effect_target_mode == 'raw_horizon' else 0.0),
+          'outcome/progress_prediction_std': (
+              jnp.std(prediction[:, 0])
+              if action_effect_target_mode == 'raw_horizon' else 0.0),
+          'outcome/progress_pearson': progress_corr,
+          'outcome/action_shuffle_delta': jnp.mean(jnp.abs(
+              diagnostic_prediction - shuffled_prediction)),
+          'outcome/action_shuffle_retention': action_shuffle_retention,
+          'outcome/fixed_state_action_std': jnp.std(fixed_action_scores),
+          'outcome/success_rate': (
+              jnp.mean(success)
+              if action_effect_target_mode == 'raw_horizon' else 0.0),
       }
 
     def actor_loss_fn(policy_params, b_shared_params, h_phi_params,
                       phi_task_params, psi_params, u_task_params,
-                      control_q_scale_ema, log_alpha, transitions, key):
+                      control_q_scale_ema, success_buffer_observation,
+                      success_buffer_action, success_buffer_size,
+                      log_alpha, transitions, key):
       """Actor loss: matches continual_learning.py:408-438.
 
       Optionally rolls goals via ``config.random_goals`` (0.0 / 0.5 / 1.0),
@@ -533,8 +707,9 @@ class ContinualDecomposedLearner(acme.Learner):
         new_goal = jnp.roll(goal, 1, axis=0)
 
       new_obs = jnp.concatenate([new_state, new_goal], axis=1)
+      key, action_key, bc_key = jax.random.split(key, 3)
       dist_params = policy_network.apply(policy_params, new_obs)
-      action = sample_fn(dist_params, key)
+      action = sample_fn(dist_params, action_key)
       log_prob = log_prob_fn(dist_params, action)
 
       # Critic score under the composed phi. argnums=0 of the outer
@@ -545,17 +720,25 @@ class ContinualDecomposedLearner(acme.Learner):
           new_obs, action)
       q_action = jnp.diag(score)            # matched (s,a)-to-own-g entry
       if action_effect_enabled:
-        goal_repr = decomp_nets.apply_psi(psi_params, new_obs)
-        goal_repr = goal_repr / jnp.maximum(
-            jnp.linalg.norm(goal_repr, axis=1, keepdims=True), 1e-8)
         effect = decomp_nets.apply_u_task(u_task_params, new_obs, action)
-        advantage_raw = jnp.sum(effect * goal_repr, axis=1)
-        advantage = jnp.tanh(
-            advantage_raw / max(action_effect_temperature, 1e-8))
+        if action_effect_target_mode == 'raw_horizon':
+          advantage = (
+              effect[:, 0]
+              + outcome_success_actor_weight * jax.nn.sigmoid(effect[:, 1]))
+        else:
+          goal_repr = decomp_nets.apply_psi(psi_params, new_obs)
+          goal_repr = goal_repr / jnp.maximum(
+              jnp.linalg.norm(goal_repr, axis=1, keepdims=True), 1e-8)
+          advantage_raw = jnp.sum(effect * goal_repr, axis=1)
+          advantage = jnp.tanh(
+              advantage_raw / max(action_effect_temperature, 1e-8))
         q_scale = jax.lax.stop_gradient(jnp.maximum(
             control_q_scale_ema, action_effect_eps))
-        control_score = (
-            q_action / q_scale + action_effect_actor_weight * advantage)
+        if action_effect_actor_mode == 'effect_only':
+          control_score = action_effect_actor_weight * advantage
+        else:
+          control_score = (
+              q_action / q_scale + action_effect_actor_weight * advantage)
       else:
         advantage = jnp.zeros_like(q_action)
         q_scale = jnp.asarray(1.0, dtype=q_action.dtype)
@@ -567,6 +750,20 @@ class ContinualDecomposedLearner(acme.Learner):
         # Match continual_learning.py:435 sign: -= alpha * (-log_prob).
         actor_loss -= alpha * (-log_prob)
 
+      if success_bc_weight > 0:
+        safe_size = jnp.maximum(success_buffer_size, 1)
+        bc_index = jax.random.randint(
+            bc_key, (success_bc_batch_size,), 0, safe_size)
+        bc_observation = success_buffer_observation[bc_index]
+        bc_action = success_buffer_action[bc_index]
+        bc_dist_params = policy_network.apply(policy_params, bc_observation)
+        bc_loss = -jnp.mean(log_prob_fn(bc_dist_params, bc_action))
+        bc_active = (success_buffer_size > 0).astype(jnp.float32)
+        actor_loss = actor_loss + success_bc_weight * bc_active * bc_loss
+      else:
+        bc_loss = jnp.asarray(0.0)
+        bc_active = jnp.asarray(0.0)
+
       ent_aux = dict(
           entropy_mean=jnp.mean(-log_prob),
           actor_loss=jnp.mean(actor_loss),
@@ -574,7 +771,13 @@ class ContinualDecomposedLearner(acme.Learner):
           action_effect_advantage_std=jnp.std(advantage),
           action_effect_dcc_scale=q_scale,
           action_effect_batch_q_abs=jnp.mean(jnp.abs(q_action)),
-          control_score=jnp.mean(control_score))
+          action_effect_score_std=jnp.std(advantage),
+          action_effect_head_to_dcc_ratio=(
+              jnp.mean(jnp.abs(action_effect_actor_weight * advantage))
+              / jnp.maximum(jnp.mean(jnp.abs(q_action / q_scale)), 1e-8)),
+          control_score=jnp.mean(control_score),
+          success_bc_loss=bc_loss,
+          success_bc_active=bc_active)
       return jnp.mean(actor_loss), ent_aux
 
     def alpha_loss_fn(log_alpha, policy_params, transitions, key):
@@ -583,6 +786,37 @@ class ContinualDecomposedLearner(acme.Learner):
       log_prob = log_prob_fn(dist_params, action)
       alpha = jnp.exp(log_alpha)
       return jnp.mean(alpha * jax.lax.stop_gradient(-log_prob - target_entropy))
+
+    def update_success_buffer(observation_buffer, action_buffer, size, index,
+                              transitions):
+      """Insert task-goal successes without changing the replay sampler."""
+      retention_observation = transitions.extras[
+          'outcome_retention_observation']
+      retention_action = transitions.action
+      success = transitions.extras['outcome_task_success'] > 0.5
+
+      def insert_one(carry, values):
+        obs_buffer, act_buffer, current_size, current_index = carry
+        obs, action, keep = values
+
+        def do_insert(bufs):
+          o_buf, a_buf, n, cursor = bufs
+          o_buf = o_buf.at[cursor].set(obs)
+          a_buf = a_buf.at[cursor].set(action)
+          return (o_buf, a_buf,
+                  jnp.minimum(n + 1, success_buffer_capacity),
+                  (cursor + 1) % success_buffer_capacity)
+
+        new_carry = jax.lax.cond(
+            keep, do_insert, lambda bufs: bufs,
+            (obs_buffer, act_buffer, current_size, current_index))
+        return new_carry, jnp.asarray(0, dtype=jnp.int32)
+
+      final, _ = jax.lax.scan(
+          insert_one,
+          (observation_buffer, action_buffer, size, index),
+          (retention_observation, retention_action, success))
+      return final
 
     def update_step(state: DecomposedTrainingState,
                     transitions: types.Transition) -> Tuple[DecomposedTrainingState, Dict[str, jnp.ndarray]]:
@@ -627,9 +861,24 @@ class ContinualDecomposedLearner(acme.Learner):
 
       # ---- 4. optional local forward action-effect step ------------
       if action_effect_enabled:
+        if action_effect_target_mode == 'raw_horizon':
+          batch_progress = transitions.extras['outcome_progress']
+          batch_progress_mean = jnp.mean(batch_progress)
+          batch_progress_var = jnp.var(batch_progress)
+          new_progress_mean = (
+              outcome_progress_ema_decay * state.outcome_progress_mean_ema
+              + (1.0 - outcome_progress_ema_decay) * batch_progress_mean)
+          new_progress_var = (
+              outcome_progress_ema_decay * state.outcome_progress_var_ema
+              + (1.0 - outcome_progress_ema_decay) * batch_progress_var)
+        else:
+          new_progress_mean = state.outcome_progress_mean_ema
+          new_progress_var = state.outcome_progress_var_ema
         (u_loss_val, u_aux), u_grad = jax.value_and_grad(
             action_effect_loss_fn, has_aux=True)(
-                state.u_task_params, new_psi, transitions)
+                state.u_task_params, new_psi,
+                state.outcome_progress_mean_ema,
+                state.outcome_progress_var_ema, transitions)
         u_grad = jax.tree_util.tree_map(
             lambda g: action_effect_loss_weight * g, u_grad)
         u_upd, u_opt_state = u_task_opt.update(
@@ -643,17 +892,42 @@ class ContinualDecomposedLearner(acme.Learner):
             'action_effect/pred_norm': u_loss_val,
             'action_effect/target_norm': u_loss_val,
             'action_effect/interaction_weight_mean': u_loss_val,
+            'outcome/progress_loss': u_loss_val,
+            'outcome/success_loss': u_loss_val,
+            'outcome/progress_target_mean': u_loss_val,
+            'outcome/progress_target_std': u_loss_val,
+            'outcome/progress_prediction_std': u_loss_val,
+            'outcome/progress_pearson': u_loss_val,
+            'outcome/action_shuffle_delta': u_loss_val,
+            'outcome/action_shuffle_retention': u_loss_val,
+            'outcome/fixed_state_action_std': u_loss_val,
+            'outcome/success_rate': u_loss_val,
         }
         new_u_task = state.u_task_params
         u_opt_state = state.u_task_opt_state
+        new_progress_mean = state.outcome_progress_mean_ema
+        new_progress_var = state.outcome_progress_var_ema
+
+      if success_bc_weight > 0:
+        (new_success_observation, new_success_action,
+         new_success_size, new_success_index) = update_success_buffer(
+             state.success_buffer_observation, state.success_buffer_action,
+             state.success_buffer_size, state.success_buffer_index,
+             transitions)
+      else:
+        new_success_observation = state.success_buffer_observation
+        new_success_action = state.success_buffer_action
+        new_success_size = state.success_buffer_size
+        new_success_index = state.success_buffer_index
 
       # ---- 5. actor step against the just-updated critic -----------
       log_alpha = state.alpha_params
       (a_loss_val, a_aux), a_grad = jax.value_and_grad(
           actor_loss_fn, has_aux=True)(
               state.policy_params, new_b_shared, new_h_phi, new_phi_task,
-              new_psi, new_u_task, state.control_q_scale_ema, log_alpha,
-              transitions, k_actor)
+              new_psi, new_u_task, state.control_q_scale_ema,
+              new_success_observation, new_success_action, new_success_size,
+              log_alpha, transitions, k_actor)
       act_upd, act_opt = actor_opt.update(a_grad, state.policy_opt_state)
       new_policy = optax.apply_updates(state.policy_params, act_upd)
       if action_effect_enabled:
@@ -689,6 +963,12 @@ class ContinualDecomposedLearner(acme.Learner):
           u_task_params=new_u_task,
           u_task_opt_state=u_opt_state,
           control_q_scale_ema=new_control_q_scale_ema,
+          outcome_progress_mean_ema=new_progress_mean,
+          outcome_progress_var_ema=new_progress_var,
+          success_buffer_observation=new_success_observation,
+          success_buffer_action=new_success_action,
+          success_buffer_size=new_success_size,
+          success_buffer_index=new_success_index,
       )
 
       metrics = {
@@ -714,6 +994,14 @@ class ContinualDecomposedLearner(acme.Learner):
                 a_aux['action_effect_advantage_std'],
             'action_effect/dcc_scale': a_aux['action_effect_dcc_scale'],
             'action_effect/control_score': a_aux['control_score'],
+            'action_effect/head_score_std':
+                a_aux['action_effect_score_std'],
+            'action_effect/head_to_dcc_ratio':
+                a_aux['action_effect_head_to_dcc_ratio'],
+            'retention/bc_loss': a_aux['success_bc_loss'],
+            'retention/bc_active': a_aux['success_bc_active'],
+            'retention/buffer_size': (
+                new_success_size if success_bc_weight > 0 else 0.0),
         })
       if iwr_enabled:
         sampled_distance = transitions.extras['iwr_interaction_distance']
@@ -822,14 +1110,21 @@ class ContinualDecomposedLearner(acme.Learner):
         self._state.phi_task_params, self._state.psi_params, obs, actions)
     if not self._action_effect_enabled:
       return q_action
-    goal_repr = self._decomp_nets.apply_psi(self._state.psi_params, obs)
-    goal_repr = goal_repr / jnp.maximum(
-        jnp.linalg.norm(goal_repr, axis=1, keepdims=True), 1e-8)
     effect = self._decomp_nets.apply_u_task(
         self._state.u_task_params, obs, actions)
-    advantage = jnp.tanh(
-        jnp.sum(effect * goal_repr, axis=1)
-        / max(self._action_effect_temperature, 1e-8))
+    if self._action_effect_target_mode == 'raw_horizon':
+      advantage = (
+          effect[:, 0]
+          + self._outcome_success_actor_weight * jax.nn.sigmoid(effect[:, 1]))
+    else:
+      goal_repr = self._decomp_nets.apply_psi(self._state.psi_params, obs)
+      goal_repr = goal_repr / jnp.maximum(
+          jnp.linalg.norm(goal_repr, axis=1, keepdims=True), 1e-8)
+      advantage = jnp.tanh(
+          jnp.sum(effect * goal_repr, axis=1)
+          / max(self._action_effect_temperature, 1e-8))
+    if self._action_effect_actor_mode == 'effect_only':
+      return self._action_effect_actor_weight * advantage
     q_scale = jnp.maximum(
         self._state.control_q_scale_ema,
         self._action_effect_normalization_eps)

@@ -70,6 +70,7 @@ from contrastive.rbc_networks import make_rbc_networks
 from contrastive import rbc_checkpointing
 from contrastive import intrajectory
 from contrastive import action_ranking_diagnostics
+from contrastive import outcome_credit
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
     cosine_matrix_from_vectors,
@@ -290,6 +291,35 @@ flags.DEFINE_float('action_effect_q_scale_ema_decay', 0.99,
                    'EMA decay for the DCC-logit scale in the actor objective.')
 flags.DEFINE_integer('action_effect_hidden_dim', 256,
                      'Hidden width of the task-local action-effect MLP.')
+flags.DEFINE_enum(
+    'action_effect_actor_mode', 'combined', ('combined', 'effect_only'),
+    'Whether the actor maximizes normalized DCC plus the task-local head, '
+    'or the task-local head alone. effect_only is the Stage-1 falsification.')
+flags.DEFINE_enum(
+    'action_effect_target_mode', 'psi_one_step',
+    ('psi_one_step', 'raw_horizon'),
+    'Target for the task-local head. raw_horizon predicts H-step mechanism '
+    'progress and success directly from (state, goal, action).')
+flags.DEFINE_integer('outcome_horizon', 25,
+                     'Finite horizon H for raw outcome-credit labels.')
+flags.DEFINE_float('outcome_success_threshold', 0.05,
+                   'Mechanism-goal radius used for H-step success labels.')
+flags.DEFINE_float('outcome_progress_loss_weight', 1.0,
+                   'Huber-loss weight for standardized H-step progress.')
+flags.DEFINE_float('outcome_success_loss_weight', 1.0,
+                   'Sigmoid-BCE weight for H-step success prediction.')
+flags.DEFINE_float('outcome_success_actor_weight', 1.0,
+                   'Weight of predicted H-step success in the actor score.')
+flags.DEFINE_float('outcome_progress_ema_decay', 0.99,
+                   'EMA decay for raw progress target standardization.')
+flags.DEFINE_float('outcome_progress_std_floor', 0.01,
+                   'Minimum target standard deviation for normalization.')
+flags.DEFINE_float('success_bc_weight', 0.0,
+                   'Actor BC weight on retained task-goal successful actions.')
+flags.DEFINE_integer('success_buffer_capacity', 4096,
+                     'Task-local successful-transition ring-buffer capacity.')
+flags.DEFINE_integer('success_bc_batch_size', 64,
+                     'Successful actions sampled per actor update for BC.')
 flags.DEFINE_float('bellman_loss_weight', 1.0,
                    'RBC-DCC weight lambda_Q on the twin scalar TD loss.')
 flags.DEFINE_float('bellman_residual_l2_weight', 1e-4,
@@ -495,6 +525,18 @@ def _bridge_identity_config():
       'action_effect_q_scale_ema_decay':
           FLAGS.action_effect_q_scale_ema_decay,
       'action_effect_hidden_dim': FLAGS.action_effect_hidden_dim,
+      'action_effect_actor_mode': FLAGS.action_effect_actor_mode,
+      'action_effect_target_mode': FLAGS.action_effect_target_mode,
+      'outcome_horizon': FLAGS.outcome_horizon,
+      'outcome_success_threshold': FLAGS.outcome_success_threshold,
+      'outcome_progress_loss_weight': FLAGS.outcome_progress_loss_weight,
+      'outcome_success_loss_weight': FLAGS.outcome_success_loss_weight,
+      'outcome_success_actor_weight': FLAGS.outcome_success_actor_weight,
+      'outcome_progress_ema_decay': FLAGS.outcome_progress_ema_decay,
+      'outcome_progress_std_floor': FLAGS.outcome_progress_std_floor,
+      'success_bc_weight': FLAGS.success_bc_weight,
+      'success_buffer_capacity': FLAGS.success_buffer_capacity,
+      'success_bc_batch_size': FLAGS.success_bc_batch_size,
   }
 
 def _git_commit_sha():
@@ -867,6 +909,12 @@ def train_single_task(
             continual_cfg, 'goal_encoder_mode', 'shared'),
         action_effect_hidden_dim=getattr(
             continual_cfg, 'action_effect_hidden_dim', 256),
+        action_effect_output_dim=(
+            2 if getattr(continual_cfg, 'action_effect_target_mode',
+                         'psi_one_step') == 'raw_horizon' else None),
+        action_effect_include_goal=(
+            getattr(continual_cfg, 'action_effect_target_mode',
+                    'psi_one_step') == 'raw_horizon'),
     )
   elif critic_mode in _HYBRID_CRITIC_MODES:
     decomp_nets = make_decomposed_networks(
@@ -985,6 +1033,31 @@ def train_single_task(
         f'floor={interaction_weight_floor:.3f}).',
         flush=True)
 
+  outcome_credit_enabled = (
+      bool(getattr(continual_cfg, 'action_effect_enabled', False))
+      and getattr(continual_cfg, 'action_effect_target_mode',
+                  'psi_one_step') == 'raw_horizon')
+  outcome_horizon = int(getattr(continual_cfg, 'outcome_horizon', 25))
+  outcome_success_threshold = float(getattr(
+      continual_cfg, 'outcome_success_threshold', 0.05))
+  if outcome_credit_enabled:
+    if config.obs_dim < 7:
+      raise ValueError(
+          'Raw outcome credit requires Sawyer coordinates '
+          '[hand_xyz, gripper, mechanism_xyz] (obs_dim >= 7).')
+    if outcome_horizon <= 0:
+      raise ValueError('outcome_horizon must be positive.')
+    print(
+        '  [outcome credit] raw mechanism progress/success labels; '
+        f'H={outcome_horizon}, threshold={outcome_success_threshold:.3f}.',
+        flush=True)
+
+  def _finite_horizon_labels(all_state, anchor_index, goal):
+    """Vectorized raw mechanism progress and reachability labels."""
+    return outcome_credit.tensorflow_finite_horizon_labels(
+        tf, all_state, anchor_index, goal, horizon=outcome_horizon,
+        threshold=outcome_success_threshold)
+
   def _interaction_candidate_weights(all_state):
     """Per-future-state IWR weights; returns ones when disabled."""
     if not iwr_enabled:
@@ -1033,6 +1106,20 @@ def train_single_task(
           ops=her_ops)
 
     extras = {'next_action': sample.data.action[1:]}
+    if outcome_credit_enabled:
+      anchor_index = tf.range(seq_len - 1, dtype=tf.int32)
+      progress, success = _finite_horizon_labels(
+          all_state, anchor_index, goal)
+      original_goal = sample.data.observation[:-1, config.obs_dim:]
+      _, task_success = _finite_horizon_labels(
+          all_state, anchor_index, original_goal)
+      extras.update({
+          'outcome_progress': progress,
+          'outcome_success': success,
+          'outcome_task_success': task_success,
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
     if iwr_enabled:
       selected_future_state = tf.gather(all_state, goal_index[:-1])
       selected_distance = tf.linalg.norm(
@@ -1080,6 +1167,20 @@ def train_single_task(
         'next_action': tf.gather(
             sample.data.action, anchor_index + 1),
     }
+    if outcome_credit_enabled:
+      progress, success = _finite_horizon_labels(
+          all_state, anchor_index, goal)
+      original_goal = tf.gather(
+          sample.data.observation[:, config.obs_dim:], anchor_index)
+      _, task_success = _finite_horizon_labels(
+          all_state, anchor_index, original_goal)
+      extras.update({
+          'outcome_progress': progress,
+          'outcome_success': success,
+          'outcome_task_success': task_success,
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
     if iwr_enabled:
       selected_future_state = tf.gather(all_state, goal_index)
       selected_distance = tf.linalg.norm(
@@ -2130,6 +2231,18 @@ def main(_):
       action_effect_q_scale_ema_decay=
           FLAGS.action_effect_q_scale_ema_decay,
       action_effect_hidden_dim=FLAGS.action_effect_hidden_dim,
+      action_effect_actor_mode=FLAGS.action_effect_actor_mode,
+      action_effect_target_mode=FLAGS.action_effect_target_mode,
+      outcome_horizon=FLAGS.outcome_horizon,
+      outcome_success_threshold=FLAGS.outcome_success_threshold,
+      outcome_progress_loss_weight=FLAGS.outcome_progress_loss_weight,
+      outcome_success_loss_weight=FLAGS.outcome_success_loss_weight,
+      outcome_success_actor_weight=FLAGS.outcome_success_actor_weight,
+      outcome_progress_ema_decay=FLAGS.outcome_progress_ema_decay,
+      outcome_progress_std_floor=FLAGS.outcome_progress_std_floor,
+      success_bc_weight=FLAGS.success_bc_weight,
+      success_buffer_capacity=FLAGS.success_buffer_capacity,
+      success_bc_batch_size=FLAGS.success_bc_batch_size,
       bellman_loss_weight=FLAGS.bellman_loss_weight,
       bellman_residual_l2_weight=FLAGS.bellman_residual_l2_weight,
       bellman_discount=FLAGS.bellman_discount,
@@ -2420,6 +2533,27 @@ def main(_):
                       FLAGS.action_effect_q_scale_ema_decay,
                   'action_effect_hidden_dim':
                       FLAGS.action_effect_hidden_dim,
+                  'action_effect_actor_mode':
+                      FLAGS.action_effect_actor_mode,
+                  'action_effect_target_mode':
+                      FLAGS.action_effect_target_mode,
+                  'outcome_horizon': FLAGS.outcome_horizon,
+                  'outcome_success_threshold':
+                      FLAGS.outcome_success_threshold,
+                  'outcome_progress_loss_weight':
+                      FLAGS.outcome_progress_loss_weight,
+                  'outcome_success_loss_weight':
+                      FLAGS.outcome_success_loss_weight,
+                  'outcome_success_actor_weight':
+                      FLAGS.outcome_success_actor_weight,
+                  'outcome_progress_ema_decay':
+                      FLAGS.outcome_progress_ema_decay,
+                  'outcome_progress_std_floor':
+                      FLAGS.outcome_progress_std_floor,
+                  'success_bc_weight': FLAGS.success_bc_weight,
+                  'success_buffer_capacity':
+                      FLAGS.success_buffer_capacity,
+                  'success_bc_batch_size': FLAGS.success_bc_batch_size,
                   'bellman_loss_weight': FLAGS.bellman_loss_weight,
                   'bellman_residual_l2_weight':
                       FLAGS.bellman_residual_l2_weight,

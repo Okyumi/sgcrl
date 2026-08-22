@@ -84,6 +84,7 @@ class DecomposedCriticNetworks:
   d_M: int
   repr_dim: int
   hidden_dim: int
+  action_dim: int
 
   # Optional task-local forward action-effect head used by Bridge-DCC.
   # It predicts a displacement in the goal-embedding geometry rather than
@@ -117,6 +118,8 @@ def make_decomposed_networks(
     combine_mode: str = 'add',
     goal_encoder_mode: str = 'shared',
     action_effect_hidden_dim: int = 256,
+    action_effect_output_dim: Optional[int] = None,
+    action_effect_include_goal: bool = False,
 ) -> DecomposedCriticNetworks:
   """Build the decomposed critic networks for the given spec.
 
@@ -248,16 +251,19 @@ def make_decomposed_networks(
           name='psi')
       return body(goal)
 
-  # ---- u_task: local forward action effect in psi geometry ----------------
+  # ---- u_task: task-local action credit head -------------------------------
   def _u_task_fn(obs, action):
     state = obs[:, :obs_dim]
+    head_input = obs if action_effect_include_goal else state
+    output_dim = repr_dim if action_effect_output_dim is None \
+        else int(action_effect_output_dim)
     return hk.nets.MLP(
-        [action_effect_hidden_dim, action_effect_hidden_dim, repr_dim],
+        [action_effect_hidden_dim, action_effect_hidden_dim, output_dim],
         w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
         activation=jax.nn.relu,
         activate_final=False,
         name='u_task')(
-            jnp.concatenate([state, action], axis=-1))
+            jnp.concatenate([head_input, action], axis=-1))
 
   # ---- optional psi projector (concat-combine or 'projected' goal mode) ---
   def _psi_proj_fn(z):
@@ -405,6 +411,7 @@ def make_decomposed_networks(
       init_u_task=init_u_task, apply_u_task=u_task.apply,
       obs_dim=obs_dim, state_dim=state_dim, d_M=d_M,
       repr_dim=repr_dim, hidden_dim=hidden_dim_actual,
+      action_dim=num_dimensions,
       apply_sa_repr=apply_sa_repr,
       apply_score=apply_score,
       apply_paired_score=apply_paired_score,

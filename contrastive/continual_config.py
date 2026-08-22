@@ -103,6 +103,25 @@ class ContinualConfig:
   action_effect_q_scale_ema_decay: float = 0.99
   action_effect_hidden_dim: int = 256
 
+  # -- Outcome-Calibrated Sequence DCC falsification -----------------------
+  # These flags extend the task-local u_task head without changing legacy
+  # Bridge-DCC defaults.  Stage 1 removes the DCC actor score but retains the
+  # one-step psi target.  Stages 2/3 replace that target with a goal-conditioned
+  # finite-horizon raw outcome target; stage 3 additionally retains successful
+  # task-goal actions in a task-local ring buffer for a small BC loss.
+  action_effect_actor_mode: str = 'combined'  # combined | effect_only
+  action_effect_target_mode: str = 'psi_one_step'  # psi_one_step | raw_horizon
+  outcome_horizon: int = 25
+  outcome_success_threshold: float = 0.05
+  outcome_progress_loss_weight: float = 1.0
+  outcome_success_loss_weight: float = 1.0
+  outcome_success_actor_weight: float = 1.0
+  outcome_progress_ema_decay: float = 0.99
+  outcome_progress_std_floor: float = 0.01
+  success_bc_weight: float = 0.0
+  success_buffer_capacity: int = 4096
+  success_bc_batch_size: int = 64
+
   # -- RBC-DCC Bellman calibration ------------------------------------------
   bellman_loss_weight: float = 1.0
   bellman_residual_l2_weight: float = 1e-4
