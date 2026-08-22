@@ -172,6 +172,15 @@ source "${REPO_DIR}/set_up/torch_hpc_env.sh"
 # Keep the same per-process memory control used by draft_4 parallel runs.
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.30}"
 
+# Optional causal-probe preflight. It must run here—not in a thin wrapper—so
+# it uses the exact Conda/Torch environment that will execute training.
+if [ "${ACTION_LANDSCAPE_SELF_TEST:-false}" = "true" ]; then
+  python -m contrastive.action_ranking_diagnostics \
+    --self-test-env=sawyer_handle_press_side \
+    --self-test-env=sawyer_window_close \
+    --seed=5
+fi
+
 mkdir -p "$LOG_DIR" "$CHECKPOINT_DIR"
 
 # ---- helper: build flags for a single experiment --------------------------

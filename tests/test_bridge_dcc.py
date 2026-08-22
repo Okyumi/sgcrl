@@ -53,9 +53,20 @@ def test_torch_wrapper_selects_all_eighteen_bridge_cells():
   assert '#SBATCH --array=0-5' in wrapper
   assert 'CONFIG_INDEX_OFFSET=18' in wrapper
   assert 'CONFIG_LIMIT=18' in wrapper
-  assert '--self-test-env=sawyer_handle_press_side' in wrapper
-  assert '--self-test-env=sawyer_window_close' in wrapper
+  assert 'ACTION_LANDSCAPE_SELF_TEST=true' in wrapper
   assert 'exec bash "$REPO_DIR/DRAFT.sh"' in wrapper
+
+
+def test_restore_preflight_runs_after_torch_environment_activation():
+  launcher = (ROOT / 'DRAFT.sh').read_text()
+  preflight = 'python -m contrastive.action_ranking_diagnostics'
+  assert 'ACTION_LANDSCAPE_SELF_TEST' in launcher
+  assert '--self-test-env=sawyer_handle_press_side' in launcher
+  assert '--self-test-env=sawyer_window_close' in launcher
+  assert launcher.index(
+      'conda activate contrastive_rl') < launcher.index(preflight)
+  assert launcher.index(
+      'source "${REPO_DIR}/set_up/torch_hpc_env.sh"') < launcher.index(preflight)
 
 
 def test_canonical_launcher_forwards_bridge_and_anchor_flags():
@@ -78,3 +89,12 @@ def test_canonical_launcher_forwards_bridge_and_anchor_flags():
       'action_landscape_interaction_threshold',
   ):
     assert f'--{flag}' in launcher
+
+
+def test_bridge_implementation_has_a_docs_note_and_repository_policy():
+  note = ROOT / 'docs' / '2026-08-22_bridge_dcc_action_credit_implementation.md'
+  assert note.is_file()
+  assert 'DRAFT_bridge_dcc.sh' in note.read_text()
+  policy = (ROOT / 'AGENTS.md').read_text()
+  assert 'under `docs/`' in policy
+  assert 'Do not push implementation-only commits' in policy

@@ -19,16 +19,12 @@ set -euo pipefail
 REPO_DIR="/scratch/yd2247/sgcrl"
 cd "$REPO_DIR"
 
-# Counterfactual probes are only meaningful if MuJoCo state restoration is
-# exact on the installed Torch environment. Abort the whole array otherwise.
-python -m contrastive.action_ranking_diagnostics \
-  --self-test-env=sawyer_handle_press_side \
-  --self-test-env=sawyer_window_close \
-  --seed=5
-
 export CONFIG_INDEX_OFFSET=18
 export CONFIG_LIMIT=18
 export LOG_DIR="/scratch/yd2247/sgcrl/logs/bridge_dcc"
 export CHECKPOINT_DIR="/scratch/yd2247/sgcrl/logs/bridge_dcc_checkpoints"
+# Ask the canonical launcher to run the restore test *after* it activates the
+# contrastive_rl Conda environment and sources Torch's runtime settings.
+export ACTION_LANDSCAPE_SELF_TEST=true
 
 exec bash "$REPO_DIR/DRAFT.sh"
