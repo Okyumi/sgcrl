@@ -144,6 +144,21 @@ class ContinualConfig:
   counterfactual_rank_updates_per_event: int = 25
   counterfactual_rank_pairwise_temperature: float = 1.0
   counterfactual_rank_l2_weight: float = 1e-4
+  # New staged falsification controls. Defaults preserve the first CFR-DCC
+  # implementation exactly; staged configs opt into independent validation,
+  # sparse-reward success, aligned causal probes, and phase-gated execution.
+  counterfactual_rank_validation_anchors: int = 0
+  counterfactual_rank_success_mode: str = 'goal_distance'
+  counterfactual_rank_actor_enabled: bool = True
+  counterfactual_oracle_interval_steps: int = 0
+  counterfactual_oracle_num_anchors: int = 4
+  phase_gated_control: bool = False
+  phase_gate_reach_mode: str = 'policy'
+  phase_gate_interaction_threshold: float = 0.09
+  phase_gate_chunk_length: int = 5
+  phase_gate_num_candidates: int = 16
+  phase_gate_local_noise_std: float = 0.10
+  phase_gate_contact_gain: float = 5.0
 
   # -- RBC-DCC Bellman calibration ------------------------------------------
   bellman_loss_weight: float = 1.0
@@ -204,6 +219,10 @@ class ContinualConfig:
   action_landscape_interaction_aware_anchor: bool = False
   action_landscape_anchor_search_steps: int = 200
   action_landscape_interaction_threshold: float = 0.09
+  action_landscape_action_repeat: int = 1
+  action_landscape_use_best_progress: bool = False
+  action_landscape_success_threshold: float = 0.05
+  action_landscape_success_mode: str = 'goal_distance'
 
   # -- CKA diagnostics --------------------------------------------------------
   # Pairwise cosine-similarity logging on the actor / critic knowledge pools.

@@ -23,6 +23,8 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 
 import numpy as np
 
+from contrastive import counterfactual_outcomes
+
 
 _WRAPPER_LINKS = ('_environment', 'environment', '_env', 'env', '_gym_env')
 _STATEFUL_ATTRIBUTES = (
@@ -256,28 +258,12 @@ def spearman(values_a: Sequence[float], values_b: Sequence[float]) -> float:
 
 
 def _goal_distances(observation: np.ndarray, obs_dim: int) -> tuple[float, float]:
-  observation = np.asarray(observation, dtype=np.float64)
-  state = observation[:obs_dim]
-  goal = observation[obs_dim:]
-  shared_dim = min(state.shape[0], goal.shape[0])
-  full = float(np.linalg.norm(state[:shared_dim] - goal[:shared_dim]))
-  # All ten unified Sawyer wrappers use indices 4:7 for the manipulated
-  # object/mechanism.  Tasks 5 and 8 therefore share this exact slice.
-  mechanism_end = min(7, shared_dim)
-  if mechanism_end <= 4:
-    mechanism = full
-  else:
-    mechanism = float(np.linalg.norm(
-        state[4:mechanism_end] - goal[4:mechanism_end]))
-  return full, mechanism
+  return counterfactual_outcomes.goal_distances(observation, obs_dim)
 
 
 def _interaction_distance(observation: np.ndarray, obs_dim: int) -> float:
   """Hand-to-mechanism distance for unified Sawyer observations."""
-  state = np.asarray(observation, dtype=np.float64)[:obs_dim]
-  if state.shape[0] < 7:
-    return float('nan')
-  return float(np.linalg.norm(state[:3] - state[4:7]))
+  return counterfactual_outcomes.interaction_distance(observation, obs_dim)
 
 
 def _percentile(value: float, reference: np.ndarray) -> float:
@@ -441,6 +427,10 @@ def run_causal_action_ranking_probe(
     interaction_aware_anchor: bool = False,
     interaction_threshold: float = 0.09,
     anchor_search_steps: int = 200,
+    action_repeat: int = 1,
+    use_best_progress: bool = False,
+    success_threshold: float = 0.05,
+    success_mode: str = 'goal_distance',
 ) -> Dict[str, float]:
   """Run same-state action interventions and return W&B-ready metrics."""
   action_spec = environment.action_spec()
@@ -507,6 +497,11 @@ def run_causal_action_ranking_probe(
         'rollout_full_progress': [],
         'rollout_mechanism_progress': [],
         'success': [],
+        'best_rollout_full_progress': [],
+        'best_rollout_mechanism_progress': [],
+        'benchmark_success': [],
+        'benchmark_success_available': [],
+        'proxy_success': [],
     }
 
     # The continuation key stream is reset for every candidate.  Thus only
@@ -515,11 +510,45 @@ def run_causal_action_ranking_probe(
     for action in actions:
       restore_environment(snapshot)
       candidate_rng = np.random.default_rng(continuation_seed)
-      candidate_timestep = environment.step(action)
-      one_full, one_mechanism = _goal_distances(
-          np.asarray(candidate_timestep.observation), obs_dim)
-      success = float((candidate_timestep.reward or 0.0) > 0.0)
-      for _ in range(max(0, int(rollout_horizon) - 1)):
+      candidate_timestep = None
+      one_full = initial_full
+      one_mechanism = initial_mechanism
+      best_full = initial_full
+      best_mechanism = initial_mechanism
+      selected_success = 0.0
+      benchmark_success = 0.0
+      benchmark_available = 0.0
+      proxy_success = 0.0
+      steps = 0
+      for repeat_index in range(min(
+          max(1, int(action_repeat)), int(rollout_horizon))):
+        candidate_timestep = environment.step(action)
+        steps += 1
+        observation = np.asarray(candidate_timestep.observation)
+        current_full, current_mechanism = _goal_distances(
+            observation, obs_dim)
+        if repeat_index == 0:
+          one_full = current_full
+          one_mechanism = current_mechanism
+        best_full = min(best_full, current_full)
+        best_mechanism = min(best_mechanism, current_mechanism)
+        proxy_success = max(
+            proxy_success,
+            counterfactual_outcomes.mechanism_proxy_success(
+                observation, obs_dim, success_threshold))
+        current_benchmark, current_available = (
+            counterfactual_outcomes.benchmark_success(
+                candidate_timestep, observation, obs_dim,
+                success_threshold, success_mode))
+        benchmark_success = max(benchmark_success, current_benchmark)
+        benchmark_available = max(benchmark_available, current_available)
+        selected_success = (
+            benchmark_success if success_mode != 'goal_distance'
+            else proxy_success)
+        if (hasattr(candidate_timestep, 'last')
+            and candidate_timestep.last()):
+          break
+      for _ in range(max(0, int(rollout_horizon) - steps)):
         if (hasattr(candidate_timestep, 'last')
             and candidate_timestep.last()):
           break
@@ -529,8 +558,24 @@ def run_causal_action_ranking_probe(
             False)
         candidate_timestep = environment.step(
             np.clip(continuation_action, action_min, action_max))
-        success = max(
-            success, float((candidate_timestep.reward or 0.0) > 0.0))
+        observation = np.asarray(candidate_timestep.observation)
+        current_full, current_mechanism = _goal_distances(
+            observation, obs_dim)
+        best_full = min(best_full, current_full)
+        best_mechanism = min(best_mechanism, current_mechanism)
+        proxy_success = max(
+            proxy_success,
+            counterfactual_outcomes.mechanism_proxy_success(
+                observation, obs_dim, success_threshold))
+        current_benchmark, current_available = (
+            counterfactual_outcomes.benchmark_success(
+                candidate_timestep, observation, obs_dim,
+                success_threshold, success_mode))
+        benchmark_success = max(benchmark_success, current_benchmark)
+        benchmark_available = max(benchmark_available, current_available)
+        selected_success = (
+            benchmark_success if success_mode != 'goal_distance'
+            else proxy_success)
       final_full, final_mechanism = _goal_distances(
           np.asarray(candidate_timestep.observation), obs_dim)
       outcomes['one_step_full_progress'].append(initial_full - one_full)
@@ -539,7 +584,14 @@ def run_causal_action_ranking_probe(
       outcomes['rollout_full_progress'].append(initial_full - final_full)
       outcomes['rollout_mechanism_progress'].append(
           initial_mechanism - final_mechanism)
-      outcomes['success'].append(success)
+      outcomes['best_rollout_full_progress'].append(
+          initial_full - best_full)
+      outcomes['best_rollout_mechanism_progress'].append(
+          initial_mechanism - best_mechanism)
+      outcomes['success'].append(selected_success)
+      outcomes['benchmark_success'].append(benchmark_success)
+      outcomes['benchmark_success_available'].append(benchmark_available)
+      outcomes['proxy_success'].append(proxy_success)
 
     restore_environment(snapshot)
     anchor_metrics = summarize_action_ranking(
@@ -553,6 +605,37 @@ def run_causal_action_ranking_probe(
         best_distance)
     anchor_metrics['action_landscape/anchor_near_interaction'] = float(
         np.isfinite(best_distance) and best_distance <= interaction_threshold)
+    phase = counterfactual_outcomes.interaction_phase(
+        best_distance, interaction_threshold)
+    for phase_name in ('approach', 'precontact', 'contact', 'unknown'):
+      anchor_metrics[f'action_landscape/anchor_phase_{phase_name}'] = float(
+          phase == phase_name)
+    anchor_metrics['action_landscape/action_repeat'] = float(action_repeat)
+    anchor_metrics['action_landscape/use_best_progress'] = float(
+        use_best_progress)
+    primary_progress = (
+        'best_rollout_mechanism_progress'
+        if use_best_progress else 'rollout_mechanism_progress')
+    anchor_metrics[
+        'action_landscape/aligned_score_vs_progress_spearman'] = (
+            anchor_metrics[
+                f'action_landscape/score_vs_{primary_progress}_spearman'])
+    anchor_metrics['action_landscape/benchmark_success_available_fraction'] = (
+        float(np.mean(outcomes['benchmark_success_available'])))
+    available = np.asarray(outcomes['benchmark_success_available']) > 0.5
+    if np.any(available):
+      benchmark = np.asarray(outcomes['benchmark_success'])[available] > 0.5
+      proxy = np.asarray(outcomes['proxy_success'])[available] > 0.5
+      anchor_metrics['action_landscape/success_predicate_agreement'] = float(
+          np.mean(benchmark == proxy))
+      anchor_metrics['action_landscape/proxy_false_positive_fraction'] = float(
+          np.mean(proxy & ~benchmark))
+      anchor_metrics['action_landscape/proxy_false_negative_fraction'] = float(
+          np.mean(~proxy & benchmark))
+    else:
+      anchor_metrics['action_landscape/success_predicate_agreement'] = 0.0
+      anchor_metrics['action_landscape/proxy_false_positive_fraction'] = 0.0
+      anchor_metrics['action_landscape/proxy_false_negative_fraction'] = 0.0
     per_anchor.append(anchor_metrics)
 
   keys = sorted(set().union(*(metrics.keys() for metrics in per_anchor)))

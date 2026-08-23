@@ -239,6 +239,8 @@ class ContinualDecomposedLearner(acme.Learner):
         continual_config, 'counterfactual_rank_min_outcome_gap', 0.002))
     self._counterfactual_rank_l2_weight = float(getattr(
         continual_config, 'counterfactual_rank_l2_weight', 1e-4))
+    self._counterfactual_rank_actor_enabled = bool(getattr(
+        continual_config, 'counterfactual_rank_actor_enabled', True))
     if self._action_effect_actor_mode not in ('combined', 'effect_only'):
       raise ValueError(
           'action_effect_actor_mode must be combined or effect_only.')
@@ -257,10 +259,11 @@ class ContinualDecomposedLearner(acme.Learner):
       if not self._action_effect_enabled:
         raise ValueError(
             'counterfactual_rank target mode requires action_effect_enabled.')
-      if self._action_effect_actor_mode != 'effect_only':
+      if (self._counterfactual_rank_actor_enabled
+          and self._action_effect_actor_mode != 'effect_only'):
         raise ValueError(
-            'counterfactual_rank requires effect_only actor mode so the test '
-            'does not reintroduce the miscalibrated DCC action landscape.')
+            'An actor-enabled counterfactual_rank requires effect_only actor '
+            'mode so it does not reintroduce the DCC action landscape.')
       if self._counterfactual_rank_temperature <= 0:
         raise ValueError('counterfactual rank temperature must be positive.')
       if self._counterfactual_rank_min_gap < 0:
@@ -478,6 +481,8 @@ class ContinualDecomposedLearner(acme.Learner):
     q_scale_ema_decay = self._action_effect_q_scale_ema_decay
     action_effect_actor_mode = self._action_effect_actor_mode
     action_effect_target_mode = self._action_effect_target_mode
+    counterfactual_rank_actor_enabled = (
+        self._counterfactual_rank_actor_enabled)
     outcome_progress_loss_weight = float(getattr(
         self._continual_cfg, 'outcome_progress_loss_weight', 1.0))
     outcome_success_loss_weight = float(getattr(
@@ -726,7 +731,8 @@ class ContinualDecomposedLearner(acme.Learner):
       state = obs[:, :obs_dim]
       goal = obs[:, obs_dim:]
 
-      if action_effect_target_mode == 'counterfactual_rank':
+      if (action_effect_target_mode == 'counterfactual_rank'
+          and counterfactual_rank_actor_enabled):
         # The ranker is supervised on the environment's original task goal,
         # never on HER future-state goals. Keep the actor on that same domain.
         new_obs = transitions.extras['counterfactual_task_observation']
@@ -773,7 +779,12 @@ class ContinualDecomposedLearner(acme.Learner):
               advantage_raw / max(action_effect_temperature, 1e-8))
         q_scale = jax.lax.stop_gradient(jnp.maximum(
             control_q_scale_ema, action_effect_eps))
-        if action_effect_actor_mode == 'effect_only':
+        if (action_effect_target_mode == 'counterfactual_rank'
+            and not counterfactual_rank_actor_enabled):
+          # Stages A/C train and evaluate the head without letting its
+          # unsupported gradients change the ordinary DCC policy.
+          control_score = q_action
+        elif action_effect_actor_mode == 'effect_only':
           control_score = action_effect_actor_weight * advantage
         else:
           control_score = (
@@ -1318,6 +1329,19 @@ class ContinualDecomposedLearner(acme.Learner):
         self._state.control_q_scale_ema,
         self._action_effect_normalization_eps)
     return q_action / q_scale + self._action_effect_actor_weight * advantage
+
+  def score_counterfactual_actions(self, observation, actions):
+    """Score candidates with only the trained counterfactual chunk head."""
+    if self._action_effect_target_mode != 'counterfactual_rank':
+      raise RuntimeError(
+          'score_counterfactual_actions requires counterfactual_rank mode.')
+    actions = jnp.asarray(actions)
+    obs = jnp.repeat(
+        jnp.asarray(observation)[None, :], actions.shape[0], axis=0)
+    effect = self._decomp_nets.apply_u_task(
+        self._state.u_task_params, obs, actions)[:, 0]
+    active = (self._state.counterfactual_rank_updates > 0).astype(effect.dtype)
+    return active * effect
 
   def save(self):
     return self._state

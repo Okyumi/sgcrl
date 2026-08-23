@@ -14,11 +14,12 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 import numpy as np
 
 from contrastive import action_ranking_diagnostics
+from contrastive import counterfactual_outcomes
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,9 @@ class CounterfactualRankingBatch:
   informative: np.ndarray   # at least one candidate pair differs sufficiently
   near_interaction: np.ndarray
   interaction_distance: np.ndarray
+  proxy_success: Optional[np.ndarray] = None
+  benchmark_success: Optional[np.ndarray] = None
+  benchmark_success_available: Optional[np.ndarray] = None
 
   @property
   def num_anchors(self) -> int:
@@ -91,22 +95,11 @@ class CounterfactualRankingBuffer:
 
 def _goal_distances(observation: np.ndarray,
                     obs_dim: int) -> tuple[float, float]:
-  observation = np.asarray(observation, dtype=np.float64)
-  state = observation[:obs_dim]
-  goal = observation[obs_dim:]
-  shared = min(state.shape[0], goal.shape[0])
-  full = float(np.linalg.norm(state[:shared] - goal[:shared]))
-  if shared < 7:
-    return full, full
-  mechanism = float(np.linalg.norm(state[4:7] - goal[4:7]))
-  return full, mechanism
+  return counterfactual_outcomes.goal_distances(observation, obs_dim)
 
 
 def _interaction_distance(observation: np.ndarray, obs_dim: int) -> float:
-  state = np.asarray(observation, dtype=np.float64)[:obs_dim]
-  if state.shape[0] < 7:
-    return float('nan')
-  return float(np.linalg.norm(state[:3] - state[4:7]))
+  return counterfactual_outcomes.interaction_distance(observation, obs_dim)
 
 
 def scripted_contact_action(
@@ -198,6 +191,7 @@ def collect_counterfactual_ranking_batch(
     interaction_threshold: float = 0.09,
     contact_gain: float = 5.0,
     success_threshold: float = 0.05,
+    success_mode: str = 'goal_distance',
     success_bonus: float = 1.0,
     min_outcome_gap: float = 0.002,
 ) -> tuple[CounterfactualRankingBatch, Dict[str, float]]:
@@ -216,6 +210,9 @@ def collect_counterfactual_ranking_batch(
   all_actions = []
   all_progress = []
   all_success = []
+  all_proxy_success = []
+  all_benchmark_success = []
+  all_benchmark_available = []
   all_outcomes = []
   all_informative = []
   all_near = []
@@ -267,6 +264,9 @@ def collect_counterfactual_ranking_batch(
 
     progress_values = []
     success_values = []
+    proxy_success_values = []
+    benchmark_success_values = []
+    benchmark_available_values = []
     continuation_seed = int(rng.integers(0, 2**31 - 1))
     for candidate in actions:
       action_ranking_diagnostics.restore_environment(best_snapshot)
@@ -274,6 +274,9 @@ def collect_counterfactual_ranking_batch(
       candidate_timestep = None
       best_mechanism = initial_mechanism
       success = 0.0
+      proxy_success = 0.0
+      benchmark = 0.0
+      benchmark_available = 0.0
       steps = 0
       for _ in range(min(int(action_repeat), int(rollout_horizon))):
         candidate_timestep = environment.step(candidate)
@@ -281,10 +284,18 @@ def collect_counterfactual_ranking_batch(
         _, mechanism = _goal_distances(
             np.asarray(candidate_timestep.observation), obs_dim)
         best_mechanism = min(best_mechanism, mechanism)
-        # Meta-World rewards may be dense and positive before success. Use
-        # only the task-goal mechanism threshold to avoid another all-positive
-        # supervision shortcut.
-        success = max(success, float(mechanism <= success_threshold))
+        candidate_observation = np.asarray(candidate_timestep.observation)
+        proxy_success = max(
+            proxy_success,
+            counterfactual_outcomes.mechanism_proxy_success(
+                candidate_observation, obs_dim, success_threshold))
+        current_benchmark, current_available = (
+            counterfactual_outcomes.benchmark_success(
+                candidate_timestep, candidate_observation, obs_dim,
+                success_threshold, success_mode))
+        benchmark = max(benchmark, current_benchmark)
+        benchmark_available = max(benchmark_available, current_available)
+        success = benchmark if success_mode != 'goal_distance' else proxy_success
         if hasattr(candidate_timestep, 'last') and candidate_timestep.last():
           break
       while steps < int(rollout_horizon):
@@ -301,13 +312,32 @@ def collect_counterfactual_ranking_batch(
         _, mechanism = _goal_distances(
             np.asarray(candidate_timestep.observation), obs_dim)
         best_mechanism = min(best_mechanism, mechanism)
-        success = max(success, float(mechanism <= success_threshold))
+        candidate_observation = np.asarray(candidate_timestep.observation)
+        proxy_success = max(
+            proxy_success,
+            counterfactual_outcomes.mechanism_proxy_success(
+                candidate_observation, obs_dim, success_threshold))
+        current_benchmark, current_available = (
+            counterfactual_outcomes.benchmark_success(
+                candidate_timestep, candidate_observation, obs_dim,
+                success_threshold, success_mode))
+        benchmark = max(benchmark, current_benchmark)
+        benchmark_available = max(benchmark_available, current_available)
+        success = benchmark if success_mode != 'goal_distance' else proxy_success
       progress_values.append(max(0.0, initial_mechanism - best_mechanism))
       success_values.append(success)
+      proxy_success_values.append(proxy_success)
+      benchmark_success_values.append(benchmark)
+      benchmark_available_values.append(benchmark_available)
 
     action_ranking_diagnostics.restore_environment(best_snapshot)
     progress = np.asarray(progress_values, dtype=np.float32)
     success = np.asarray(success_values, dtype=np.float32)
+    proxy_success = np.asarray(proxy_success_values, dtype=np.float32)
+    benchmark_success = np.asarray(
+        benchmark_success_values, dtype=np.float32)
+    benchmark_available = np.asarray(
+        benchmark_available_values, dtype=np.float32)
     outcome = progress + float(success_bonus) * success
     informative = bool(
         float(np.max(outcome) - np.min(outcome)) >= min_outcome_gap)
@@ -316,6 +346,9 @@ def collect_counterfactual_ranking_batch(
     all_actions.append(actions)
     all_progress.append(progress)
     all_success.append(success)
+    all_proxy_success.append(proxy_success)
+    all_benchmark_success.append(benchmark_success)
+    all_benchmark_available.append(benchmark_available)
     all_outcomes.append(outcome)
     all_informative.append(informative)
     all_near.append(
@@ -333,7 +366,28 @@ def collect_counterfactual_ranking_batch(
       informative=np.asarray(all_informative, dtype=bool),
       near_interaction=np.asarray(all_near, dtype=bool),
       interaction_distance=np.asarray(all_distance, dtype=np.float32),
+      proxy_success=np.stack(all_proxy_success).astype(np.float32),
+      benchmark_success=np.stack(all_benchmark_success).astype(np.float32),
+      benchmark_success_available=np.stack(
+          all_benchmark_available).astype(np.float32),
   )
+  proxy_success = batch.proxy_success
+  benchmark_success = batch.benchmark_success
+  benchmark_available = batch.benchmark_success_available
+  available_mask = benchmark_available > 0.5
+  if np.any(available_mask):
+    agreement = float(np.mean(
+        proxy_success[available_mask] == benchmark_success[available_mask]))
+    proxy_false_positive = float(np.mean(
+        (proxy_success[available_mask] > 0.5)
+        & (benchmark_success[available_mask] <= 0.5)))
+    proxy_false_negative = float(np.mean(
+        (proxy_success[available_mask] <= 0.5)
+        & (benchmark_success[available_mask] > 0.5)))
+  else:
+    agreement = 0.0
+    proxy_false_positive = 0.0
+    proxy_false_negative = 0.0
   metrics = {
       'counterfactual_rank/informative_anchor_fraction': float(
           np.mean(batch.informative)),
@@ -347,6 +401,17 @@ def collect_counterfactual_ranking_batch(
           np.mean(batch.progress > min_outcome_gap)),
       'counterfactual_rank/task_success_fraction': float(
           np.mean(batch.success)),
+      'counterfactual_rank/proxy_success_fraction': float(
+          np.mean(proxy_success)),
+      'counterfactual_rank/benchmark_success_fraction': float(
+          np.mean(benchmark_success)),
+      'counterfactual_rank/benchmark_success_available_fraction': float(
+          np.mean(benchmark_available)),
+      'counterfactual_rank/success_predicate_agreement': agreement,
+      'counterfactual_rank/proxy_false_positive_fraction':
+          proxy_false_positive,
+      'counterfactual_rank/proxy_false_negative_fraction':
+          proxy_false_negative,
       'counterfactual_rank/task_success_variation_fraction': float(np.mean(
           np.max(batch.success, axis=1) > np.min(batch.success, axis=1))),
       'counterfactual_rank/buffer_candidate_count': float(
@@ -400,22 +465,52 @@ def summarize_counterfactual_scores(
         anchor_scores, outcomes))
     regrets.append(float(
         np.max(outcomes) - outcomes[int(np.argmax(anchor_scores))]))
-  shuffled = np.roll(scores, 1, axis=1)
-  centered = scores - np.mean(scores, axis=1, keepdims=True)
-  shuffled_centered = shuffled - np.mean(shuffled, axis=1, keepdims=True)
-  denominator = np.linalg.norm(centered) * np.linalg.norm(shuffled_centered)
-  retention = (float(np.sum(centered * shuffled_centered) / denominator)
-               if denominator > 1e-12 else 1.0)
+  permutation_drops = []
+  for anchor_scores, outcomes, informative in zip(
+      scores, batch.outcomes, batch.informative):
+    if not informative or anchor_scores.shape[0] < 2:
+      continue
+    original = action_ranking_diagnostics.spearman(anchor_scores, outcomes)
+    permuted = [
+        action_ranking_diagnostics.spearman(
+            np.roll(anchor_scores, shift), outcomes)
+        for shift in range(1, anchor_scores.shape[0])]
+    permutation_drops.append(original - float(np.mean(permuted)))
+  rank_spearman = float(np.mean(correlations)) if correlations else 0.0
   return {
-      'counterfactual_rank/score_vs_task_progress_spearman': (
-          float(np.mean(correlations)) if correlations else 0.0),
+      # Keep the historical key as an alias for old dashboards.  The labels
+      # are progress + success bonus, so ``score_vs_outcome_spearman`` is the
+      # accurate name used by all new promotion gates.
+      'counterfactual_rank/score_vs_task_progress_spearman': rank_spearman,
+      'counterfactual_rank/score_vs_outcome_spearman': rank_spearman,
       'counterfactual_rank/pairwise_accuracy': _pairwise_accuracy(
           scores, batch.outcomes, min_outcome_gap),
       'counterfactual_rank/top_action_regret': (
           float(np.mean(regrets)) if regrets else 0.0),
       'counterfactual_rank/fixed_state_score_std': float(
           np.mean(np.std(scores, axis=1))),
-      'counterfactual_rank/action_shuffle_retention': retention,
+      'counterfactual_rank/action_permutation_spearman_drop': (
+          float(np.mean(permutation_drops)) if permutation_drops else 0.0),
+  }
+
+
+def summarize_oracle(batch: CounterfactualRankingBatch) -> Dict[str, float]:
+  """Summarize the best outcome available in the tested candidate class."""
+  oracle_success = np.max(batch.success, axis=1)
+  random_success = np.mean(batch.success, axis=1)
+  oracle_outcome = np.max(batch.outcomes, axis=1)
+  random_outcome = np.mean(batch.outcomes, axis=1)
+  return {
+      'oracle/best_success_fraction': float(np.mean(oracle_success)),
+      'oracle/random_success_fraction': float(np.mean(random_success)),
+      'oracle/success_gain': float(np.mean(
+          oracle_success - random_success)),
+      'oracle/best_outcome_mean': float(np.mean(oracle_outcome)),
+      'oracle/random_outcome_mean': float(np.mean(random_outcome)),
+      'oracle/outcome_gain': float(np.mean(oracle_outcome - random_outcome)),
+      'oracle/informative_anchor_fraction': float(np.mean(batch.informative)),
+      'oracle/near_interaction_fraction': float(
+          np.mean(batch.near_interaction)),
   }
 
 

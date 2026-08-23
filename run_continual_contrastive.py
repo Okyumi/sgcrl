@@ -71,6 +71,7 @@ from contrastive import rbc_checkpointing
 from contrastive import intrajectory
 from contrastive import action_ranking_diagnostics
 from contrastive import counterfactual_ranking
+from contrastive import phase_gated_control
 from contrastive import outcome_credit
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
@@ -360,6 +361,42 @@ flags.DEFINE_float('counterfactual_rank_pairwise_temperature', 1.0,
                    'Temperature of the within-anchor logistic ranking loss.')
 flags.DEFINE_float('counterfactual_rank_l2_weight', 1e-4,
                    'Mean-parameter L2 regularization on the task-local head.')
+flags.DEFINE_integer(
+    'counterfactual_rank_validation_anchors', 0,
+    'Fresh disjoint anchors collected only for pre/post held-out metrics.')
+flags.DEFINE_enum(
+    'counterfactual_rank_success_mode', 'goal_distance',
+    ('goal_distance', 'zero_reward', 'positive_reward'),
+    'Success signal used in counterfactual labels. zero_reward matches the '
+    'Sawyer sparse -1/0 convention.')
+flags.DEFINE_bool(
+    'counterfactual_rank_actor_enabled', True,
+    'Whether the ordinary policy-gradient actor directly maximizes the rank '
+    'head. False leaves DCC as the actor objective while still training and '
+    'diagnosing the head.')
+flags.DEFINE_integer(
+    'counterfactual_oracle_interval_steps', 0,
+    'Cadence for the four-condition exact-simulator oracle decomposition; '
+    'zero disables it.')
+flags.DEFINE_integer('counterfactual_oracle_num_anchors', 4,
+                     'Anchors per condition in each oracle event.')
+flags.DEFINE_bool(
+    'phase_gated_control', False,
+    'Use a reach/contact gate and execute rank-selected actions for the same '
+    'chunk length used by counterfactual labels.')
+flags.DEFINE_enum('phase_gate_reach_mode', 'policy',
+                  ('policy', 'scripted_contact'),
+                  'Controller used outside contact support.')
+flags.DEFINE_float('phase_gate_interaction_threshold', 0.09,
+                   'Hand-to-mechanism distance activating chunk control.')
+flags.DEFINE_integer('phase_gate_chunk_length', 5,
+                     'Environment steps used for each selected contact chunk.')
+flags.DEFINE_integer('phase_gate_num_candidates', 16,
+                     'Policy/local/uniform candidates scored at each replan.')
+flags.DEFINE_float('phase_gate_local_noise_std', 0.10,
+                   'Local candidate noise for phase-gated selection.')
+flags.DEFINE_float('phase_gate_contact_gain', 5.0,
+                   'Gain of the diagnostic scripted reach controller.')
 flags.DEFINE_float('bellman_loss_weight', 1.0,
                    'RBC-DCC weight lambda_Q on the twin scalar TD loss.')
 flags.DEFINE_float('bellman_residual_l2_weight', 1e-4,
@@ -439,6 +476,20 @@ flags.DEFINE_integer('action_landscape_anchor_search_steps', 200,
                      'Maximum prefix length for interaction-aware anchors.')
 flags.DEFINE_float('action_landscape_interaction_threshold', 0.09,
                    'Near-interaction distance used by the causal probe.')
+flags.DEFINE_integer(
+    'action_landscape_action_repeat', 1,
+    'Initial repetitions of each intervened action. Set to the label chunk '
+    'length for an aligned causal-ranking test.')
+flags.DEFINE_bool(
+    'action_landscape_use_best_progress', False,
+    'Use best-over-horizon rather than final mechanism progress as the '
+    'registered aligned causal outcome.')
+flags.DEFINE_float('action_landscape_success_threshold', 0.05,
+                   'Mechanism-distance proxy threshold logged by the probe.')
+flags.DEFINE_enum(
+    'action_landscape_success_mode', 'goal_distance',
+    ('goal_distance', 'zero_reward', 'positive_reward'),
+    'Success semantics for the causal probe; zero_reward matches -1/0.')
 flags.DEFINE_bool('log_pool_cosine', True,
                   'Log per-task pool cosine-similarity matrices on the '
                   'actor / critic CKA pools. Cheap host-side metric. '
@@ -613,6 +664,32 @@ def _bridge_identity_config():
           FLAGS.counterfactual_rank_pairwise_temperature,
       'counterfactual_rank_l2_weight':
           FLAGS.counterfactual_rank_l2_weight,
+      'counterfactual_rank_validation_anchors':
+          FLAGS.counterfactual_rank_validation_anchors,
+      'counterfactual_rank_success_mode':
+          FLAGS.counterfactual_rank_success_mode,
+      'counterfactual_rank_actor_enabled':
+          FLAGS.counterfactual_rank_actor_enabled,
+      'counterfactual_oracle_interval_steps':
+          FLAGS.counterfactual_oracle_interval_steps,
+      'counterfactual_oracle_num_anchors':
+          FLAGS.counterfactual_oracle_num_anchors,
+      'phase_gated_control': FLAGS.phase_gated_control,
+      'phase_gate_reach_mode': FLAGS.phase_gate_reach_mode,
+      'phase_gate_interaction_threshold':
+          FLAGS.phase_gate_interaction_threshold,
+      'phase_gate_chunk_length': FLAGS.phase_gate_chunk_length,
+      'phase_gate_num_candidates': FLAGS.phase_gate_num_candidates,
+      'phase_gate_local_noise_std': FLAGS.phase_gate_local_noise_std,
+      'phase_gate_contact_gain': FLAGS.phase_gate_contact_gain,
+      'action_landscape_action_repeat':
+          FLAGS.action_landscape_action_repeat,
+      'action_landscape_use_best_progress':
+          FLAGS.action_landscape_use_best_progress,
+      'action_landscape_success_threshold':
+          FLAGS.action_landscape_success_threshold,
+      'action_landscape_success_mode':
+          FLAGS.action_landscape_success_mode,
   }
 
 def _git_commit_sha():
@@ -1561,6 +1638,42 @@ def train_single_task(
       env_name, config.start_index, config.end_index,
       seed + task_id + 300, fixed_start_end=fixed_goal,
       task_id=_tid, num_tasks=_ntasks)
+  phase_control_enabled = bool(getattr(
+      continual_cfg, 'phase_gated_control', False))
+  if phase_control_enabled:
+    if not counterfactual_rank_enabled:
+      raise ValueError(
+          'phase_gated_control requires counterfactual_rank target mode.')
+    if not isinstance(learner, ContinualDecomposedLearner):
+      raise ValueError(
+          'phase_gated_control requires ContinualDecomposedLearner.')
+
+    def _phase_score_actions(observation, actions):
+      return np.asarray(
+          learner.score_counterfactual_actions(observation, actions))
+
+    phase_kwargs = {
+        'obs_dim': config.obs_dim,
+        'score_actions_fn': _phase_score_actions,
+        'reach_mode': getattr(
+            continual_cfg, 'phase_gate_reach_mode', 'policy'),
+        'interaction_threshold': float(getattr(
+            continual_cfg, 'phase_gate_interaction_threshold', 0.09)),
+        'chunk_length': int(getattr(
+            continual_cfg, 'phase_gate_chunk_length', 5)),
+        'num_candidates': int(getattr(
+            continual_cfg, 'phase_gate_num_candidates', 16)),
+        'local_noise_std': float(getattr(
+            continual_cfg, 'phase_gate_local_noise_std', 0.10)),
+        'contact_gain': float(getattr(
+            continual_cfg, 'phase_gate_contact_gain', 5.0)),
+    }
+    actor = phase_gated_control.PhaseGatedChunkActor(
+        actor, action_spec=env.action_spec(),
+        rng=np.random.default_rng(seed + task_id + 610), **phase_kwargs)
+    eval_actor = phase_gated_control.PhaseGatedChunkActor(
+        eval_actor, action_spec=eval_env.action_spec(),
+        rng=np.random.default_rng(seed + task_id + 620), **phase_kwargs)
   eval_observers = [
       contrastive_utils.SuccessObserver(),
       contrastive_utils.DistanceObserver(
@@ -1596,8 +1709,22 @@ def train_single_task(
   # to zero, so every previous algorithm keeps its original runtime/path.
   counterfactual_rank_interval = int(getattr(
       continual_cfg, 'counterfactual_rank_interval_steps', 0))
+  counterfactual_oracle_interval = int(getattr(
+      continual_cfg, 'counterfactual_oracle_interval_steps', 0))
+  counterfactual_validation_anchors = int(getattr(
+      continual_cfg, 'counterfactual_rank_validation_anchors', 0))
   counterfactual_rank_env = None
+  counterfactual_validation_env = None
+  counterfactual_oracle_envs = {}
+  if counterfactual_rank_interval > 0 or counterfactual_oracle_interval > 0:
+    if config.obs_dim < 7:
+      raise ValueError(
+          'Counterfactual stages require Sawyer hand/mechanism coordinates.')
   if counterfactual_rank_interval > 0:
+    counterfactual_rank_env, _ = contrastive_utils.make_environment(
+        env_name, config.start_index, config.end_index,
+        seed + task_id + 500, fixed_start_end=fixed_goal,
+        task_id=_tid, num_tasks=_ntasks)
     if not counterfactual_rank_enabled:
       raise ValueError(
           'counterfactual_rank_interval_steps requires '
@@ -1605,10 +1732,26 @@ def train_single_task(
     if not isinstance(learner, ContinualDecomposedLearner):
       raise ValueError(
           'Counterfactual ranking requires ContinualDecomposedLearner.')
-    counterfactual_rank_env, _ = contrastive_utils.make_environment(
-        env_name, config.start_index, config.end_index,
-        seed + task_id + 500, fixed_start_end=fixed_goal,
-        task_id=_tid, num_tasks=_ntasks)
+    if counterfactual_validation_anchors > 0:
+      counterfactual_validation_env, _ = (
+          contrastive_utils.make_environment(
+              env_name, config.start_index, config.end_index,
+              seed + task_id + 550, fixed_start_end=fixed_goal,
+              task_id=_tid, num_tasks=_ntasks))
+  if counterfactual_oracle_interval > 0:
+    # Repeat-1 and repeat-5 environments for a given anchor mode use the same
+    # seed and advance independently. This makes their reset/anchor sequences
+    # paired without allowing one condition's rollout to perturb another.
+    for oracle_anchor_mode, oracle_seed_offset in (
+        ('policy', 570), ('scripted_contact', 580)):
+      for oracle_repeat in (1, 5):
+        oracle_env, _ = contrastive_utils.make_environment(
+            env_name, config.start_index, config.end_index,
+            seed + task_id + oracle_seed_offset,
+            fixed_start_end=fixed_goal,
+            task_id=_tid, num_tasks=_ntasks)
+        counterfactual_oracle_envs[
+            (oracle_anchor_mode, oracle_repeat)] = oracle_env
 
   # ---- training loop (actor-learner loop) --------------------------------
   actor_logger = make_default_logger(
@@ -1660,8 +1803,13 @@ def train_single_task(
   # before it is allowed to influence the actor on subsequent updates.
   next_counterfactual_rank_at = (
       0 if counterfactual_rank_interval > 0 else float('inf'))
+  next_counterfactual_oracle_at = (
+      0 if counterfactual_oracle_interval > 0 else float('inf'))
   counterfactual_rank_rng = np.random.default_rng(
       seed + 99001 + task_id * 103)
+  counterfactual_validation_rng = np.random.default_rng(
+      seed + 99501 + task_id * 107)
+  counterfactual_oracle_event = 0
   counterfactual_rank_buffer = (
       counterfactual_ranking.CounterfactualRankingBuffer(int(getattr(
           continual_cfg, 'counterfactual_rank_buffer_capacity', 128)))
@@ -1749,47 +1897,77 @@ def train_single_task(
       print(
           f'  [counterfactual-rank @ {env_steps_done}] collecting original-'
           'task-goal outcomes from identical simulator states...', flush=True)
+      collection_kwargs = {
+          'obs_dim': config.obs_dim,
+          'replay_observations': np.asarray(transitions.observation),
+          'replay_actions': np.asarray(transitions.action),
+          'policy_action_fn': _rank_policy_action,
+          'candidates_per_family': int(getattr(
+              continual_cfg, 'counterfactual_rank_candidates_per_family', 4)),
+          'rollout_horizon': int(getattr(
+              continual_cfg, 'counterfactual_rank_rollout_horizon', 100)),
+          'action_repeat': int(getattr(
+              continual_cfg, 'counterfactual_rank_action_repeat', 5)),
+          'local_noise_std': float(getattr(
+              continual_cfg, 'counterfactual_rank_local_noise_std', 0.10)),
+          'anchor_mode': getattr(
+              continual_cfg, 'counterfactual_rank_anchor_mode',
+              'scripted_contact'),
+          'anchor_search_steps': int(getattr(
+              continual_cfg, 'counterfactual_rank_anchor_search_steps', 150)),
+          'interaction_threshold': float(getattr(
+              continual_cfg, 'counterfactual_rank_interaction_threshold',
+              0.09)),
+          'contact_gain': float(getattr(
+              continual_cfg, 'counterfactual_rank_contact_gain', 5.0)),
+          'success_threshold': float(getattr(
+              continual_cfg, 'counterfactual_rank_success_threshold', 0.05)),
+          'success_mode': getattr(
+              continual_cfg, 'counterfactual_rank_success_mode',
+              'goal_distance'),
+          'success_bonus': float(getattr(
+              continual_cfg, 'counterfactual_rank_success_bonus', 1.0)),
+          'min_outcome_gap': float(getattr(
+              continual_cfg, 'counterfactual_rank_min_outcome_gap', 0.002)),
+      }
       rank_batch, rank_metrics = (
           counterfactual_ranking.collect_counterfactual_ranking_batch(
               environment=counterfactual_rank_env,
-              obs_dim=config.obs_dim,
-              replay_observations=np.asarray(transitions.observation),
-              replay_actions=np.asarray(transitions.action),
-              policy_action_fn=_rank_policy_action,
               rng=counterfactual_rank_rng,
               num_anchors=int(getattr(
                   continual_cfg, 'counterfactual_rank_num_anchors', 4)),
-              candidates_per_family=int(getattr(
-                  continual_cfg,
-                  'counterfactual_rank_candidates_per_family', 4)),
-              rollout_horizon=int(getattr(
-                  continual_cfg,
-                  'counterfactual_rank_rollout_horizon', 100)),
-              action_repeat=int(getattr(
-                  continual_cfg, 'counterfactual_rank_action_repeat', 5)),
-              local_noise_std=float(getattr(
-                  continual_cfg,
-                  'counterfactual_rank_local_noise_std', 0.10)),
-              anchor_mode=getattr(
-                  continual_cfg, 'counterfactual_rank_anchor_mode',
-                  'scripted_contact'),
-              anchor_search_steps=int(getattr(
-                  continual_cfg,
-                  'counterfactual_rank_anchor_search_steps', 150)),
-              interaction_threshold=float(getattr(
-                  continual_cfg,
-                  'counterfactual_rank_interaction_threshold', 0.09)),
-              contact_gain=float(getattr(
-                  continual_cfg, 'counterfactual_rank_contact_gain', 5.0)),
-              success_threshold=float(getattr(
-                  continual_cfg,
-                  'counterfactual_rank_success_threshold', 0.05)),
-              success_bonus=float(getattr(
-                  continual_cfg, 'counterfactual_rank_success_bonus', 1.0)),
-              min_outcome_gap=float(getattr(
-                  continual_cfg,
-                  'counterfactual_rank_min_outcome_gap', 0.002)),
-          ))
+              **collection_kwargs))
+      validation_batch = None
+      validation_collection_metrics = {}
+      if counterfactual_validation_anchors > 0:
+        validation_batch, validation_collection_metrics = (
+            counterfactual_ranking.collect_counterfactual_ranking_batch(
+                environment=counterfactual_validation_env,
+                rng=counterfactual_validation_rng,
+                num_anchors=counterfactual_validation_anchors,
+                **collection_kwargs))
+
+      def _prefixed_score_metrics(metrics, split):
+        result = {}
+        for name, value in metrics.items():
+          suffix = name.split('/', 1)[-1]
+          result[f'counterfactual_rank/{split}/{suffix}'] = float(value)
+        return result
+
+      min_gap = float(getattr(
+          continual_cfg, 'counterfactual_rank_min_outcome_gap', 0.002))
+      train_pre_scores = learner.score_counterfactual_batch(rank_batch)
+      train_pre_metrics = counterfactual_ranking.summarize_counterfactual_scores(
+          train_pre_scores, rank_batch, min_outcome_gap=min_gap)
+      heldout_pre_metrics = {}
+      if validation_batch is not None:
+        heldout_pre_scores = learner.score_counterfactual_batch(
+            validation_batch)
+        heldout_pre_metrics = (
+            counterfactual_ranking.summarize_counterfactual_scores(
+                heldout_pre_scores, validation_batch,
+                min_outcome_gap=min_gap))
+
       counterfactual_rank_buffer.add(rank_batch)
       train_metrics = {}
       for _ in range(int(getattr(
@@ -1802,16 +1980,29 @@ def train_single_task(
             sampled_rank_batch, updates=1)
       rank_scores = learner.score_counterfactual_batch(rank_batch)
       score_metrics = counterfactual_ranking.summarize_counterfactual_scores(
-          rank_scores, rank_batch,
-          min_outcome_gap=float(getattr(
-              continual_cfg,
-              'counterfactual_rank_min_outcome_gap', 0.002)))
+          rank_scores, rank_batch, min_outcome_gap=min_gap)
+      heldout_post_metrics = {}
+      if validation_batch is not None:
+        heldout_post_scores = learner.score_counterfactual_batch(
+            validation_batch)
+        heldout_post_metrics = (
+            counterfactual_ranking.summarize_counterfactual_scores(
+                heldout_post_scores, validation_batch,
+                min_outcome_gap=min_gap))
       rank_metrics = {
           **rank_metrics,
-          **train_metrics,
+          **_prefixed_score_metrics(
+              validation_collection_metrics, 'heldout_collection'),
+          **_prefixed_score_metrics(train_pre_metrics, 'train_pre'),
+          **_prefixed_score_metrics(heldout_pre_metrics, 'heldout_pre'),
+          **_prefixed_score_metrics(train_metrics, 'optimization'),
           **score_metrics,
+          **_prefixed_score_metrics(score_metrics, 'train_post'),
+          **_prefixed_score_metrics(heldout_post_metrics, 'heldout_post'),
           'counterfactual_rank/buffer_anchors': float(
               len(counterfactual_rank_buffer)),
+          'counterfactual_rank/updates_total': float(
+              train_metrics.get('counterfactual_rank/updates_total', 0.0)),
       }
       if FLAGS.use_wandb and wandb is not None:
         wandb_rank = {
@@ -1822,12 +2013,107 @@ def train_single_task(
       print(
           '  [counterfactual-rank] '
           f"informative={rank_metrics.get('counterfactual_rank/informative_anchor_fraction', 0.0):.2f} "
-          f"rho={rank_metrics.get('counterfactual_rank/score_vs_task_progress_spearman', 0.0):.3f} "
+          f"train_rho={rank_metrics.get('counterfactual_rank/score_vs_outcome_spearman', 0.0):.3f} "
+          f"heldout_rho={rank_metrics.get('counterfactual_rank/heldout_post/score_vs_outcome_spearman', float('nan')):.3f} "
           f"pair_acc={rank_metrics.get('counterfactual_rank/pairwise_accuracy', 0.0):.3f} "
           f"updates={rank_metrics.get('counterfactual_rank/updates_total', 0.0):.0f}",
           flush=True)
       next_counterfactual_rank_at = (
           env_steps_done + counterfactual_rank_interval)
+
+    if env_steps_done >= next_counterfactual_oracle_at:
+      transitions = learner.last_transitions
+      if transitions is None:
+        raise RuntimeError(
+            'Counterfactual oracle event fired before replay existed.')
+      policy_params = learner.get_variables(['policy'])[0]
+
+      def _oracle_policy_action(observation, numpy_rng, stochastic):
+        key = jax.random.PRNGKey(
+            int(numpy_rng.integers(0, np.iinfo(np.int32).max)))
+        distribution = networks.policy_network.apply(
+            policy_params, jnp.asarray(observation)[None, :])
+        sampler = networks.sample if stochastic else networks.sample_eval
+        return np.asarray(sampler(distribution, key))[0]
+
+      oracle_metrics = {}
+      for anchor_mode, action_repeat in (
+          ('policy', 1), ('policy', 5),
+          ('scripted_contact', 1), ('scripted_contact', 5)):
+        oracle_condition_rng = np.random.default_rng(
+            seed + 99701 + task_id * 109
+            + counterfactual_oracle_event * 1009
+            + (0 if anchor_mode == 'policy' else 1))
+        oracle_batch, collection_metrics = (
+            counterfactual_ranking.collect_counterfactual_ranking_batch(
+                environment=counterfactual_oracle_envs[
+                    (anchor_mode, action_repeat)],
+                obs_dim=config.obs_dim,
+                replay_observations=np.asarray(transitions.observation),
+                replay_actions=np.asarray(transitions.action),
+                policy_action_fn=_oracle_policy_action,
+                rng=oracle_condition_rng,
+                num_anchors=int(getattr(
+                    continual_cfg, 'counterfactual_oracle_num_anchors', 4)),
+                candidates_per_family=int(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_candidates_per_family', 4)),
+                rollout_horizon=int(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_rollout_horizon', 100)),
+                action_repeat=action_repeat,
+                local_noise_std=float(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_local_noise_std', 0.10)),
+                anchor_mode=anchor_mode,
+                anchor_search_steps=int(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_anchor_search_steps', 150)),
+                interaction_threshold=float(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_interaction_threshold', 0.09)),
+                contact_gain=float(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_contact_gain', 5.0)),
+                success_threshold=float(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_success_threshold', 0.05)),
+                success_mode=getattr(
+                    continual_cfg, 'counterfactual_rank_success_mode',
+                    'goal_distance'),
+                success_bonus=float(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_success_bonus', 1.0)),
+                min_outcome_gap=float(getattr(
+                    continual_cfg,
+                    'counterfactual_rank_min_outcome_gap', 0.002))))
+        condition = f'{anchor_mode}/repeat{action_repeat}'
+        condition_metrics = {
+            **counterfactual_ranking.summarize_oracle(oracle_batch),
+            'oracle/proxy_success_fraction': collection_metrics[
+                'counterfactual_rank/proxy_success_fraction'],
+            'oracle/benchmark_success_fraction': collection_metrics[
+                'counterfactual_rank/benchmark_success_fraction'],
+            'oracle/success_predicate_agreement': collection_metrics[
+                'counterfactual_rank/success_predicate_agreement'],
+        }
+        for name, value in condition_metrics.items():
+          suffix = name.split('/', 1)[-1]
+          oracle_metrics[f'oracle/{condition}/{suffix}'] = float(value)
+      if FLAGS.use_wandb and wandb is not None:
+        wandb_oracle = {
+            f'learner/{name}': value
+            for name, value in oracle_metrics.items()}
+        wandb_oracle['learner/env_steps'] = env_steps_done
+        wandb.log(wandb_oracle)
+      print(
+          '  [counterfactual-oracle] '
+          f"policy-r5={oracle_metrics.get('oracle/policy/repeat5/best_success_fraction', 0.0):.2f} "
+          f"scripted-r5={oracle_metrics.get('oracle/scripted_contact/repeat5/best_success_fraction', 0.0):.2f}",
+          flush=True)
+      counterfactual_oracle_event += 1
+      next_counterfactual_oracle_at = (
+          env_steps_done + counterfactual_oracle_interval)
 
     if env_steps_done >= next_action_landscape_at:
       transitions = learner.last_transitions
@@ -1847,6 +2133,10 @@ def train_single_task(
         return np.asarray(sampler(distribution, key))[0]
 
       def _diagnostic_score_actions(observation, actions):
+        if (counterfactual_rank_enabled
+            and hasattr(learner, 'score_counterfactual_actions')):
+          return np.asarray(
+              learner.score_counterfactual_actions(observation, actions))
         if hasattr(learner, 'score_actions'):
           return np.asarray(learner.score_actions(observation, actions))
         observation_batch = jnp.repeat(
@@ -1890,6 +2180,17 @@ def train_single_task(
               anchor_search_steps=int(getattr(
                   continual_cfg,
                   'action_landscape_anchor_search_steps', 200)),
+              action_repeat=int(getattr(
+                  continual_cfg, 'action_landscape_action_repeat', 1)),
+              use_best_progress=bool(getattr(
+                  continual_cfg, 'action_landscape_use_best_progress',
+                  False)),
+              success_threshold=float(getattr(
+                  continual_cfg, 'action_landscape_success_threshold',
+                  0.05)),
+              success_mode=getattr(
+                  continual_cfg, 'action_landscape_success_mode',
+                  'goal_distance'),
           ))
       if FLAGS.use_wandb and wandb is not None:
         wandb_landscape = {
@@ -1899,7 +2200,7 @@ def train_single_task(
         wandb.log(wandb_landscape)
       print(
           '  [action-landscape] '
-          f"rho_replay={landscape_metrics.get('action_landscape/replay_score_vs_rollout_mechanism_spearman', float('nan')):.3f} "
+          f"rho_aligned={landscape_metrics.get('action_landscape/aligned_score_vs_progress_spearman', float('nan')):.3f} "
           f"policy_score_pct={landscape_metrics.get('action_landscape/policy_score_percentile', float('nan')):.3f} "
           f"policy_outcome_pct={landscape_metrics.get('action_landscape/policy_outcome_percentile', float('nan')):.3f}",
           flush=True)
@@ -1921,6 +2222,13 @@ def train_single_task(
 
     # Periodic progress logging (to stdout, independent of TimeFilter)
     if env_steps_done >= next_log_at:
+      if phase_control_enabled:
+        phase_metrics = actor.get_and_reset_metrics()
+        if FLAGS.use_wandb and wandb is not None:
+          wandb.log({
+              f'learner/{name}': float(value)
+              for name, value in {
+                  **phase_metrics, 'env_steps': env_steps_done}.items()})
       print(f'  Task {task_id} [{env_name}]: '
             f'{env_steps_done}/{train_steps} env steps '
             f'({episodes_done} episodes)', flush=True)
@@ -1937,12 +2245,19 @@ def train_single_task(
         eval_returns.append(float(ep_result.get('episode_return', 0)))
       eval_success_rate = np.mean(eval_successes)
       eval_mean_return = np.mean(eval_returns)
+      eval_phase_metrics = (
+          eval_actor.get_and_reset_metrics()
+          if phase_control_enabled else {})
       if FLAGS.use_wandb and wandb is not None:
-        wandb.log({
+        eval_log = {
             'evaluator/success_rate': eval_success_rate,
             'evaluator/mean_return': eval_mean_return,
             'evaluator/env_steps': env_steps_done,
-        })
+        }
+        eval_log.update({
+            f'evaluator/{name}': float(value)
+            for name, value in eval_phase_metrics.items()})
+        wandb.log(eval_log)
       print(f'  [eval @ {env_steps_done}] success={eval_success_rate:.1%} '
             f'return={eval_mean_return:.1f}', flush=True)
       next_evaluator_at = env_steps_done + eval_every
@@ -2188,6 +2503,16 @@ def train_single_task(
         counterfactual_rank_env.close()
       except Exception:
         pass
+    if counterfactual_validation_env is not None:
+      try:
+        counterfactual_validation_env.close()
+      except Exception:
+        pass
+    for oracle_env in counterfactual_oracle_envs.values():
+      try:
+        oracle_env.close()
+      except Exception:
+        pass
     del learner, variable_client, eval_variable_client
 
     return (
@@ -2394,6 +2719,16 @@ def train_single_task(
       counterfactual_rank_env.close()
     except Exception:
       pass
+  if counterfactual_validation_env is not None:
+    try:
+      counterfactual_validation_env.close()
+    except Exception:
+      pass
+  for oracle_env in counterfactual_oracle_envs.values():
+    try:
+      oracle_env.close()
+    except Exception:
+      pass
   del learner, variable_client, eval_variable_client
 
   return (
@@ -2509,6 +2844,24 @@ def main(_):
           FLAGS.counterfactual_rank_pairwise_temperature,
       counterfactual_rank_l2_weight=
           FLAGS.counterfactual_rank_l2_weight,
+      counterfactual_rank_validation_anchors=
+          FLAGS.counterfactual_rank_validation_anchors,
+      counterfactual_rank_success_mode=
+          FLAGS.counterfactual_rank_success_mode,
+      counterfactual_rank_actor_enabled=
+          FLAGS.counterfactual_rank_actor_enabled,
+      counterfactual_oracle_interval_steps=
+          FLAGS.counterfactual_oracle_interval_steps,
+      counterfactual_oracle_num_anchors=
+          FLAGS.counterfactual_oracle_num_anchors,
+      phase_gated_control=FLAGS.phase_gated_control,
+      phase_gate_reach_mode=FLAGS.phase_gate_reach_mode,
+      phase_gate_interaction_threshold=
+          FLAGS.phase_gate_interaction_threshold,
+      phase_gate_chunk_length=FLAGS.phase_gate_chunk_length,
+      phase_gate_num_candidates=FLAGS.phase_gate_num_candidates,
+      phase_gate_local_noise_std=FLAGS.phase_gate_local_noise_std,
+      phase_gate_contact_gain=FLAGS.phase_gate_contact_gain,
       bellman_loss_weight=FLAGS.bellman_loss_weight,
       bellman_residual_l2_weight=FLAGS.bellman_residual_l2_weight,
       bellman_discount=FLAGS.bellman_discount,
@@ -2554,6 +2907,12 @@ def main(_):
           FLAGS.action_landscape_anchor_search_steps,
       action_landscape_interaction_threshold=
           FLAGS.action_landscape_interaction_threshold,
+      action_landscape_action_repeat=FLAGS.action_landscape_action_repeat,
+      action_landscape_use_best_progress=
+          FLAGS.action_landscape_use_best_progress,
+      action_landscape_success_threshold=
+          FLAGS.action_landscape_success_threshold,
+      action_landscape_success_mode=FLAGS.action_landscape_success_mode,
       log_pool_cosine=FLAGS.log_pool_cosine,
       log_mixture_norm=FLAGS.log_mixture_norm,
       log_probe_data=FLAGS.log_probe_data,
@@ -2856,6 +3215,28 @@ def main(_):
                       FLAGS.counterfactual_rank_pairwise_temperature,
                   'counterfactual_rank_l2_weight':
                       FLAGS.counterfactual_rank_l2_weight,
+                  'counterfactual_rank_validation_anchors':
+                      FLAGS.counterfactual_rank_validation_anchors,
+                  'counterfactual_rank_success_mode':
+                      FLAGS.counterfactual_rank_success_mode,
+                  'counterfactual_rank_actor_enabled':
+                      FLAGS.counterfactual_rank_actor_enabled,
+                  'counterfactual_oracle_interval_steps':
+                      FLAGS.counterfactual_oracle_interval_steps,
+                  'counterfactual_oracle_num_anchors':
+                      FLAGS.counterfactual_oracle_num_anchors,
+                  'phase_gated_control': FLAGS.phase_gated_control,
+                  'phase_gate_reach_mode': FLAGS.phase_gate_reach_mode,
+                  'phase_gate_interaction_threshold':
+                      FLAGS.phase_gate_interaction_threshold,
+                  'phase_gate_chunk_length':
+                      FLAGS.phase_gate_chunk_length,
+                  'phase_gate_num_candidates':
+                      FLAGS.phase_gate_num_candidates,
+                  'phase_gate_local_noise_std':
+                      FLAGS.phase_gate_local_noise_std,
+                  'phase_gate_contact_gain':
+                      FLAGS.phase_gate_contact_gain,
                   'bellman_loss_weight': FLAGS.bellman_loss_weight,
                   'bellman_residual_l2_weight':
                       FLAGS.bellman_residual_l2_weight,
@@ -2912,6 +3293,14 @@ def main(_):
                       FLAGS.action_landscape_anchor_search_steps,
                   'action_landscape_interaction_threshold':
                       FLAGS.action_landscape_interaction_threshold,
+                  'action_landscape_action_repeat':
+                      FLAGS.action_landscape_action_repeat,
+                  'action_landscape_use_best_progress':
+                      FLAGS.action_landscape_use_best_progress,
+                  'action_landscape_success_threshold':
+                      FLAGS.action_landscape_success_threshold,
+                  'action_landscape_success_mode':
+                      FLAGS.action_landscape_success_mode,
                   'post_task_eval_scope':
                       FLAGS.post_task_eval_scope},
           name=f'task{task_id}_{env_name}_s{seed}',
