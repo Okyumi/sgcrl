@@ -119,6 +119,7 @@ class DecomposedTrainingState(NamedTuple):
   success_buffer_action: Optional[jnp.ndarray] = None
   success_buffer_size: Optional[jnp.ndarray] = None
   success_buffer_index: Optional[jnp.ndarray] = None
+  counterfactual_rank_updates: Optional[jnp.ndarray] = None
 
 
 # ---------------------------------------------------------------------------
@@ -232,18 +233,38 @@ class ContinualDecomposedLearner(acme.Learner):
         continual_config, 'success_buffer_capacity', 4096))
     self._success_bc_batch_size = int(getattr(
         continual_config, 'success_bc_batch_size', 64))
+    self._counterfactual_rank_temperature = float(getattr(
+        continual_config, 'counterfactual_rank_pairwise_temperature', 1.0))
+    self._counterfactual_rank_min_gap = float(getattr(
+        continual_config, 'counterfactual_rank_min_outcome_gap', 0.002))
+    self._counterfactual_rank_l2_weight = float(getattr(
+        continual_config, 'counterfactual_rank_l2_weight', 1e-4))
     if self._action_effect_actor_mode not in ('combined', 'effect_only'):
       raise ValueError(
           'action_effect_actor_mode must be combined or effect_only.')
-    if self._action_effect_target_mode not in ('psi_one_step', 'raw_horizon'):
+    if self._action_effect_target_mode not in (
+        'psi_one_step', 'raw_horizon', 'counterfactual_rank'):
       raise ValueError(
-          'action_effect_target_mode must be psi_one_step or raw_horizon.')
+          'action_effect_target_mode must be psi_one_step, raw_horizon, or '
+          'counterfactual_rank.')
     if (self._action_effect_actor_mode == 'effect_only'
         and not self._action_effect_enabled):
       raise ValueError('effect_only actor mode requires action_effect_enabled.')
     if (self._action_effect_target_mode == 'raw_horizon'
         and not self._action_effect_enabled):
       raise ValueError('raw_horizon target mode requires action_effect_enabled.')
+    if self._action_effect_target_mode == 'counterfactual_rank':
+      if not self._action_effect_enabled:
+        raise ValueError(
+            'counterfactual_rank target mode requires action_effect_enabled.')
+      if self._action_effect_actor_mode != 'effect_only':
+        raise ValueError(
+            'counterfactual_rank requires effect_only actor mode so the test '
+            'does not reintroduce the miscalibrated DCC action landscape.')
+      if self._counterfactual_rank_temperature <= 0:
+        raise ValueError('counterfactual rank temperature must be positive.')
+      if self._counterfactual_rank_min_gap < 0:
+        raise ValueError('counterfactual rank minimum gap cannot be negative.')
     if self._success_bc_weight > 0:
       if self._action_effect_target_mode != 'raw_horizon':
         raise ValueError('success retention requires raw_horizon targets.')
@@ -372,6 +393,9 @@ class ContinualDecomposedLearner(acme.Learner):
       success_buffer_action = None
       success_buffer_size = None
       success_buffer_index = None
+    counterfactual_rank_updates = (
+        jnp.asarray(0, dtype=jnp.int32)
+        if self._action_effect_target_mode == 'counterfactual_rank' else None)
 
     self._state = DecomposedTrainingState(
         policy_params=policy_params,
@@ -398,9 +422,13 @@ class ContinualDecomposedLearner(acme.Learner):
         success_buffer_action=success_buffer_action,
         success_buffer_size=success_buffer_size,
         success_buffer_index=success_buffer_index,
+        counterfactual_rank_updates=counterfactual_rank_updates,
     )
 
     self._update_step = self._make_update_step()
+    self._counterfactual_rank_update = (
+        self._make_counterfactual_rank_update()
+        if self._action_effect_target_mode == 'counterfactual_rank' else None)
 
     # Optional task-5/task-8 shortcut diagnostics.  The default interval of
     # zero preserves the legacy DCC hot path exactly.
@@ -682,7 +710,8 @@ class ContinualDecomposedLearner(acme.Learner):
                       phi_task_params, psi_params, u_task_params,
                       control_q_scale_ema, success_buffer_observation,
                       success_buffer_action, success_buffer_size,
-                      log_alpha, transitions, key):
+                      counterfactual_rank_updates, log_alpha, transitions,
+                      key):
       """Actor loss: matches continual_learning.py:408-438.
 
       Optionally rolls goals via ``config.random_goals`` (0.0 / 0.5 / 1.0),
@@ -697,16 +726,21 @@ class ContinualDecomposedLearner(acme.Learner):
       state = obs[:, :obs_dim]
       goal = obs[:, obs_dim:]
 
-      if random_goals == 0.0:
-        new_state, new_goal = state, goal
-      elif random_goals == 0.5:
-        new_state = jnp.concatenate([state, state], axis=0)
-        new_goal = jnp.concatenate([goal, jnp.roll(goal, 1, axis=0)], axis=0)
+      if action_effect_target_mode == 'counterfactual_rank':
+        # The ranker is supervised on the environment's original task goal,
+        # never on HER future-state goals. Keep the actor on that same domain.
+        new_obs = transitions.extras['counterfactual_task_observation']
       else:
-        new_state = state
-        new_goal = jnp.roll(goal, 1, axis=0)
-
-      new_obs = jnp.concatenate([new_state, new_goal], axis=1)
+        if random_goals == 0.0:
+          new_state, new_goal = state, goal
+        elif random_goals == 0.5:
+          new_state = jnp.concatenate([state, state], axis=0)
+          new_goal = jnp.concatenate(
+              [goal, jnp.roll(goal, 1, axis=0)], axis=0)
+        else:
+          new_state = state
+          new_goal = jnp.roll(goal, 1, axis=0)
+        new_obs = jnp.concatenate([new_state, new_goal], axis=1)
       key, action_key, bc_key = jax.random.split(key, 3)
       dist_params = policy_network.apply(policy_params, new_obs)
       action = sample_fn(dist_params, action_key)
@@ -725,6 +759,11 @@ class ContinualDecomposedLearner(acme.Learner):
           advantage = (
               effect[:, 0]
               + outcome_success_actor_weight * jax.nn.sigmoid(effect[:, 1]))
+        elif action_effect_target_mode == 'counterfactual_rank':
+          # Do not let random head initialization steer the actor. The gate
+          # opens only after at least one informative exact-state rank update.
+          active = (counterfactual_rank_updates > 0).astype(effect.dtype)
+          advantage = active * effect[:, 0]
         else:
           goal_repr = decomp_nets.apply_psi(psi_params, new_obs)
           goal_repr = goal_repr / jnp.maximum(
@@ -860,7 +899,8 @@ class ContinualDecomposedLearner(acme.Learner):
       new_psi = optax.apply_updates(state.psi_params, psi_upd)
 
       # ---- 4. optional local forward action-effect step ------------
-      if action_effect_enabled:
+      if (action_effect_enabled
+          and action_effect_target_mode != 'counterfactual_rank'):
         if action_effect_target_mode == 'raw_horizon':
           batch_progress = transitions.extras['outcome_progress']
           batch_progress_mean = jnp.mean(batch_progress)
@@ -927,7 +967,8 @@ class ContinualDecomposedLearner(acme.Learner):
               state.policy_params, new_b_shared, new_h_phi, new_phi_task,
               new_psi, new_u_task, state.control_q_scale_ema,
               new_success_observation, new_success_action, new_success_size,
-              log_alpha, transitions, k_actor)
+              state.counterfactual_rank_updates, log_alpha, transitions,
+              k_actor)
       act_upd, act_opt = actor_opt.update(a_grad, state.policy_opt_state)
       new_policy = optax.apply_updates(state.policy_params, act_upd)
       if action_effect_enabled:
@@ -969,6 +1010,7 @@ class ContinualDecomposedLearner(acme.Learner):
           success_buffer_action=new_success_action,
           success_buffer_size=new_success_size,
           success_buffer_index=new_success_index,
+          counterfactual_rank_updates=state.counterfactual_rank_updates,
       )
 
       metrics = {
@@ -1002,6 +1044,10 @@ class ContinualDecomposedLearner(acme.Learner):
             'retention/bc_active': a_aux['success_bc_active'],
             'retention/buffer_size': (
                 new_success_size if success_bc_weight > 0 else 0.0),
+            'counterfactual_rank/active': (
+                (state.counterfactual_rank_updates > 0).astype(jnp.float32)
+                if action_effect_target_mode == 'counterfactual_rank'
+                else 0.0),
         })
       if iwr_enabled:
         sampled_distance = transitions.extras['iwr_interaction_distance']
@@ -1035,6 +1081,146 @@ class ContinualDecomposedLearner(acme.Learner):
       return state, mean_metrics
 
     return jax.jit(scan_step)
+
+  def _make_counterfactual_rank_update(self):
+    """Build the exact-state, within-anchor pairwise ranking update."""
+    apply_u_task = self._decomp_nets.apply_u_task
+    optimizer = self._u_task_opt
+    temperature = self._counterfactual_rank_temperature
+    min_gap = self._counterfactual_rank_min_gap
+    l2_weight = self._counterfactual_rank_l2_weight
+
+    def update(params, opt_state, observations, actions, outcomes,
+               informative):
+      num_anchors, num_candidates = outcomes.shape
+
+      def loss_fn(current_params):
+        flat_observations = observations.reshape(
+            (num_anchors * num_candidates, observations.shape[-1]))
+        flat_actions = actions.reshape(
+            (num_anchors * num_candidates, actions.shape[-1]))
+        scores = apply_u_task(
+            current_params, flat_observations, flat_actions)[:, 0]
+        scores = scores.reshape((num_anchors, num_candidates))
+
+        outcome_delta = outcomes[:, :, None] - outcomes[:, None, :]
+        score_delta = scores[:, :, None] - scores[:, None, :]
+        upper = jnp.triu(
+            jnp.ones((num_candidates, num_candidates), dtype=bool), k=1)
+        valid = (
+            informative[:, None, None]
+            & upper[None, :, :]
+            & (jnp.abs(outcome_delta) >= min_gap))
+        valid_float = valid.astype(scores.dtype)
+        pair_count = jnp.sum(valid_float)
+        preference = jnp.sign(outcome_delta)
+        pair_loss = jax.nn.softplus(
+            -preference * score_delta / temperature)
+        rank_loss = jnp.sum(valid_float * pair_loss) / jnp.maximum(
+            pair_count, 1.0)
+
+        leaves = jax.tree_util.tree_leaves(current_params)
+        l2_numerator = sum(jnp.sum(jnp.square(leaf)) for leaf in leaves)
+        l2_denominator = sum(leaf.size for leaf in leaves)
+        l2 = l2_numerator / max(l2_denominator, 1)
+        total = rank_loss + l2_weight * l2
+
+        correct = (score_delta * outcome_delta > 0).astype(scores.dtype)
+        pairwise_accuracy = jnp.sum(valid_float * correct) / jnp.maximum(
+            pair_count, 1.0)
+        score_centered = scores - jnp.mean(scores, axis=1, keepdims=True)
+        outcome_centered = outcomes - jnp.mean(
+            outcomes, axis=1, keepdims=True)
+        correlation = jnp.sum(
+            score_centered * outcome_centered, axis=1) / jnp.maximum(
+                jnp.linalg.norm(score_centered, axis=1)
+                * jnp.linalg.norm(outcome_centered, axis=1), 1e-8)
+        correlation = jnp.sum(
+            informative.astype(scores.dtype) * correlation) / jnp.maximum(
+                jnp.sum(informative.astype(scores.dtype)), 1.0)
+        selected_outcome = jnp.take_along_axis(
+            outcomes, jnp.argmax(scores, axis=1)[:, None], axis=1)[:, 0]
+        top_regret = jnp.sum(
+            informative.astype(scores.dtype)
+            * (jnp.max(outcomes, axis=1) - selected_outcome)) / jnp.maximum(
+                jnp.sum(informative.astype(scores.dtype)), 1.0)
+        return total, {
+            'counterfactual_rank/loss': rank_loss,
+            'counterfactual_rank/l2': l2,
+            'counterfactual_rank/pair_count': pair_count,
+            'counterfactual_rank/pairwise_accuracy': pairwise_accuracy,
+            'counterfactual_rank/score_vs_outcome_pearson': correlation,
+            'counterfactual_rank/fixed_state_score_std': jnp.mean(
+                jnp.std(scores, axis=1)),
+            'counterfactual_rank/top_action_regret': top_regret,
+            'counterfactual_rank/train_informative_anchor_fraction': jnp.mean(
+                informative.astype(scores.dtype)),
+        }
+
+      (loss, metrics), gradients = jax.value_and_grad(
+          loss_fn, has_aux=True)(params)
+      pair_count = metrics['counterfactual_rank/pair_count']
+
+      def apply_update(operand):
+        current_params, current_opt_state, current_gradients = operand
+        updates, new_opt_state = optimizer.update(
+            current_gradients, current_opt_state, current_params)
+        return optax.apply_updates(current_params, updates), new_opt_state
+
+      new_params, new_opt_state = jax.lax.cond(
+          pair_count > 0,
+          apply_update,
+          lambda operand: (operand[0], operand[1]),
+          (params, opt_state, gradients))
+      metrics = {
+          **metrics,
+          'counterfactual_rank/total_loss': loss,
+          'counterfactual_rank/did_update': (pair_count > 0).astype(jnp.float32),
+      }
+      return new_params, new_opt_state, metrics
+
+    return jax.jit(update)
+
+  def train_counterfactual_ranker(self, batch, updates=1):
+    """Train ``u_task`` on a fixed-shape exact-state ranking batch."""
+    if self._counterfactual_rank_update is None:
+      raise RuntimeError(
+          'train_counterfactual_ranker requires counterfactual_rank mode.')
+    if updates <= 0:
+      raise ValueError('counterfactual rank updates must be positive.')
+    observations = jnp.asarray(batch.observations)
+    actions = jnp.asarray(batch.actions)
+    outcomes = jnp.asarray(batch.outcomes)
+    informative = jnp.asarray(batch.informative)
+    metrics = None
+    completed_updates = 0
+    for _ in range(int(updates)):
+      params, opt_state, metrics = self._counterfactual_rank_update(
+          self._state.u_task_params, self._state.u_task_opt_state,
+          observations, actions, outcomes, informative)
+      did_update = int(float(metrics['counterfactual_rank/did_update']) > 0.5)
+      completed_updates += did_update
+      self._state = self._state._replace(
+          u_task_params=params,
+          u_task_opt_state=opt_state,
+          counterfactual_rank_updates=(
+              self._state.counterfactual_rank_updates + did_update))
+    result = {name: float(value) for name, value in metrics.items()}
+    result['counterfactual_rank/updates_this_event'] = float(completed_updates)
+    result['counterfactual_rank/updates_total'] = float(
+        self._state.counterfactual_rank_updates)
+    return result
+
+  def score_counterfactual_batch(self, batch):
+    """Return raw task-local head scores for every anchor/action candidate."""
+    observations = jnp.asarray(batch.observations)
+    actions = jnp.asarray(batch.actions)
+    shape = observations.shape[:2]
+    scores = self._decomp_nets.apply_u_task(
+        self._state.u_task_params,
+        observations.reshape((-1, observations.shape[-1])),
+        actions.reshape((-1, actions.shape[-1])))[:, 0]
+    return np.asarray(scores.reshape(shape))
 
   # ------------------------------------------------------------------
   # acme.Learner interface
@@ -1116,6 +1302,9 @@ class ContinualDecomposedLearner(acme.Learner):
       advantage = (
           effect[:, 0]
           + self._outcome_success_actor_weight * jax.nn.sigmoid(effect[:, 1]))
+    elif self._action_effect_target_mode == 'counterfactual_rank':
+      active = (self._state.counterfactual_rank_updates > 0).astype(effect.dtype)
+      advantage = active * effect[:, 0]
     else:
       goal_repr = self._decomp_nets.apply_psi(self._state.psi_params, obs)
       goal_repr = goal_repr / jnp.maximum(
@@ -1134,6 +1323,12 @@ class ContinualDecomposedLearner(acme.Learner):
     return self._state
 
   def restore(self, state):
+    # Checkpoints written before the counterfactual experiment have one fewer
+    # trailing field. Preserve their exact parameters and append an inactive
+    # counter only when such a legacy tuple is restored.
+    if len(state) == len(DecomposedTrainingState._fields) - 1:
+      state = DecomposedTrainingState(
+          *state, counterfactual_rank_updates=None)
     self._state = state
 
   # ------------------------------------------------------------------

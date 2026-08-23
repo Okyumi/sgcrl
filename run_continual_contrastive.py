@@ -70,6 +70,7 @@ from contrastive.rbc_networks import make_rbc_networks
 from contrastive import rbc_checkpointing
 from contrastive import intrajectory
 from contrastive import action_ranking_diagnostics
+from contrastive import counterfactual_ranking
 from contrastive import outcome_credit
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
@@ -297,9 +298,10 @@ flags.DEFINE_enum(
     'or the task-local head alone. effect_only is the Stage-1 falsification.')
 flags.DEFINE_enum(
     'action_effect_target_mode', 'psi_one_step',
-    ('psi_one_step', 'raw_horizon'),
+    ('psi_one_step', 'raw_horizon', 'counterfactual_rank'),
     'Target for the task-local head. raw_horizon predicts H-step mechanism '
-    'progress and success directly from (state, goal, action).')
+    'progress and success; counterfactual_rank learns within-state action '
+    'ordering from exact simulator interventions on the original task goal.')
 flags.DEFINE_integer('outcome_horizon', 25,
                      'Finite horizon H for raw outcome-credit labels.')
 flags.DEFINE_float('outcome_success_threshold', 0.05,
@@ -320,6 +322,44 @@ flags.DEFINE_integer('success_buffer_capacity', 4096,
                      'Task-local successful-transition ring-buffer capacity.')
 flags.DEFINE_integer('success_bc_batch_size', 64,
                      'Successful actions sampled per actor update for BC.')
+flags.DEFINE_integer('counterfactual_rank_interval_steps', 0,
+                     'Env-step interval between exact-state rank collections; '
+                     'zero disables the experiment and its extra environment.')
+flags.DEFINE_integer('counterfactual_rank_num_anchors', 4,
+                     'Identical-state anchors collected at each rank event.')
+flags.DEFINE_integer('counterfactual_rank_candidates_per_family', 4,
+                     'Candidates from each of policy/local/replay/uniform.')
+flags.DEFINE_integer('counterfactual_rank_rollout_horizon', 100,
+                     'Common task-goal rollout horizon for each candidate.')
+flags.DEFINE_integer('counterfactual_rank_action_repeat', 5,
+                     'Initial steps for which each candidate action is held.')
+flags.DEFINE_float('counterfactual_rank_local_noise_std', 0.10,
+                   'Stddev of local perturbations around the policy action.')
+flags.DEFINE_enum('counterfactual_rank_anchor_mode', 'scripted_contact',
+                  ('policy', 'scripted_contact'),
+                  'How the isolated collector reaches interaction anchors.')
+flags.DEFINE_integer('counterfactual_rank_anchor_search_steps', 150,
+                     'Maximum prefix steps used to locate an anchor.')
+flags.DEFINE_float('counterfactual_rank_interaction_threshold', 0.09,
+                   'Hand-to-mechanism distance defining a near-contact anchor.')
+flags.DEFINE_float('counterfactual_rank_contact_gain', 5.0,
+                   'Proportional gain for the anchor-only contact controller.')
+flags.DEFINE_float('counterfactual_rank_success_threshold', 0.05,
+                   'Task-goal mechanism-distance success threshold.')
+flags.DEFINE_float('counterfactual_rank_success_bonus', 1.0,
+                   'Success bonus added to mechanism progress for ranking.')
+flags.DEFINE_float('counterfactual_rank_min_outcome_gap', 0.002,
+                   'Minimum outcome difference defining an informative pair.')
+flags.DEFINE_integer('counterfactual_rank_buffer_capacity', 128,
+                     'Task-local capacity measured in same-state anchors.')
+flags.DEFINE_integer('counterfactual_rank_batch_anchors', 16,
+                     'Anchor groups sampled per rank-head update.')
+flags.DEFINE_integer('counterfactual_rank_updates_per_event', 25,
+                     'Pairwise rank-head updates after each collection event.')
+flags.DEFINE_float('counterfactual_rank_pairwise_temperature', 1.0,
+                   'Temperature of the within-anchor logistic ranking loss.')
+flags.DEFINE_float('counterfactual_rank_l2_weight', 1e-4,
+                   'Mean-parameter L2 regularization on the task-local head.')
 flags.DEFINE_float('bellman_loss_weight', 1.0,
                    'RBC-DCC weight lambda_Q on the twin scalar TD loss.')
 flags.DEFINE_float('bellman_residual_l2_weight', 1e-4,
@@ -537,6 +577,42 @@ def _bridge_identity_config():
       'success_bc_weight': FLAGS.success_bc_weight,
       'success_buffer_capacity': FLAGS.success_buffer_capacity,
       'success_bc_batch_size': FLAGS.success_bc_batch_size,
+      'counterfactual_rank_interval_steps':
+          FLAGS.counterfactual_rank_interval_steps,
+      'counterfactual_rank_num_anchors':
+          FLAGS.counterfactual_rank_num_anchors,
+      'counterfactual_rank_candidates_per_family':
+          FLAGS.counterfactual_rank_candidates_per_family,
+      'counterfactual_rank_rollout_horizon':
+          FLAGS.counterfactual_rank_rollout_horizon,
+      'counterfactual_rank_action_repeat':
+          FLAGS.counterfactual_rank_action_repeat,
+      'counterfactual_rank_local_noise_std':
+          FLAGS.counterfactual_rank_local_noise_std,
+      'counterfactual_rank_anchor_mode':
+          FLAGS.counterfactual_rank_anchor_mode,
+      'counterfactual_rank_anchor_search_steps':
+          FLAGS.counterfactual_rank_anchor_search_steps,
+      'counterfactual_rank_interaction_threshold':
+          FLAGS.counterfactual_rank_interaction_threshold,
+      'counterfactual_rank_contact_gain':
+          FLAGS.counterfactual_rank_contact_gain,
+      'counterfactual_rank_success_threshold':
+          FLAGS.counterfactual_rank_success_threshold,
+      'counterfactual_rank_success_bonus':
+          FLAGS.counterfactual_rank_success_bonus,
+      'counterfactual_rank_min_outcome_gap':
+          FLAGS.counterfactual_rank_min_outcome_gap,
+      'counterfactual_rank_buffer_capacity':
+          FLAGS.counterfactual_rank_buffer_capacity,
+      'counterfactual_rank_batch_anchors':
+          FLAGS.counterfactual_rank_batch_anchors,
+      'counterfactual_rank_updates_per_event':
+          FLAGS.counterfactual_rank_updates_per_event,
+      'counterfactual_rank_pairwise_temperature':
+          FLAGS.counterfactual_rank_pairwise_temperature,
+      'counterfactual_rank_l2_weight':
+          FLAGS.counterfactual_rank_l2_weight,
   }
 
 def _git_commit_sha():
@@ -911,10 +987,14 @@ def train_single_task(
             continual_cfg, 'action_effect_hidden_dim', 256),
         action_effect_output_dim=(
             2 if getattr(continual_cfg, 'action_effect_target_mode',
-                         'psi_one_step') == 'raw_horizon' else None),
+                         'psi_one_step') == 'raw_horizon'
+            else (1 if getattr(
+                continual_cfg, 'action_effect_target_mode',
+                'psi_one_step') == 'counterfactual_rank' else None)),
         action_effect_include_goal=(
             getattr(continual_cfg, 'action_effect_target_mode',
-                    'psi_one_step') == 'raw_horizon'),
+                    'psi_one_step') in (
+                        'raw_horizon', 'counterfactual_rank')),
     )
   elif critic_mode in _HYBRID_CRITIC_MODES:
     decomp_nets = make_decomposed_networks(
@@ -1037,6 +1117,10 @@ def train_single_task(
       bool(getattr(continual_cfg, 'action_effect_enabled', False))
       and getattr(continual_cfg, 'action_effect_target_mode',
                   'psi_one_step') == 'raw_horizon')
+  counterfactual_rank_enabled = (
+      bool(getattr(continual_cfg, 'action_effect_enabled', False))
+      and getattr(continual_cfg, 'action_effect_target_mode',
+                  'psi_one_step') == 'counterfactual_rank')
   outcome_horizon = int(getattr(continual_cfg, 'outcome_horizon', 25))
   outcome_success_threshold = float(getattr(
       continual_cfg, 'outcome_success_threshold', 0.05))
@@ -1106,6 +1190,10 @@ def train_single_task(
           ops=her_ops)
 
     extras = {'next_action': sample.data.action[1:]}
+    if counterfactual_rank_enabled:
+      original_goal = sample.data.observation[:-1, config.obs_dim:]
+      extras['counterfactual_task_observation'] = tf.concat(
+          [state, original_goal], axis=1)
     if outcome_credit_enabled:
       anchor_index = tf.range(seq_len - 1, dtype=tf.int32)
       progress, success = _finite_horizon_labels(
@@ -1167,6 +1255,11 @@ def train_single_task(
         'next_action': tf.gather(
             sample.data.action, anchor_index + 1),
     }
+    if counterfactual_rank_enabled:
+      original_goal = tf.gather(
+          sample.data.observation[:, config.obs_dim:], anchor_index)
+      extras['counterfactual_task_observation'] = tf.concat(
+          [state, original_goal], axis=1)
     if outcome_credit_enabled:
       progress, success = _finite_horizon_labels(
           all_state, anchor_index, goal)
@@ -1498,6 +1591,25 @@ def train_single_task(
         seed + task_id + 400, fixed_start_end=fixed_goal,
         task_id=_tid, num_tasks=_ntasks)
 
+  # The training intervention uses its own simulator. It never writes replay
+  # and cannot alter the actor/evaluator environments. The interval defaults
+  # to zero, so every previous algorithm keeps its original runtime/path.
+  counterfactual_rank_interval = int(getattr(
+      continual_cfg, 'counterfactual_rank_interval_steps', 0))
+  counterfactual_rank_env = None
+  if counterfactual_rank_interval > 0:
+    if not counterfactual_rank_enabled:
+      raise ValueError(
+          'counterfactual_rank_interval_steps requires '
+          'action_effect_target_mode=counterfactual_rank.')
+    if not isinstance(learner, ContinualDecomposedLearner):
+      raise ValueError(
+          'Counterfactual ranking requires ContinualDecomposedLearner.')
+    counterfactual_rank_env, _ = contrastive_utils.make_environment(
+        env_name, config.start_index, config.end_index,
+        seed + task_id + 500, fixed_start_end=fixed_goal,
+        task_id=_tid, num_tasks=_ntasks)
+
   # ---- training loop (actor-learner loop) --------------------------------
   actor_logger = make_default_logger(
       'actor', save_data=True, save_dir=log_dir,
@@ -1544,6 +1656,16 @@ def train_single_task(
       else float('inf'))
   action_landscape_rng = np.random.default_rng(
       seed + 88001 + task_id * 101)
+  # Fire after the first learner step so the head receives valid supervision
+  # before it is allowed to influence the actor on subsequent updates.
+  next_counterfactual_rank_at = (
+      0 if counterfactual_rank_interval > 0 else float('inf'))
+  counterfactual_rank_rng = np.random.default_rng(
+      seed + 99001 + task_id * 103)
+  counterfactual_rank_buffer = (
+      counterfactual_ranking.CounterfactualRankingBuffer(int(getattr(
+          continual_cfg, 'counterfactual_rank_buffer_capacity', 128)))
+      if counterfactual_rank_interval > 0 else None)
   # Automatic actor reset state (task 0 only)
   auto_reset_active = (task_id == 0 and FLAGS.actor_auto_reset)
   actor_reset_count = 0
@@ -1608,6 +1730,104 @@ def train_single_task(
           for name, value in diagnostic_metrics.items()}
       wandb_diagnostic['learner/env_steps'] = env_steps_done
       wandb.log(wandb_diagnostic)
+
+    if env_steps_done >= next_counterfactual_rank_at:
+      transitions = learner.last_transitions
+      if transitions is None:
+        raise RuntimeError(
+            'Counterfactual rank event fired before replay transitions existed.')
+      policy_params = learner.get_variables(['policy'])[0]
+
+      def _rank_policy_action(observation, numpy_rng, stochastic):
+        key = jax.random.PRNGKey(
+            int(numpy_rng.integers(0, np.iinfo(np.int32).max)))
+        distribution = networks.policy_network.apply(
+            policy_params, jnp.asarray(observation)[None, :])
+        sampler = networks.sample if stochastic else networks.sample_eval
+        return np.asarray(sampler(distribution, key))[0]
+
+      print(
+          f'  [counterfactual-rank @ {env_steps_done}] collecting original-'
+          'task-goal outcomes from identical simulator states...', flush=True)
+      rank_batch, rank_metrics = (
+          counterfactual_ranking.collect_counterfactual_ranking_batch(
+              environment=counterfactual_rank_env,
+              obs_dim=config.obs_dim,
+              replay_observations=np.asarray(transitions.observation),
+              replay_actions=np.asarray(transitions.action),
+              policy_action_fn=_rank_policy_action,
+              rng=counterfactual_rank_rng,
+              num_anchors=int(getattr(
+                  continual_cfg, 'counterfactual_rank_num_anchors', 4)),
+              candidates_per_family=int(getattr(
+                  continual_cfg,
+                  'counterfactual_rank_candidates_per_family', 4)),
+              rollout_horizon=int(getattr(
+                  continual_cfg,
+                  'counterfactual_rank_rollout_horizon', 100)),
+              action_repeat=int(getattr(
+                  continual_cfg, 'counterfactual_rank_action_repeat', 5)),
+              local_noise_std=float(getattr(
+                  continual_cfg,
+                  'counterfactual_rank_local_noise_std', 0.10)),
+              anchor_mode=getattr(
+                  continual_cfg, 'counterfactual_rank_anchor_mode',
+                  'scripted_contact'),
+              anchor_search_steps=int(getattr(
+                  continual_cfg,
+                  'counterfactual_rank_anchor_search_steps', 150)),
+              interaction_threshold=float(getattr(
+                  continual_cfg,
+                  'counterfactual_rank_interaction_threshold', 0.09)),
+              contact_gain=float(getattr(
+                  continual_cfg, 'counterfactual_rank_contact_gain', 5.0)),
+              success_threshold=float(getattr(
+                  continual_cfg,
+                  'counterfactual_rank_success_threshold', 0.05)),
+              success_bonus=float(getattr(
+                  continual_cfg, 'counterfactual_rank_success_bonus', 1.0)),
+              min_outcome_gap=float(getattr(
+                  continual_cfg,
+                  'counterfactual_rank_min_outcome_gap', 0.002)),
+          ))
+      counterfactual_rank_buffer.add(rank_batch)
+      train_metrics = {}
+      for _ in range(int(getattr(
+          continual_cfg, 'counterfactual_rank_updates_per_event', 25))):
+        sampled_rank_batch = counterfactual_rank_buffer.sample(
+            int(getattr(
+                continual_cfg, 'counterfactual_rank_batch_anchors', 16)),
+            counterfactual_rank_rng)
+        train_metrics = learner.train_counterfactual_ranker(
+            sampled_rank_batch, updates=1)
+      rank_scores = learner.score_counterfactual_batch(rank_batch)
+      score_metrics = counterfactual_ranking.summarize_counterfactual_scores(
+          rank_scores, rank_batch,
+          min_outcome_gap=float(getattr(
+              continual_cfg,
+              'counterfactual_rank_min_outcome_gap', 0.002)))
+      rank_metrics = {
+          **rank_metrics,
+          **train_metrics,
+          **score_metrics,
+          'counterfactual_rank/buffer_anchors': float(
+              len(counterfactual_rank_buffer)),
+      }
+      if FLAGS.use_wandb and wandb is not None:
+        wandb_rank = {
+            f'learner/{name}': float(value)
+            for name, value in rank_metrics.items()}
+        wandb_rank['learner/env_steps'] = env_steps_done
+        wandb.log(wandb_rank)
+      print(
+          '  [counterfactual-rank] '
+          f"informative={rank_metrics.get('counterfactual_rank/informative_anchor_fraction', 0.0):.2f} "
+          f"rho={rank_metrics.get('counterfactual_rank/score_vs_task_progress_spearman', 0.0):.3f} "
+          f"pair_acc={rank_metrics.get('counterfactual_rank/pairwise_accuracy', 0.0):.3f} "
+          f"updates={rank_metrics.get('counterfactual_rank/updates_total', 0.0):.0f}",
+          flush=True)
+      next_counterfactual_rank_at = (
+          env_steps_done + counterfactual_rank_interval)
 
     if env_steps_done >= next_action_landscape_at:
       transitions = learner.last_transitions
@@ -1963,6 +2183,11 @@ def train_single_task(
         action_landscape_env.close()
       except Exception:
         pass
+    if counterfactual_rank_env is not None:
+      try:
+        counterfactual_rank_env.close()
+      except Exception:
+        pass
     del learner, variable_client, eval_variable_client
 
     return (
@@ -2164,6 +2389,11 @@ def train_single_task(
       action_landscape_env.close()
     except Exception:
       pass
+  if counterfactual_rank_env is not None:
+    try:
+      counterfactual_rank_env.close()
+    except Exception:
+      pass
   del learner, variable_client, eval_variable_client
 
   return (
@@ -2243,6 +2473,42 @@ def main(_):
       success_bc_weight=FLAGS.success_bc_weight,
       success_buffer_capacity=FLAGS.success_buffer_capacity,
       success_bc_batch_size=FLAGS.success_bc_batch_size,
+      counterfactual_rank_interval_steps=
+          FLAGS.counterfactual_rank_interval_steps,
+      counterfactual_rank_num_anchors=
+          FLAGS.counterfactual_rank_num_anchors,
+      counterfactual_rank_candidates_per_family=
+          FLAGS.counterfactual_rank_candidates_per_family,
+      counterfactual_rank_rollout_horizon=
+          FLAGS.counterfactual_rank_rollout_horizon,
+      counterfactual_rank_action_repeat=
+          FLAGS.counterfactual_rank_action_repeat,
+      counterfactual_rank_local_noise_std=
+          FLAGS.counterfactual_rank_local_noise_std,
+      counterfactual_rank_anchor_mode=
+          FLAGS.counterfactual_rank_anchor_mode,
+      counterfactual_rank_anchor_search_steps=
+          FLAGS.counterfactual_rank_anchor_search_steps,
+      counterfactual_rank_interaction_threshold=
+          FLAGS.counterfactual_rank_interaction_threshold,
+      counterfactual_rank_contact_gain=
+          FLAGS.counterfactual_rank_contact_gain,
+      counterfactual_rank_success_threshold=
+          FLAGS.counterfactual_rank_success_threshold,
+      counterfactual_rank_success_bonus=
+          FLAGS.counterfactual_rank_success_bonus,
+      counterfactual_rank_min_outcome_gap=
+          FLAGS.counterfactual_rank_min_outcome_gap,
+      counterfactual_rank_buffer_capacity=
+          FLAGS.counterfactual_rank_buffer_capacity,
+      counterfactual_rank_batch_anchors=
+          FLAGS.counterfactual_rank_batch_anchors,
+      counterfactual_rank_updates_per_event=
+          FLAGS.counterfactual_rank_updates_per_event,
+      counterfactual_rank_pairwise_temperature=
+          FLAGS.counterfactual_rank_pairwise_temperature,
+      counterfactual_rank_l2_weight=
+          FLAGS.counterfactual_rank_l2_weight,
       bellman_loss_weight=FLAGS.bellman_loss_weight,
       bellman_residual_l2_weight=FLAGS.bellman_residual_l2_weight,
       bellman_discount=FLAGS.bellman_discount,
@@ -2554,6 +2820,42 @@ def main(_):
                   'success_buffer_capacity':
                       FLAGS.success_buffer_capacity,
                   'success_bc_batch_size': FLAGS.success_bc_batch_size,
+                  'counterfactual_rank_interval_steps':
+                      FLAGS.counterfactual_rank_interval_steps,
+                  'counterfactual_rank_num_anchors':
+                      FLAGS.counterfactual_rank_num_anchors,
+                  'counterfactual_rank_candidates_per_family':
+                      FLAGS.counterfactual_rank_candidates_per_family,
+                  'counterfactual_rank_rollout_horizon':
+                      FLAGS.counterfactual_rank_rollout_horizon,
+                  'counterfactual_rank_action_repeat':
+                      FLAGS.counterfactual_rank_action_repeat,
+                  'counterfactual_rank_local_noise_std':
+                      FLAGS.counterfactual_rank_local_noise_std,
+                  'counterfactual_rank_anchor_mode':
+                      FLAGS.counterfactual_rank_anchor_mode,
+                  'counterfactual_rank_anchor_search_steps':
+                      FLAGS.counterfactual_rank_anchor_search_steps,
+                  'counterfactual_rank_interaction_threshold':
+                      FLAGS.counterfactual_rank_interaction_threshold,
+                  'counterfactual_rank_contact_gain':
+                      FLAGS.counterfactual_rank_contact_gain,
+                  'counterfactual_rank_success_threshold':
+                      FLAGS.counterfactual_rank_success_threshold,
+                  'counterfactual_rank_success_bonus':
+                      FLAGS.counterfactual_rank_success_bonus,
+                  'counterfactual_rank_min_outcome_gap':
+                      FLAGS.counterfactual_rank_min_outcome_gap,
+                  'counterfactual_rank_buffer_capacity':
+                      FLAGS.counterfactual_rank_buffer_capacity,
+                  'counterfactual_rank_batch_anchors':
+                      FLAGS.counterfactual_rank_batch_anchors,
+                  'counterfactual_rank_updates_per_event':
+                      FLAGS.counterfactual_rank_updates_per_event,
+                  'counterfactual_rank_pairwise_temperature':
+                      FLAGS.counterfactual_rank_pairwise_temperature,
+                  'counterfactual_rank_l2_weight':
+                      FLAGS.counterfactual_rank_l2_weight,
                   'bellman_loss_weight': FLAGS.bellman_loss_weight,
                   'bellman_residual_l2_weight':
                       FLAGS.bellman_residual_l2_weight,

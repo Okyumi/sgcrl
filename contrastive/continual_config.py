@@ -110,7 +110,7 @@ class ContinualConfig:
   # finite-horizon raw outcome target; stage 3 additionally retains successful
   # task-goal actions in a task-local ring buffer for a small BC loss.
   action_effect_actor_mode: str = 'combined'  # combined | effect_only
-  action_effect_target_mode: str = 'psi_one_step'  # psi_one_step | raw_horizon
+  action_effect_target_mode: str = 'psi_one_step'  # psi_one_step | raw_horizon | counterfactual_rank
   outcome_horizon: int = 25
   outcome_success_threshold: float = 0.05
   outcome_progress_loss_weight: float = 1.0
@@ -121,6 +121,29 @@ class ContinualConfig:
   success_bc_weight: float = 0.0
   success_buffer_capacity: int = 4096
   success_bc_batch_size: int = 64
+
+  # -- Task-goal same-state counterfactual action ranking ------------------
+  # This mode trains u_task only from exact simulator-state interventions.
+  # Candidate actions are rolled out from the same restored state toward the
+  # environment's original task goal, then ranked within that anchor state.
+  counterfactual_rank_interval_steps: int = 0
+  counterfactual_rank_num_anchors: int = 4
+  counterfactual_rank_candidates_per_family: int = 4
+  counterfactual_rank_rollout_horizon: int = 100
+  counterfactual_rank_action_repeat: int = 5
+  counterfactual_rank_local_noise_std: float = 0.10
+  counterfactual_rank_anchor_mode: str = 'scripted_contact'
+  counterfactual_rank_anchor_search_steps: int = 150
+  counterfactual_rank_interaction_threshold: float = 0.09
+  counterfactual_rank_contact_gain: float = 5.0
+  counterfactual_rank_success_threshold: float = 0.05
+  counterfactual_rank_success_bonus: float = 1.0
+  counterfactual_rank_min_outcome_gap: float = 0.002
+  counterfactual_rank_buffer_capacity: int = 128
+  counterfactual_rank_batch_anchors: int = 16
+  counterfactual_rank_updates_per_event: int = 25
+  counterfactual_rank_pairwise_temperature: float = 1.0
+  counterfactual_rank_l2_weight: float = 1e-4
 
   # -- RBC-DCC Bellman calibration ------------------------------------------
   bellman_loss_weight: float = 1.0

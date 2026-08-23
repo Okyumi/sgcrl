@@ -214,8 +214,8 @@ New dense metrics:
 - `outcome/progress_prediction_std`
 - `outcome/progress_pearson`
 - `outcome/action_shuffle_delta`
-- `outcome/action_shuffle_retention`
-- `outcome/fixed_state_action_std`
+- `learner/outcome/action_shuffle_retention`
+- `learner/outcome/fixed_state_action_std`
 - `outcome/success_rate`
 - `action_effect/head_score_std`
 - `action_effect/head_to_dcc_ratio`
@@ -224,7 +224,7 @@ New dense metrics:
 - `retention/buffer_size`
 
 Existing causal metrics remain the decisive ranking evidence, especially
-`action_landscape/score_vs_rollout_mechanism_spearman`, action-family outcome
+`learner/action_landscape/score_vs_rollout_mechanism_progress_spearman`, action-family outcome
 means, candidate-score standard deviation, and top-score regret.
 
 ## Validation and preflight

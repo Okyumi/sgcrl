@@ -6,6 +6,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from experiment_configs_outcome_falsification import build_configs
+from scripts.evaluate_outcome_falsification import (
+    ACTION_SHUFFLE_RETENTION_KEY,
+    FIXED_STATE_ACTION_STD_KEY,
+    SAME_STATE_SPEARMAN_KEY,
+)
 
 
 def test_stage_layout():
@@ -42,7 +47,18 @@ def test_isolated_stage_changes():
   assert s3['success_bc_weight'] > 0.0
 
 
+def test_wandb_metric_keys_match_logged_namespaces():
+  assert SAME_STATE_SPEARMAN_KEY == (
+      'learner/action_landscape/'
+      'score_vs_rollout_mechanism_progress_spearman')
+  assert FIXED_STATE_ACTION_STD_KEY == (
+      'learner/outcome/fixed_state_action_std')
+  assert ACTION_SHUFFLE_RETENTION_KEY == (
+      'learner/outcome/action_shuffle_retention')
+
+
 if __name__ == '__main__':
   test_stage_layout()
   test_isolated_stage_changes()
+  test_wandb_metric_keys_match_logged_namespaces()
   print('outcome falsification checks passed')

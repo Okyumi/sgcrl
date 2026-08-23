@@ -17,6 +17,12 @@ BASELINE_GROUPS = {
     'task5': 'DCC-intrajectory-negatives-task5',
     'task8': 'DCC-intrajectory-negatives-task8',
 }
+SAME_STATE_SPEARMAN_KEY = (
+    'learner/action_landscape/'
+    'score_vs_rollout_mechanism_progress_spearman')
+FIXED_STATE_ACTION_STD_KEY = 'learner/outcome/fixed_state_action_std'
+ACTION_SHUFFLE_RETENTION_KEY = (
+    'learner/outcome/action_shuffle_retention')
 
 
 def _finite(values):
@@ -94,11 +100,9 @@ def main():
     auc = _mean_success(runs, 'auc', max_points=20)
     baseline_auc = _mean_success(baselines, 'auc', max_points=20)
     retention = _mean_success(runs, 'retention', max_points=20)
-    spearman = _mean_latest(
-        runs, 'action_landscape/score_vs_rollout_mechanism_spearman')
-    fixed_std = _mean_latest(runs, 'outcome/fixed_state_action_std')
-    shuffle_retention = _mean_latest(
-        runs, 'outcome/action_shuffle_retention')
+    spearman = _mean_latest(runs, SAME_STATE_SPEARMAN_KEY)
+    fixed_std = _mean_latest(runs, FIXED_STATE_ACTION_STD_KEY)
+    shuffle_retention = _mean_latest(runs, ACTION_SHUFFLE_RETENTION_KEY)
 
     gates = {
         'success_auc_gain>=0.05': auc - baseline_auc >= 0.05,
