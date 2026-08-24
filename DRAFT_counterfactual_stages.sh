@@ -14,6 +14,7 @@
 
 # Torch staged counterfactual experiments.
 #
+# Stage A is the corrected 30k positive-reward instrumentation rerun:
 #   COUNTERFACTUAL_STAGE=A sbatch DRAFT_counterfactual_stages.sh
 #   COUNTERFACTUAL_STAGE=B sbatch DRAFT_counterfactual_stages.sh
 #   COUNTERFACTUAL_STAGE=C sbatch DRAFT_counterfactual_stages.sh
@@ -43,8 +44,19 @@ export CONFIG_LIMIT=4
 # Simulator counterfactuals are CPU-heavy; one job per GPU avoids the
 # oversubscription and synchronized crashes seen in the previous batch.
 export TASKS_PER_GPU=1
-export LOG_DIR="/scratch/yd2247/sgcrl/logs/counterfactual_stages/${COUNTERFACTUAL_STAGE}_${COUNTERFACTUAL_REACH_MODE}"
-export CHECKPOINT_DIR="/scratch/yd2247/sgcrl/logs/counterfactual_stages_checkpoints/${COUNTERFACTUAL_STAGE}_${COUNTERFACTUAL_REACH_MODE}"
+STAGE_RUN_TAG="${COUNTERFACTUAL_STAGE}_${COUNTERFACTUAL_REACH_MODE}"
+if [ "$COUNTERFACTUAL_STAGE" = "A" ]; then
+  STAGE_RUN_TAG="A2_positive_reward"
+  STAGE_A_CONFIG=$(COUNTERFACTUAL_STAGE=A python "$CONFIG_SCRIPT" --setting 0)
+  grep -q '^COUNTERFACTUAL_RANK_SUCCESS_MODE=positive_reward$' \
+    <<< "$STAGE_A_CONFIG"
+  grep -q '^ACTION_LANDSCAPE_SUCCESS_MODE=positive_reward$' \
+    <<< "$STAGE_A_CONFIG"
+  grep -q '^WANDB_GROUP=CFR-STAGE-A2-positive-reward-task5$' \
+    <<< "$STAGE_A_CONFIG"
+fi
+export LOG_DIR="/scratch/yd2247/sgcrl/logs/counterfactual_stages/${STAGE_RUN_TAG}"
+export CHECKPOINT_DIR="/scratch/yd2247/sgcrl/logs/counterfactual_stages_checkpoints/${STAGE_RUN_TAG}"
 export ACTION_LANDSCAPE_SELF_TEST=true
 export COUNTERFACTUAL_RANK_SELF_TEST=true
 export COUNTERFACTUAL_STAGES_SELF_TEST=true

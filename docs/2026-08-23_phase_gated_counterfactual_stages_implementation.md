@@ -3,6 +3,11 @@
 Date: 2026-08-23  
 Status: implemented for Torch HPC; jobs not submitted
 
+> **2026-08-24 correction:** the raw Sawyer wrappers emit 0/1 rewards; the
+> original Stage-A cells incorrectly used the learner-internal HER -1/0
+> convention. Those four runs are instrumentation evidence only and must not
+> promote Stage B. See `2026-08-24_stage_a_positive_reward_correction.md`.
+
 ## Motivation
 
 The first task-goal counterfactual ranker generated informative labels near scripted contact, but it did not improve Tasks 5 or 8. Its latest current-batch score/outcome correlation was positive on Task 5 while the independent same-state score/progress correlation remained negative. The implementation audit identified three confounds:
@@ -23,15 +28,18 @@ p_H(s,\mathbf a,g)
 d_M(s,g)-\min_{1\leq t\leq H}d_M(s_t,g).
 $$
 
-The Sawyer experiments use the repository's sparse step-penalty reward convention:
+The corrected Sawyer simulator success label uses the raw environment reward:
 
 $$
 z_H(s,\mathbf a,g)
 =
-\max_{1\leq t\leq H}\mathbf 1[r_t=0],
+\max_{1\leq t\leq H}\mathbf 1[r_t=1],
 $$
 
-where failure has reward $-1$ and success has reward $0$. The mechanism-distance proxy remains logged, but it no longer silently substitutes for benchmark success in the staged cells. Every collector logs proxy/benchmark agreement, false positives, false negatives, and signal availability.
+where the raw wrapper emits reward $0$ on failure and $1$ on success. The
+learner may separately reshape HER rewards to $-1/0$; that internal target is
+not used by the simulator diagnostics. The mechanism-distance proxy remains
+logged, with task radii $0.02$ for Task 5 and $0.05$ for Task 8.
 
 The ranked outcome is
 
@@ -89,7 +97,7 @@ The scripted-reach Stage-D cell is a diagnostic upper bound and is not a fair fi
 
 | Stage | Budget | Purpose | Actor use of rank head |
 |---|---:|---|---|
-| A | 100k | Validate sparse success, held-out logging, repeat-5/best-progress causal probe, and corrected metric keys | None |
+| A2 | 30k | Revalidate positive-reward success, held-out logging, repeat-5/best-progress causal probe, and corrected metric keys | None |
 | B | 100k | Four-condition oracle decomposition: policy/scripted anchors crossed with repeat 1/5 | None; no ranker |
 | C | 250k | Train the chunk ranker and require held-out plus independent causal generalization | None |
 | D | 1M | Closed-loop phase-gated rank selection with aligned five-step execution | Candidate selection only; no rank-head policy gradient |
@@ -100,7 +108,9 @@ Each stage has four runs: Tasks 5/8 crossed with seeds 5/6. Stage D is submitted
 
 ### Stage A
 
-- benchmark success availability at least $0.99$;
+- benchmark success availability at least $0.99$ for each seed;
+- benchmark/proxy agreement at least $0.99$ for each seed;
+- proxy false-positive and false-negative rates at most $0.01$;
 - held-out metrics present;
 - independent probe records action repeat $5$;
 - aligned causal Spearman is present and finite.
@@ -221,5 +231,5 @@ The full MuJoCo restore-step and environment success tests run on Torch during l
 - The first chunk class holds one action constant for five steps; Stage B explicitly tests whether that restricted class contains successful behavior.
 - The contact gate uses known Sawyer observation coordinates. A general version needs a learned interaction-support classifier.
 - The ranker still changes online. EMA/best-policy retention is intentionally deferred until causal held-out ranking passes.
-- Stage A is a 100k instrumentation smoke test, not a performance comparison.
+- Stage A2 is a 30k instrumentation smoke test, not a performance comparison.
 - No jobs are submitted by the implementation commit.

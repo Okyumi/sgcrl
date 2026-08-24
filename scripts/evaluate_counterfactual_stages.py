@@ -19,7 +19,7 @@ TASKS = {
 
 def _group(stage, task, reach_mode):
   if stage == 'A':
-    return f'CFR-STAGE-A-metric-repair-{task}'
+    return f'CFR-STAGE-A2-positive-reward-{task}'
   if stage == 'B':
     return f'CFR-STAGE-B-oracle-decomposition-{task}'
   if stage == 'C':
@@ -40,6 +40,21 @@ def _history(run, key, max_points=None):
 def _latest_mean(runs, key):
   values = [history[-1] for run in runs if (history := _history(run, key))]
   return statistics.fmean(values) if values else float('nan')
+
+
+def _latest_values(runs, key):
+  return [history[-1]
+          for run in runs if (history := _history(run, key))]
+
+
+def _latest_min(runs, key):
+  values = _latest_values(runs, key)
+  return min(values) if values else float('nan')
+
+
+def _latest_max(runs, key):
+  values = _latest_values(runs, key)
+  return max(values) if values else float('nan')
 
 
 def _success_stats(runs, max_points=20):
@@ -96,21 +111,36 @@ def main():
 
     gates = []
     if args.stage == 'A':
+      rank_prefix = 'learner/counterfactual_rank/'
+      landscape_prefix = 'learner/action_landscape/'
       gates.extend([
-          _check('benchmark success available', _latest_mean(
-              runs, 'learner/counterfactual_rank/'
-                    'benchmark_success_available_fraction'),
+          _check('benchmark success available (worst seed)', _latest_min(
+              runs, rank_prefix + 'benchmark_success_available_fraction'),
                  lambda value: value >= 0.99),
-          _check('held-out metric present', _latest_mean(
-              runs, 'learner/counterfactual_rank/heldout_post/'
-                    'fixed_state_score_std'), lambda value: value >= 0.0),
-          _check('aligned repeat is five', _latest_mean(
-              runs, 'learner/action_landscape/action_repeat'),
+          _check('benchmark/proxy agreement (worst seed)', _latest_min(
+              runs, rank_prefix + 'success_predicate_agreement'),
+                 lambda value: value >= 0.99),
+          _check('proxy false-positive rate (worst seed)', _latest_max(
+              runs, rank_prefix + 'proxy_false_positive_fraction'),
+                 lambda value: value <= 0.01),
+          _check('proxy false-negative rate (worst seed)', _latest_max(
+              runs, rank_prefix + 'proxy_false_negative_fraction'),
+                 lambda value: value <= 0.01),
+          _check('held-out metrics recorded for both seeds', float(len(
+              _latest_values(
+                  runs, rank_prefix + 'heldout_post/fixed_state_score_std'))),
+                 lambda value: value == len(runs)),
+          _check('aligned repeat is five (minimum)', _latest_min(
+              runs, landscape_prefix + 'action_repeat'),
                  lambda value: abs(value - 5.0) < 1e-6),
-          _check('aligned causal metric present', _latest_mean(
-              runs, 'learner/action_landscape/'
-                    'aligned_score_vs_progress_spearman'),
-                 lambda value: -1.0 <= value <= 1.0),
+          _check('aligned repeat is five (maximum)', _latest_max(
+              runs, landscape_prefix + 'action_repeat'),
+                 lambda value: abs(value - 5.0) < 1e-6),
+          _check('aligned causal metric recorded for both seeds', float(len(
+              _latest_values(
+                  runs, landscape_prefix
+                        + 'aligned_score_vs_progress_spearman'))),
+                 lambda value: value == len(runs)),
       ])
     elif args.stage == 'B':
       prefix = 'learner/oracle/scripted_contact/repeat5/'

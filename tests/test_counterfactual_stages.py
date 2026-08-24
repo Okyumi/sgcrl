@@ -78,6 +78,12 @@ def test_sparse_reward_success_semantics():
   failure, available = counterfactual_outcomes.benchmark_success(
       _Timestep(-1.0), observation, 7, 0.05, 'zero_reward')
   assert failure == 0.0 and available == 1.0
+  failure, available = counterfactual_outcomes.benchmark_success(
+      _Timestep(0.0), observation, 7, 0.05, 'positive_reward')
+  assert failure == 0.0 and available == 1.0
+  success, available = counterfactual_outcomes.benchmark_success(
+      _Timestep(1.0), observation, 7, 0.05, 'positive_reward')
+  assert success == 1.0 and available == 1.0
 
 
 def test_rank_metrics_are_named_and_permutation_sensitive():
@@ -113,11 +119,24 @@ def test_phase_gated_actor_repeats_selected_chunk():
 
 
 def test_staged_config_grids():
-  for stage in ('A', 'B', 'C'):
+  for stage in ('A', 'B', 'C', 'D'):
     configs = build_configs(stage=stage)
     assert len(configs) == 4
     assert Counter(config['seed'] for config in configs) == {5: 2, 6: 2}
     assert all(config['counterfactual_stage'] == stage for config in configs)
+    assert all(config['counterfactual_rank_success_mode'] == 'positive_reward'
+               for config in configs)
+    assert all(config['action_landscape_success_mode'] == 'positive_reward'
+               for config in configs)
+    for config in configs:
+      expected = (0.02 if config['single_task'] ==
+                  'sawyer_handle_press_side' else 0.05)
+      assert config['counterfactual_rank_success_threshold'] == expected
+      assert config['action_landscape_success_threshold'] == expected
+  stage_a = build_configs(stage='A')
+  assert all(config['steps_per_task'] == 30_000 for config in stage_a)
+  assert all('CFR-STAGE-A2-positive-reward-' in config['wandb_group']
+             for config in stage_a)
   stage_b = build_configs(stage='B')
   assert all(not config['action_effect_enabled'] for config in stage_b)
   assert all(config['counterfactual_oracle_interval_steps'] > 0
@@ -150,10 +169,25 @@ def test_stage_flags_reach_torch_runner():
     assert f"'{key}'" in runner, f'{key} missing from runner flags/config'
 
 
+def test_stage_a_launcher_guards_positive_reward_rerun():
+  root = Path(__file__).resolve().parents[1]
+  launcher = (root / 'DRAFT_counterfactual_stages.sh').read_text()
+  for required in (
+      'A2_positive_reward',
+      'COUNTERFACTUAL_RANK_SUCCESS_MODE=positive_reward',
+      'ACTION_LANDSCAPE_SUCCESS_MODE=positive_reward',
+      'CFR-STAGE-A2-positive-reward-task5',
+      'ACTION_LANDSCAPE_SELF_TEST=true',
+      'COUNTERFACTUAL_RANK_SELF_TEST=true',
+  ):
+    assert required in launcher
+
+
 if __name__ == '__main__':
   test_sparse_reward_success_semantics()
   test_rank_metrics_are_named_and_permutation_sensitive()
   test_phase_gated_actor_repeats_selected_chunk()
   test_staged_config_grids()
   test_stage_flags_reach_torch_runner()
+  test_stage_a_launcher_guards_positive_reward_rerun()
   print('counterfactual staged checks passed')

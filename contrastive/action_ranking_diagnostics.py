@@ -653,17 +653,38 @@ _SELF_TEST_GOALS = {
     'sawyer_window_close': np.array([0.0, 0.80, 0.2]),
 }
 
+_SELF_TEST_SUCCESS_THRESHOLDS = {
+    'sawyer_handle_press_side': 0.02,
+    'sawyer_window_close': 0.05,
+}
+
 
 def _self_test_environment(env_name: str, seed: int) -> None:
   # Imports stay local so dependency-light unit tests can import this module
   # without TensorFlow, Acme, Meta-World, JAX, or mujoco-py installed.
   from contrastive import utils as contrastive_utils  # pylint: disable=g-import-not-at-top
-  environment, _ = contrastive_utils.make_environment(
+  environment, obs_dim = contrastive_utils.make_environment(
       env_name, 0, -1, seed,
       fixed_start_end=_SELF_TEST_GOALS[env_name])
   try:
     action = np.zeros(environment.action_spec().shape, dtype=np.float32)
     assert_restore_step_reproducible(environment, action)
+    timestep = environment.reset()
+    timestep = environment.step(action)
+    reward = float(timestep.reward)
+    if reward not in (0.0, 1.0):
+      raise AssertionError(
+          f'{env_name} must emit raw 0/1 rewards, got {reward!r}.')
+    if reward != 0.0:
+      raise AssertionError(
+          f'{env_name} zero-action reset should be unsolved, got reward 1.')
+    success, available = counterfactual_outcomes.benchmark_success(
+        timestep, np.asarray(timestep.observation), obs_dim=obs_dim,
+        threshold=_SELF_TEST_SUCCESS_THRESHOLDS[env_name],
+        mode='positive_reward')
+    if success != 0.0 or available != 1.0:
+      raise AssertionError(
+          f'{env_name} positive-reward failure semantics are inconsistent.')
   finally:
     try:
       environment.close()

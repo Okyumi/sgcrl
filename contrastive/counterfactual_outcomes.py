@@ -59,11 +59,12 @@ def benchmark_success(timestep, observation: np.ndarray, obs_dim: int,
                       threshold: float, mode: str) -> Tuple[float, float]:
   """Return selected success and whether an independent signal was available.
 
-  ``zero_reward`` matches this project's sparse step-penalty convention:
-  failure has reward -1 and success has reward 0.  ``positive_reward`` is
-  retained for environments that emit 0/+1.  ``goal_distance`` deliberately
-  selects the mechanism proxy and reports availability zero because it is not
-  independent of that proxy.
+  ``zero_reward`` is for step-penalty streams where failure has reward -1 and
+  success has reward 0. ``positive_reward`` is for raw 0/+1 environment
+  rewards, including the Sawyer wrappers used by the staged experiments.
+  These raw rewards must not be confused with the learner's internal HER
+  shaping. ``goal_distance`` deliberately selects the mechanism proxy and
+  reports availability zero because it is not independent of that proxy.
   """
   if mode not in SUCCESS_MODES:
     raise ValueError(
@@ -78,4 +79,3 @@ def benchmark_success(timestep, observation: np.ndarray, obs_dim: int,
   if mode == 'zero_reward':
     return float(reward >= -1e-8), 1.0
   return float(reward > 0.0), 1.0
-

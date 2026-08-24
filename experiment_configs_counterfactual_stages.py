@@ -8,14 +8,14 @@ import shlex
 
 
 TASKS = (
-    ('sawyer_handle_press_side', 'task5'),
-    ('sawyer_window_close', 'task8'),
+    ('sawyer_handle_press_side', 'task5', 0.02),
+    ('sawyer_window_close', 'task8', 0.05),
 )
 SEEDS = (5, 6)
 STAGES = ('A', 'B', 'C', 'D')
 
 
-def _base(task, label, seed, steps, eval_every):
+def _base(task, label, success_threshold, seed, steps, eval_every):
   return {
       'actor_mode': 'reset',
       'critic_mode': 'advantage_decomposed',
@@ -47,8 +47,10 @@ def _base(task, label, seed, steps, eval_every):
       'counterfactual_rank_anchor_search_steps': 150,
       'counterfactual_rank_interaction_threshold': 0.09,
       'counterfactual_rank_contact_gain': 5.0,
-      'counterfactual_rank_success_threshold': 0.05,
-      'counterfactual_rank_success_mode': 'zero_reward',
+      # The raw Sawyer wrappers emit 0/1. The learner's HER -1/0 shaping is a
+      # separate internal signal and must not define simulator success.
+      'counterfactual_rank_success_threshold': success_threshold,
+      'counterfactual_rank_success_mode': 'positive_reward',
       'counterfactual_rank_success_bonus': 1.0,
       'counterfactual_rank_min_outcome_gap': 0.002,
       'counterfactual_rank_buffer_capacity': 128,
@@ -75,8 +77,8 @@ def _base(task, label, seed, steps, eval_every):
       'action_landscape_interaction_threshold': 0.09,
       'action_landscape_action_repeat': 5,
       'action_landscape_use_best_progress': True,
-      'action_landscape_success_threshold': 0.05,
-      'action_landscape_success_mode': 'zero_reward',
+      'action_landscape_success_threshold': success_threshold,
+      'action_landscape_success_mode': 'positive_reward',
       'post_task_eval_scope': 'current',
       '_label': label,
   }
@@ -92,19 +94,23 @@ def build_configs(stage=None, reach_mode=None):
     raise ValueError('COUNTERFACTUAL_REACH_MODE must be policy or scripted_contact')
 
   configs = []
-  for task, label in TASKS:
+  for task, label, success_threshold in TASKS:
     for seed in SEEDS:
       if stage == 'A':
-        config = _base(task, label, seed, 100_000, 25_000)
+        # Stage A2 only revalidates instrumentation after the reward fix. Two
+        # post-prefill diagnostic events are sufficient; this is not a
+        # performance comparison.
+        config = _base(task, label, success_threshold, seed, 30_000, 10_000)
         config.update({
-            'counterfactual_rank_interval_steps': 25_000,
+            'counterfactual_rank_interval_steps': 10_000,
             'counterfactual_rank_validation_anchors': 4,
             'counterfactual_oracle_interval_steps': 0,
-            'action_landscape_diagnostic_interval_steps': 25_000,
-            'wandb_group': f'CFR-STAGE-A-metric-repair-{label}',
+            'action_landscape_diagnostic_interval_steps': 10_000,
+            'wandb_group': f'CFR-STAGE-A2-positive-reward-{label}',
         })
       elif stage == 'B':
-        config = _base(task, label, seed, 100_000, 25_000)
+        config = _base(
+            task, label, success_threshold, seed, 100_000, 25_000)
         config.update({
             'critic_mode': 'decomposed',
             'action_effect_enabled': False,
@@ -118,7 +124,8 @@ def build_configs(stage=None, reach_mode=None):
             'wandb_group': f'CFR-STAGE-B-oracle-decomposition-{label}',
         })
       elif stage == 'C':
-        config = _base(task, label, seed, 250_000, 25_000)
+        config = _base(
+            task, label, success_threshold, seed, 250_000, 25_000)
         config.update({
             'counterfactual_rank_interval_steps': 25_000,
             'counterfactual_rank_validation_anchors': 8,
@@ -127,7 +134,8 @@ def build_configs(stage=None, reach_mode=None):
             'wandb_group': f'CFR-STAGE-C-heldout-chunk-ranker-{label}',
         })
       else:
-        config = _base(task, label, seed, 1_000_000, 50_000)
+        config = _base(
+            task, label, success_threshold, seed, 1_000_000, 50_000)
         config.update({
             'counterfactual_rank_interval_steps': 50_000,
             'counterfactual_rank_validation_anchors': 4,
@@ -179,4 +187,3 @@ def main():
 
 if __name__ == '__main__':
   main()
-

@@ -367,8 +367,9 @@ flags.DEFINE_integer(
 flags.DEFINE_enum(
     'counterfactual_rank_success_mode', 'goal_distance',
     ('goal_distance', 'zero_reward', 'positive_reward'),
-    'Success signal used in counterfactual labels. zero_reward matches the '
-    'Sawyer sparse -1/0 convention.')
+    'Success signal used in counterfactual labels. Raw Sawyer environment '
+    'rewards are 0/1 and therefore require positive_reward; zero_reward is '
+    'only for an explicitly step-penalized -1/0 stream.')
 flags.DEFINE_bool(
     'counterfactual_rank_actor_enabled', True,
     'Whether the ordinary policy-gradient actor directly maximizes the rank '
@@ -489,7 +490,8 @@ flags.DEFINE_float('action_landscape_success_threshold', 0.05,
 flags.DEFINE_enum(
     'action_landscape_success_mode', 'goal_distance',
     ('goal_distance', 'zero_reward', 'positive_reward'),
-    'Success semantics for the causal probe; zero_reward matches -1/0.')
+    'Success semantics for the causal probe. Use positive_reward for raw '
+    'Sawyer 0/1 rewards and zero_reward only for a -1/0 stream.')
 flags.DEFINE_bool('log_pool_cosine', True,
                   'Log per-task pool cosine-similarity matrices on the '
                   'actor / critic CKA pools. Cheap host-side metric. '
