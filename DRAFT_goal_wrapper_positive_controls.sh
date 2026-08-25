@@ -12,14 +12,14 @@
 #SBATCH --mail-user=yd2247@nyu.edu
 #SBATCH --array=0-2
 
-# Paired positive controls for seeds 5, 6, and 7.  A GPU is required so
+# Paired positive controls for seeds 5, 6, and 7. A GPU is required so
 # mujoco_py uses EGL instead of compiling the OSMesa CPU shim
-# (GL/osmesa.h is not present on Torch CPU nodes).  No training.
+# (GL/osmesa.h is not present on Torch CPU nodes). No training.
 #   sbatch DRAFT_goal_wrapper_positive_controls.sh
 #
 # After all three finish:
 #   python scripts/evaluate_goal_wrapper_positive_controls.py \
-#     logs/goal_validity/positive_controls_seed{5,6,7}.json
+#     logs/goal_validity/positive_controls_v3_seed{5,6,7}.json
 set -euo pipefail
 
 REPO_DIR="/scratch/yd2247/sgcrl"

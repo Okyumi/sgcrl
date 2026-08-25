@@ -4,6 +4,11 @@ Date: 2026-08-25
 Scope: Task 5 (`sawyer_handle_press_side`) and Task 8
 (`sawyer_window_close`)
 
+> **Superseded audit contract:** this note documents the V2 full-3D proxy.
+> MetaWorld Task 5 uses only handle z and Task 8 uses only window x for
+> success, so V2 outputs cannot authorize promotion. Use the V3 procedure in
+> `2026-08-25_native_success_wrapper_repair_and_10task_revalidation.md`.
+
 ## Motivation
 
 The first wrapper audit obtained zero scripted-policy success for both custom

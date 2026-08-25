@@ -18,9 +18,9 @@ def build_configs():
       'fixed_success_max': 0.20,
       'trajectory_tolerance': 1e-5,
       'target_tolerance': 1e-6,
-      'wandb_group': 'GOAL-WRAPPER-POSITIVE-CONTROLS-V2',
+      'wandb_group': 'GOAL-WRAPPER-POSITIVE-CONTROLS-V3',
       'output': (
-          f'logs/goal_validity/positive_controls_seed{seed}.json'),
+          f'logs/goal_validity/positive_controls_v3_seed{seed}.json'),
   } for seed in SEEDS]
 
 

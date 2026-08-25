@@ -161,7 +161,8 @@ class ObservationFilterWrapper(base.EnvironmentWrapper):
 
 def make_environment(env_name, start_index, end_index,
                      seed, fixed_start_end=None,
-                     task_id=None, num_tasks=None):
+                     task_id=None, num_tasks=None,
+                     sawyer_success_mode='legacy_distance'):
   """Creates the environment.
 
   Args:
@@ -173,6 +174,8 @@ def make_environment(env_name, start_index, end_index,
     task_id: if provided (with num_tasks), appends one-hot task identifier
       to both state and goal via TaskIDGymWrapper in env_utils.
     num_tasks: total number of tasks for the one-hot encoding.
+    sawyer_success_mode: ``legacy_distance`` preserves the paper wrapper;
+      ``native_info`` uses MetaWorld's authoritative success predicate.
   Returns:
     env: the environment
     obs_dim: integer specifying the size of the observations, before
@@ -180,7 +183,8 @@ def make_environment(env_name, start_index, end_index,
   """
   np.random.seed(seed)
   gym_env, obs_dim, max_episode_steps = env_utils.load(
-      env_name, fixed_start_end, task_id=task_id, num_tasks=num_tasks)
+      env_name, fixed_start_end, task_id=task_id, num_tasks=num_tasks,
+      sawyer_success_mode=sawyer_success_mode)
   goal_indices = obs_dim + obs_to_goal_1d(np.arange(obs_dim), start_index,
                                           end_index)
   indices = np.concatenate([

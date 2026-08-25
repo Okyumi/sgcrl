@@ -19,15 +19,15 @@ def _condition(
     *,
     native_success=1.0,
     positive_success=1.0,
-    native_target_success=1.0,
-    fixed_target_success=0.0,
+    native_axis_success=1.0,
+    fixed_axis_success=0.0,
     trajectory_error=0.0,
 ):
   return {
       'native_info_success_mean': native_success,
       'positive_reward_success_mean': positive_success,
-      'native_target_success_mean': native_target_success,
-      'fixed_target_success_mean': fixed_target_success,
+      'native_axis_success_mean': native_axis_success,
+      'fixed_axis_success_mean': fixed_axis_success,
       'trajectory_linf_error_vs_native_max': trajectory_error,
   }
 
@@ -43,14 +43,15 @@ def _summary():
           'wrapper_fixed_target_replay': _condition(
               native_success=0.0,
               positive_success=0.0,
-              native_target_success=1.0,
-              fixed_target_success=0.0),
+              native_axis_success=1.0,
+              fixed_axis_success=0.0),
       },
       'pairing': {
           'native_target_pair_linf_error_max': 0.0,
           'rand_vec_pair_linf_error_max': 0.0,
           'initial_mechanism_pair_linf_error_max': 0.0,
           'fixed_to_native_target_distance_mean': 0.10,
+          'fixed_to_native_success_axis_distance_mean': 0.10,
       },
   }
 
@@ -83,8 +84,16 @@ def test_fixed_target_misalignment_signature():
 def test_native_positive_control_failure_takes_precedence():
   summary = _summary()
   summary['conditions']['native_official']['native_info_success_mean'] = 0.0
+  summary['conditions']['native_official']['native_axis_success_mean'] = 0.0
   result = _classify(summary)
   assert result['decision'] == 'native_positive_control_failed'
+
+
+def test_native_info_axis_disagreement_is_audit_error():
+  summary = _summary()
+  summary['conditions']['native_official']['native_axis_success_mean'] = 0.0
+  result = _classify(summary)
+  assert result['decision'] == 'audit_metric_inconsistent'
 
 
 def test_native_target_wrapper_failure_is_separate():
@@ -100,7 +109,15 @@ def test_valid_fixed_target_can_pass():
   summary['conditions'][
       'wrapper_fixed_target_policy']['positive_reward_success_mean'] = 1.0
   summary['conditions'][
-      'wrapper_fixed_target_replay']['fixed_target_success_mean'] = 1.0
+      'wrapper_fixed_target_policy']['native_info_success_mean'] = 1.0
+  summary['conditions'][
+      'wrapper_fixed_target_policy']['fixed_axis_success_mean'] = 1.0
+  summary['conditions'][
+      'wrapper_fixed_target_replay']['positive_reward_success_mean'] = 1.0
+  summary['conditions'][
+      'wrapper_fixed_target_replay']['native_info_success_mean'] = 1.0
+  summary['conditions'][
+      'wrapper_fixed_target_replay']['fixed_axis_success_mean'] = 1.0
   result = _classify(summary)
   assert result['decision'] == 'fixed_target_valid'
 
@@ -112,7 +129,7 @@ def test_config_matrix():
   assert all(config['episodes'] == 50 for config in configs)
   assert all(config['max_steps'] == 150 for config in configs)
   assert all(config['wandb_group'] ==
-             'GOAL-WRAPPER-POSITIVE-CONTROLS-V2'
+             'GOAL-WRAPPER-POSITIVE-CONTROLS-V3'
              for config in configs)
 
 
@@ -126,7 +143,7 @@ def test_three_seed_aggregation_blocks_promotion_on_confirmed_issue():
       summary['classification'] = _classify(summary)
       results.append({'env_name': env_name, 'summary': summary})
     payloads.append({
-        'audit_version': 2,
+        'audit_version': 3,
         'seed': seed,
         'results': results,
     })

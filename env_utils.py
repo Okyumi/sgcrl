@@ -17,6 +17,7 @@ import gym
 import metaworld
 import numpy as np
 import point_env
+from contrastive import sawyer_success
 
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
 
@@ -30,6 +31,23 @@ os.environ['SDL_VIDEODRIVER'] = 'dummy'
 STATE_DIM_UNIFIED = 11
 GOAL_DIM_UNIFIED = 11
 FULL_OBS_DIM = STATE_DIM_UNIFIED + GOAL_DIM_UNIFIED  # 22
+SAWYER_SUCCESS_MODES = sawyer_success.SUCCESS_MODES
+
+
+def _set_sawyer_success_mode(environment, success_mode):
+  """Select sparse-reward semantics without changing historical defaults."""
+  sawyer_success.set_success_mode(environment, success_mode)
+
+
+def _native_sparse_transition(environment, native_result):
+  """Convert MetaWorld's authoritative success signal to a sparse reward.
+
+  Returns ``None`` in legacy mode so each wrapper can execute its historical
+  hand-written distance predicate unchanged.  In ``native_info`` mode this
+  reuses the already-computed parent transition, so it adds no simulator step
+  or extra ``evaluate_state`` call.
+  """
+  return sawyer_success.native_sparse_transition(environment, native_result)
 
 
 class TaskIDGymWrapper(gym.Wrapper):
@@ -97,12 +115,16 @@ def euler2quat(euler):
   return quat
 
 
-def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None):
+def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
+         sawyer_success_mode='legacy_distance'):
   """Loads the train and eval environments, as well as the obs_dim.
 
   If task_id and num_tasks are provided, wraps the environment with
   TaskIDGymWrapper to append a one-hot task identifier to both state
   and goal vectors.  obs_dim is then STATE_DIM_UNIFIED + num_tasks.
+
+  ``sawyer_success_mode='legacy_distance'`` reproduces historical rewards.
+  ``'native_info'`` uses the success predicate returned by MetaWorld itself.
   """
   # pylint: disable=invalid-name
   kwargs = {}
@@ -175,6 +197,7 @@ def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None):
   # For continual RL, all Sawyer wrappers use unified obs space (state + goal
   # padded to STATE_DIM_UNIFIED and GOAL_DIM_UNIFIED). obs_dim = state size.
   if env_name.startswith('sawyer_'):
+    _set_sawyer_success_mode(gym_env, sawyer_success_mode)
     obs_dim = STATE_DIM_UNIFIED
   else:
     obs_dim = gym_env.observation_space.shape[0] // 2
@@ -220,7 +243,10 @@ class SawyerBin(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerBin, self).step(action)
+    native_result = super(SawyerBin, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     obj_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - obj_pos)
     obs = self._get_obs()
@@ -290,7 +316,10 @@ class SawyerBox(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerBox, self).step(action)
+    native_result = super(SawyerBox, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     obj_pos = self._get_pos_objects()
     obj_quat = self._get_quat_objects()
     
@@ -362,7 +391,10 @@ class SawyerPeg(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerPeg, self).step(action)
+    native_result = super(SawyerPeg, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     obj_head = self._get_site_pos("pegHead")
     
     scale = np.array([1.0, 2.0, 2.0])
@@ -430,7 +462,10 @@ class SawyerPushBack(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerPushBack, self).step(action)
+    native_result = super(SawyerPushBack, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     obj_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - obj_pos)
     obs = self._get_obs()
@@ -503,7 +538,10 @@ class SawyerHammer(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerHammer, self).step(action)
+    native_result = super(SawyerHammer, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     pos_objects = self._get_pos_objects()
     nail_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
     dist = np.linalg.norm(self._goal - nail_pos)
@@ -571,7 +609,10 @@ class SawyerPushWall(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerPushWall, self).step(action)
+    native_result = super(SawyerPushWall, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     obj_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - obj_pos)
     obs = self._get_obs()
@@ -637,7 +678,10 @@ class SawyerFaucetClose(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerFaucetClose, self).step(action)
+    native_result = super(SawyerFaucetClose, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     handle_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - handle_pos)
     obs = self._get_obs()
@@ -705,7 +749,10 @@ class SawyerStickPull(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerStickPull, self).step(action)
+    native_result = super(SawyerStickPull, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     pos_objects = self._get_pos_objects()
     handle_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
     dist = np.linalg.norm(self._goal - handle_pos)
@@ -772,7 +819,10 @@ class SawyerHandlePressSide(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerHandlePressSide, self).step(action)
+    native_result = super(SawyerHandlePressSide, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     handle_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - handle_pos)
     obs = self._get_obs()
@@ -838,7 +888,10 @@ class SawyerPush(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerPush, self).step(action)
+    native_result = super(SawyerPush, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     obj_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - obj_pos)
     obs = self._get_obs()
@@ -904,7 +957,10 @@ class SawyerShelfPlace(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerShelfPlace, self).step(action)
+    native_result = super(SawyerShelfPlace, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     obj_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - obj_pos)
     obs = self._get_obs()
@@ -971,7 +1027,10 @@ class SawyerWindowClose(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerWindowClose, self).step(action)
+    native_result = super(SawyerWindowClose, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     handle_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - handle_pos)
     obs = self._get_obs()
@@ -1038,7 +1097,10 @@ class SawyerPegUnplugSide(
     return self._get_obs()
 
   def step(self, action):
-    super(SawyerPegUnplugSide, self).step(action)
+    native_result = super(SawyerPegUnplugSide, self).step(action)
+    native_sparse = _native_sparse_transition(self, native_result)
+    if native_sparse is not None:
+      return native_sparse
     peg_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - peg_pos)
     obs = self._get_obs()

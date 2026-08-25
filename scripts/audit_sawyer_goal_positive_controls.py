@@ -44,7 +44,8 @@ DECISION_CODES = {
     'fixed_global_target_misaligned': 1,
     'custom_wrapper_invalid': 2,
     'native_positive_control_failed': 3,
-    'inconclusive': 4,
+    'audit_metric_inconsistent': 4,
+    'inconclusive': 5,
 }
 
 
@@ -182,6 +183,7 @@ def _rollout(
     max_steps: int,
     native_target: np.ndarray,
     fixed_target: np.ndarray,
+    env_name: str,
     success_threshold: float,
     replay_actions: Optional[Sequence[np.ndarray]] = None,
     reference_trajectory: Optional[Sequence[np.ndarray]] = None,
@@ -189,8 +191,12 @@ def _rollout(
   """Run a policy or replay actions and retain independent success signals."""
   actions = []
   trajectory = [_mechanism_position(environment)]
-  native_distances = [_distance(trajectory[-1], native_target)]
-  fixed_distances = [_distance(trajectory[-1], fixed_target)]
+  native_full_distances = [_distance(trajectory[-1], native_target)]
+  fixed_full_distances = [_distance(trajectory[-1], fixed_target)]
+  native_axis_distances = [goal_semantics.success_axis_distance(
+      trajectory[-1], native_target, env_name)]
+  fixed_axis_distances = [goal_semantics.success_axis_distance(
+      trajectory[-1], fixed_target, env_name)]
   native_info_success = 0.0
   positive_reward_success = 0.0
   action_clip_count = 0
@@ -228,8 +234,12 @@ def _rollout(
 
     mechanism = _mechanism_position(environment)
     trajectory.append(mechanism)
-    native_distances.append(_distance(mechanism, native_target))
-    fixed_distances.append(_distance(mechanism, fixed_target))
+    native_full_distances.append(_distance(mechanism, native_target))
+    fixed_full_distances.append(_distance(mechanism, fixed_target))
+    native_axis_distances.append(goal_semantics.success_axis_distance(
+        mechanism, native_target, env_name))
+    fixed_axis_distances.append(goal_semantics.success_axis_distance(
+        mechanism, fixed_target, env_name))
     if done:
       break
 
@@ -245,16 +255,24 @@ def _rollout(
       'steps': len(actions),
       'native_info_success': native_info_success,
       'positive_reward_success': positive_reward_success,
-      'native_target_success': float(
-          min(native_distances) < success_threshold),
-      'fixed_target_success': float(
-          min(fixed_distances) < success_threshold),
-      'initial_native_distance': native_distances[0],
-      'minimum_native_distance': min(native_distances),
-      'final_native_distance': native_distances[-1],
-      'initial_fixed_distance': fixed_distances[0],
-      'minimum_fixed_distance': min(fixed_distances),
-      'final_fixed_distance': fixed_distances[-1],
+      'native_axis_success': float(
+          min(native_axis_distances) <= success_threshold),
+      'fixed_axis_success': float(
+          min(fixed_axis_distances) <= success_threshold),
+      'initial_native_axis_distance': native_axis_distances[0],
+      'minimum_native_axis_distance': min(native_axis_distances),
+      'final_native_axis_distance': native_axis_distances[-1],
+      'initial_fixed_axis_distance': fixed_axis_distances[0],
+      'minimum_fixed_axis_distance': min(fixed_axis_distances),
+      'final_fixed_axis_distance': fixed_axis_distances[-1],
+      # Descriptive only: these full-vector distances are not MetaWorld's
+      # Task-5/Task-8 success predicates.
+      'initial_native_full_3d_distance': native_full_distances[0],
+      'minimum_native_full_3d_distance': min(native_full_distances),
+      'final_native_full_3d_distance': native_full_distances[-1],
+      'initial_fixed_full_3d_distance': fixed_full_distances[0],
+      'minimum_fixed_full_3d_distance': min(fixed_full_distances),
+      'final_fixed_full_3d_distance': fixed_full_distances[-1],
       'action_clip_fraction': action_clip_count / max(len(actions), 1),
       'native_reward_max': _maximum(native_rewards),
       'wrapper_reward_max': _maximum(wrapper_rewards),
@@ -281,8 +299,10 @@ def _summarize_conditions(
         for key in keys
     }
     for key in (
-        'minimum_native_distance',
-        'minimum_fixed_distance',
+        'minimum_native_axis_distance',
+        'minimum_fixed_axis_distance',
+        'minimum_native_full_3d_distance',
+        'minimum_fixed_full_3d_distance',
         'trajectory_linf_error_vs_native',
     ):
       values = [row[key] for row in rows if key in row]
@@ -310,18 +330,30 @@ def classify_task(
   wrapper_fixed_replay = summary['conditions']['wrapper_fixed_target_replay']
   pairing = summary['pairing']
 
+  success_metric_pairs = (
+      (native, 'native_axis_success_mean'),
+      (wrapper_native, 'native_axis_success_mean'),
+      (wrapper_native_replay, 'native_axis_success_mean'),
+      (wrapper_fixed, 'fixed_axis_success_mean'),
+      (wrapper_fixed_replay, 'fixed_axis_success_mean'),
+  )
+  native_metric_consistent = all(
+      abs(condition['native_info_success_mean'] - condition[axis_key])
+      <= target_tolerance
+      for condition, axis_key in success_metric_pairs)
   native_control_pass = (
-      native['native_info_success_mean'] >= expert_success_min
-      and native['native_target_success_mean'] >= expert_success_min)
+      native_metric_consistent
+      and native['native_info_success_mean'] >= expert_success_min
+      and native['native_axis_success_mean'] >= expert_success_min)
   wrapper_native_control_pass = (
       wrapper_native['positive_reward_success_mean'] >= expert_success_min
       and wrapper_native['native_info_success_mean'] >= expert_success_min
-      and wrapper_native['native_target_success_mean'] >= expert_success_min
+      and wrapper_native['native_axis_success_mean'] >= expert_success_min
       and wrapper_native_replay['positive_reward_success_mean'] >=
       expert_success_min
       and wrapper_native_replay['native_info_success_mean'] >=
       expert_success_min
-      and wrapper_native_replay['native_target_success_mean'] >=
+      and wrapper_native_replay['native_axis_success_mean'] >=
       expert_success_min
       and pairing['native_target_pair_linf_error_max'] <= target_tolerance
       and pairing['rand_vec_pair_linf_error_max'] <= target_tolerance
@@ -331,25 +363,34 @@ def classify_task(
           'trajectory_linf_error_vs_native_max'] <= trajectory_tolerance)
   fixed_target_valid = (
       wrapper_fixed['positive_reward_success_mean'] >= expert_success_min
-      and wrapper_fixed_replay['fixed_target_success_mean'] >=
+      and wrapper_fixed['native_info_success_mean'] >= expert_success_min
+      and wrapper_fixed['fixed_axis_success_mean'] >= expert_success_min
+      and wrapper_fixed_replay['positive_reward_success_mean'] >=
+      expert_success_min
+      and wrapper_fixed_replay['native_info_success_mean'] >=
+      expert_success_min
+      and wrapper_fixed_replay['fixed_axis_success_mean'] >=
       expert_success_min)
   fixed_replay_reaches_native_endpoint = (
-      wrapper_fixed_replay['native_target_success_mean'] >=
+      wrapper_fixed_replay['native_axis_success_mean'] >=
       expert_success_min
       and wrapper_fixed_replay[
           'trajectory_linf_error_vs_native_max'] <= trajectory_tolerance)
   meaningful_target_mismatch = (
-      pairing['fixed_to_native_target_distance_mean'] > success_threshold)
+      pairing['fixed_to_native_success_axis_distance_mean'] >
+      success_threshold)
   fixed_global_target_misaligned = (
       native_control_pass
       and wrapper_native_control_pass
       and wrapper_fixed['positive_reward_success_mean'] <= fixed_success_max
-      and wrapper_fixed_replay['fixed_target_success_mean'] <=
+      and wrapper_fixed_replay['fixed_axis_success_mean'] <=
       fixed_success_max
       and fixed_replay_reaches_native_endpoint
       and meaningful_target_mismatch)
 
-  if not native_control_pass:
+  if not native_metric_consistent:
+    decision = 'audit_metric_inconsistent'
+  elif not native_control_pass:
     decision = 'native_positive_control_failed'
   elif not wrapper_native_control_pass:
     decision = 'custom_wrapper_invalid'
@@ -363,6 +404,7 @@ def classify_task(
   return {
       'decision': decision,
       'decision_code': DECISION_CODES[decision],
+      'native_metric_consistent': native_metric_consistent,
       'native_control_pass': native_control_pass,
       'wrapper_native_control_pass': wrapper_native_control_pass,
       'fixed_target_valid': fixed_target_valid,
@@ -403,6 +445,15 @@ def summarize_task(
       'fixed_to_native_target_distance_max': _maximum(
           episode['pairing']['fixed_to_native_target_distance']
           for episode in episodes),
+      'fixed_to_native_success_axis_distance_mean': _mean(
+          episode['pairing']['fixed_to_native_success_axis_distance']
+          for episode in episodes),
+      'fixed_to_native_success_axis_distance_min': _minimum(
+          episode['pairing']['fixed_to_native_success_axis_distance']
+          for episode in episodes),
+      'fixed_to_native_success_axis_distance_max': _maximum(
+          episode['pairing']['fixed_to_native_success_axis_distance']
+          for episode in episodes),
   }
   summary = {
       'env_name': env_name,
@@ -439,7 +490,8 @@ def _make_native_environment(benchmark, native_env_name: str):
 def _make_custom_environment(env_name: str, fixed_goal):
   import env_utils  # pylint: disable=import-outside-toplevel
   environment, obs_dim, _ = env_utils.load(
-      env_name, fixed_start_end=fixed_goal)
+      env_name, fixed_start_end=fixed_goal,
+      sawyer_success_mode='native_info')
   if obs_dim != env_utils.STATE_DIM_UNIFIED:
     raise RuntimeError(
         f'Expected unified obs_dim={env_utils.STATE_DIM_UNIFIED}, got '
@@ -510,6 +562,7 @@ def audit_task(
           max_steps=max_steps,
           native_target=native_target,
           fixed_target=fixed_goal,
+          env_name=env_name,
           success_threshold=float(metadata['success_threshold']))
       native_actions = native_policy_result['_actions']
       native_trajectory = native_policy_result['_trajectory']
@@ -525,6 +578,7 @@ def audit_task(
           max_steps=max_steps,
           native_target=native_target,
           fixed_target=fixed_goal,
+          env_name=env_name,
           success_threshold=float(metadata['success_threshold']))
 
       _set_task_and_reset(wrapper_fixed, task)
@@ -541,6 +595,7 @@ def audit_task(
           max_steps=max_steps,
           native_target=native_target,
           fixed_target=fixed_goal,
+          env_name=env_name,
           success_threshold=float(metadata['success_threshold']))
 
       _set_task_and_reset(wrapper_native, task)
@@ -551,6 +606,7 @@ def audit_task(
           max_steps=max_steps,
           native_target=native_target,
           fixed_target=fixed_goal,
+          env_name=env_name,
           success_threshold=float(metadata['success_threshold']),
           replay_actions=native_actions,
           reference_trajectory=native_trajectory)
@@ -563,6 +619,7 @@ def audit_task(
           max_steps=max_steps,
           native_target=native_target,
           fixed_target=fixed_goal,
+          env_name=env_name,
           success_threshold=float(metadata['success_threshold']),
           replay_actions=native_actions,
           reference_trajectory=native_trajectory)
@@ -584,6 +641,9 @@ def audit_task(
                       native_rand_vec - wrapper_fixed_rand_vec)))),
               'fixed_to_native_target_distance': _distance(
                   fixed_goal, native_target),
+              'fixed_to_native_success_axis_distance':
+                  goal_semantics.success_axis_distance(
+                      fixed_goal, native_target, env_name),
           },
           'native_target': native_target.tolist(),
           'fixed_target': fixed_goal.tolist(),
@@ -642,6 +702,8 @@ def _wandb_metrics(payload: dict[str, Any]) -> dict[str, float]:
         prefix + 'decision_code': float(classification['decision_code']),
         prefix + 'native_control_pass': float(
             classification['native_control_pass']),
+        prefix + 'native_metric_consistent': float(
+            classification['native_metric_consistent']),
         prefix + 'wrapper_native_control_pass': float(
             classification['wrapper_native_control_pass']),
         prefix + 'fixed_target_valid': float(
@@ -671,10 +733,10 @@ def main() -> None:
   parser.add_argument('--target-tolerance', type=float, default=1e-6)
   parser.add_argument(
       '--output',
-      default='logs/goal_validity/positive_controls_seed5.json')
+      default='logs/goal_validity/positive_controls_v3_seed5.json')
   parser.add_argument('--wandb-project', default='')
   parser.add_argument(
-      '--wandb-group', default='GOAL-WRAPPER-POSITIVE-CONTROLS-V2')
+      '--wandb-group', default='GOAL-WRAPPER-POSITIVE-CONTROLS-V3')
   parser.add_argument(
       '--strict-current-wrapper', action='store_true',
       help='Exit nonzero unless the historical fixed-target wrapper validates.')
@@ -691,7 +753,8 @@ def main() -> None:
       trajectory_tolerance=args.trajectory_tolerance,
       target_tolerance=args.target_tolerance) for task in tasks]
   payload = {
-      'audit_version': 2,
+      'audit_version': 3,
+      'success_semantics': 'metaworld_info_success_and_native_axis_proxy',
       'seed': args.seed,
       'episodes_per_task': args.episodes,
       'max_steps': args.max_steps,
@@ -738,7 +801,9 @@ def main() -> None:
         project=args.wandb_project,
         group=args.wandb_group,
         config={
-            'audit_version': 2,
+            'audit_version': 3,
+            'success_semantics':
+                'metaworld_info_success_and_native_axis_proxy',
             'seed': args.seed,
             'episodes': args.episodes,
             'max_steps': args.max_steps,

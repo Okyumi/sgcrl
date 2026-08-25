@@ -181,8 +181,14 @@ flags.DEFINE_enum(
     'goal_conditioning_mode', 'full_state',
     goal_semantics.GOAL_CONDITIONING_MODES,
     'Goal contract seen by the policy and critic. full_state preserves the '
-    'historical hand+gripper+mechanism goal; success_mechanism exposes only '
-    'the mechanism coordinates that define Task-5/Task-8 success.')
+    'historical hand+gripper+mechanism goal; success_mechanism exposes the '
+    'three mechanism coordinates; native_success_axis exposes only the exact '
+    'official Task-5/Task-8 success coordinate.')
+flags.DEFINE_enum(
+    'sawyer_success_mode', 'legacy_distance',
+    ('legacy_distance', 'native_info'),
+    'Sparse reward semantics for custom Sawyer wrappers. legacy_distance '
+    'preserves historical paper runs; native_info uses MetaWorld info[success].')
 flags.DEFINE_bool(
     'profile_runtime', False,
     'Log coarse actor, learner, evaluation, and simulator-diagnostic wall '
@@ -730,7 +736,8 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
                use_task_id=True, adapt_heads_only=True, actor_mode='cka',
                dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
                rbc_config=None, in_trajectory_negative_repeats=1,
-               single_task='', goal_conditioning_mode='full_state'):
+               single_task='', goal_conditioning_mode='full_state',
+               sawyer_success_mode='legacy_distance'):
   """Checkpoint path keyed by all ablation-relevant config.
 
   Base structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
@@ -751,6 +758,8 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
                 f'_tid_{use_task_id}_heads_{adapt_heads_only}')
   if goal_conditioning_mode != 'full_state':
     config_key += f'_goal_{goal_conditioning_mode}'
+  if sawyer_success_mode != 'legacy_distance':
+    config_key += f'_success_{sawyer_success_mode}'
   if critic_mode in _PLAIN_DCC_MODES and all(
       v is not None for v in (dyn_aux_weight, phi_task_width, phi_task_depth)):
     config_key += (f'_dyn{float(dyn_aux_weight):.3f}'
@@ -779,7 +788,8 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
               rbc_config=None, in_trajectory_negative_repeats=1,
-              single_task='', goal_conditioning_mode='full_state'):
+              single_task='', goal_conditioning_mode='full_state',
+              sawyer_success_mode='legacy_distance'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode,
                      dyn_aux_weight=dyn_aux_weight,
@@ -789,7 +799,8 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
                      in_trajectory_negative_repeats=
                          in_trajectory_negative_repeats,
                      single_task=single_task,
-                     goal_conditioning_mode=goal_conditioning_mode)
+                     goal_conditioning_mode=goal_conditioning_mode,
+                     sawyer_success_mode=sawyer_success_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_util.tree_map(
@@ -804,7 +815,8 @@ def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
               rbc_config=None, in_trajectory_negative_repeats=1,
-              single_task='', goal_conditioning_mode='full_state'):
+              single_task='', goal_conditioning_mode='full_state',
+              sawyer_success_mode='legacy_distance'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode,
                      dyn_aux_weight=dyn_aux_weight,
@@ -814,11 +826,13 @@ def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
                      in_trajectory_negative_repeats=
                          in_trajectory_negative_repeats,
                      single_task=single_task,
-                     goal_conditioning_mode=goal_conditioning_mode)
+                     goal_conditioning_mode=goal_conditioning_mode,
+                     sawyer_success_mode=sawyer_success_mode)
   if not os.path.exists(path):
     # Migration notice: check whether a legacy (pre-2026-05-14)
     # un-disambiguated decomposed checkpoint exists at the OLD path.
     if (critic_mode == 'decomposed'
+        and sawyer_success_mode == 'legacy_distance'
         and int(in_trajectory_negative_repeats) == 1):
       legacy_path = _ckpt_path(
           ckpt_dir, task_id, seed, critic_mode, use_task_id,
@@ -863,7 +877,8 @@ def evaluate_on_task(
       eval_env_name, config.start_index, config.end_index,
       seed + eval_task_id + 9999,
       fixed_start_end=fixed_goal,
-      task_id=_tid, num_tasks=_ntasks)
+      task_id=_tid, num_tasks=_ntasks,
+      sawyer_success_mode=FLAGS.sawyer_success_mode)
 
   env_spec = specs.make_environment_spec(eval_env)
   networks = contrastive.make_networks(
@@ -1042,7 +1057,8 @@ def train_single_task(
   env, obs_dim = contrastive_utils.make_environment(
       env_name, config.start_index, config.end_index,
       seed + task_id, fixed_start_end=fixed_goal,
-      task_id=_tid, num_tasks=_ntasks)
+      task_id=_tid, num_tasks=_ntasks,
+      sawyer_success_mode=FLAGS.sawyer_success_mode)
 
   config.obs_dim = obs_dim
   config.max_episode_steps = getattr(env, '_step_limit') + 1
@@ -1664,7 +1680,8 @@ def train_single_task(
   eval_env, _ = contrastive_utils.make_environment(
       env_name, config.start_index, config.end_index,
       seed + task_id + 300, fixed_start_end=fixed_goal,
-      task_id=_tid, num_tasks=_ntasks)
+      task_id=_tid, num_tasks=_ntasks,
+      sawyer_success_mode=FLAGS.sawyer_success_mode)
   phase_control_enabled = bool(getattr(
       continual_cfg, 'phase_gated_control', False))
   if phase_control_enabled:
@@ -1729,7 +1746,8 @@ def train_single_task(
     action_landscape_env, _ = contrastive_utils.make_environment(
         env_name, config.start_index, config.end_index,
         seed + task_id + 400, fixed_start_end=fixed_goal,
-        task_id=_tid, num_tasks=_ntasks)
+        task_id=_tid, num_tasks=_ntasks,
+        sawyer_success_mode=FLAGS.sawyer_success_mode)
 
   # The training intervention uses its own simulator. It never writes replay
   # and cannot alter the actor/evaluator environments. The interval defaults
@@ -1757,7 +1775,8 @@ def train_single_task(
     counterfactual_rank_env, _ = contrastive_utils.make_environment(
         env_name, config.start_index, config.end_index,
         seed + task_id + 500, fixed_start_end=fixed_goal,
-        task_id=_tid, num_tasks=_ntasks)
+        task_id=_tid, num_tasks=_ntasks,
+        sawyer_success_mode=FLAGS.sawyer_success_mode)
     if not counterfactual_rank_enabled:
       raise ValueError(
           'counterfactual_rank_interval_steps requires '
@@ -1770,7 +1789,8 @@ def train_single_task(
           contrastive_utils.make_environment(
               env_name, config.start_index, config.end_index,
               seed + task_id + 550, fixed_start_end=fixed_goal,
-              task_id=_tid, num_tasks=_ntasks))
+              task_id=_tid, num_tasks=_ntasks,
+              sawyer_success_mode=FLAGS.sawyer_success_mode))
   if counterfactual_oracle_interval > 0:
     # Repeat-1 and repeat-5 environments for a given anchor mode use the same
     # seed and advance independently. This makes their reset/anchor sequences
@@ -1781,7 +1801,8 @@ def train_single_task(
           env_name, config.start_index, config.end_index,
           seed + task_id + oracle_seed_offset,
           fixed_start_end=fixed_goal,
-          task_id=_tid, num_tasks=_ntasks)
+          task_id=_tid, num_tasks=_ntasks,
+          sawyer_success_mode=FLAGS.sawyer_success_mode)
       counterfactual_oracle_envs[
           (oracle_anchor_mode, oracle_repeat)] = oracle_env
 
@@ -2528,7 +2549,8 @@ def train_single_task(
               in_trajectory_negative_repeats=
                   FLAGS.in_trajectory_negative_repeats,
               single_task=FLAGS.single_task,
-              goal_conditioning_mode=FLAGS.goal_conditioning_mode)),
+              goal_conditioning_mode=FLAGS.goal_conditioning_mode,
+              sawyer_success_mode=FLAGS.sawyer_success_mode)),
           f'probe_data_task{task_id}_seed{seed}.npz',
       )
       os.makedirs(os.path.dirname(probe_path), exist_ok=True)
@@ -2716,7 +2738,8 @@ def train_single_task(
               in_trajectory_negative_repeats=
                   FLAGS.in_trajectory_negative_repeats,
               single_task=FLAGS.single_task,
-              goal_conditioning_mode=FLAGS.goal_conditioning_mode)),
+              goal_conditioning_mode=FLAGS.goal_conditioning_mode,
+              sawyer_success_mode=FLAGS.sawyer_success_mode)),
           f'pool_cosine_actor_task{task_id}.npy',
       )
       os.makedirs(os.path.dirname(mat_path), exist_ok=True)
@@ -2771,7 +2794,8 @@ def train_single_task(
                 in_trajectory_negative_repeats=
                     FLAGS.in_trajectory_negative_repeats,
                 single_task=FLAGS.single_task,
-                goal_conditioning_mode=FLAGS.goal_conditioning_mode)),
+                goal_conditioning_mode=FLAGS.goal_conditioning_mode,
+                sawyer_success_mode=FLAGS.sawyer_success_mode)),
             f'pool_cosine_critic_task{task_id}.npy',
         )
         os.makedirs(os.path.dirname(mat_path), exist_ok=True)
@@ -2854,9 +2878,10 @@ def train_single_task(
 def main(_):
   seed = FLAGS.seed
 
-  if FLAGS.goal_conditioning_mode == 'success_mechanism' and FLAGS.use_task_id:
+  if FLAGS.goal_conditioning_mode != 'full_state' and FLAGS.use_task_id:
     raise ValueError(
-        'success_mechanism currently requires --nouse_task_id because the '
+        f'{FLAGS.goal_conditioning_mode} currently requires --nouse_task_id '
+        'because the '
         'historical TaskIDGymWrapper appends a non-contiguous task code to '
         'the goal. The single-task validity cells already disable task IDs.')
 
@@ -3127,7 +3152,8 @@ def main(_):
           in_trajectory_negative_repeats=
               FLAGS.in_trajectory_negative_repeats,
           single_task=FLAGS.single_task,
-          goal_conditioning_mode=FLAGS.goal_conditioning_mode)
+          goal_conditioning_mode=FLAGS.goal_conditioning_mode,
+          sawyer_success_mode=FLAGS.sawyer_success_mode)
       if os.path.exists(probe_path):
         start_task = probe_tid + 1  # resume from the NEXT task
         print(f'  [auto-resume] Found checkpoint for task {probe_tid} '
@@ -3156,7 +3182,8 @@ def main(_):
         in_trajectory_negative_repeats=
             FLAGS.in_trajectory_negative_repeats,
         single_task=FLAGS.single_task,
-        goal_conditioning_mode=FLAGS.goal_conditioning_mode)
+        goal_conditioning_mode=FLAGS.goal_conditioning_mode,
+        sawyer_success_mode=FLAGS.sawyer_success_mode)
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
@@ -3215,6 +3242,7 @@ def main(_):
           f'20-task: {FLAGS.use_20_tasks}', flush=True)
     print(f'Goal contract: {FLAGS.goal_conditioning_mode} '
           f'(state[{goal_start}:{goal_end}])', flush=True)
+    print(f'Sawyer success semantics: {FLAGS.sawyer_success_mode}', flush=True)
     print(f'{"="*60}\n', flush=True)
 
     config = contrastive.ContrastiveConfig(**params)
@@ -3236,6 +3264,7 @@ def main(_):
                   'use_20_tasks': FLAGS.use_20_tasks,
                   'actor_mode': FLAGS.actor_mode,
                   'goal_conditioning_mode': FLAGS.goal_conditioning_mode,
+                  'sawyer_success_mode': FLAGS.sawyer_success_mode,
                   'profile_runtime': FLAGS.profile_runtime,
                   'eval_episodes': FLAGS.eval_episodes,
                   'intra_eval_previous_tasks': FLAGS.intra_eval_previous_tasks,
@@ -3525,6 +3554,7 @@ def main(_):
         'task_id': task_id,
         'env_name': env_name,
         'goal_conditioning_mode': FLAGS.goal_conditioning_mode,
+        'sawyer_success_mode': FLAGS.sawyer_success_mode,
         'goal_start_index': config.start_index,
         'goal_end_index': config.end_index,
         'in_trajectory_negative_repeats':
@@ -3561,7 +3591,8 @@ def main(_):
               in_trajectory_negative_repeats=
                   FLAGS.in_trajectory_negative_repeats,
               single_task=FLAGS.single_task,
-              goal_conditioning_mode=FLAGS.goal_conditioning_mode)
+              goal_conditioning_mode=FLAGS.goal_conditioning_mode,
+              sawyer_success_mode=FLAGS.sawyer_success_mode)
 
     # ---- configurable task-boundary evaluation ---------------------------
     if (

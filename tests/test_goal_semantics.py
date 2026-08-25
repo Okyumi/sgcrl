@@ -25,6 +25,29 @@ def test_goal_slices():
       'success_mechanism', 'sawyer_handle_press_side') == (4, 7)
   assert goal_semantics.resolve_goal_slice(
       'success_mechanism', 'sawyer_window_close') == (4, 7)
+  assert goal_semantics.resolve_goal_slice(
+      'native_success_axis', 'sawyer_handle_press_side') == (6, 7)
+  assert goal_semantics.resolve_goal_slice(
+      'native_success_axis', 'sawyer_window_close') == (4, 5)
+
+
+def test_native_success_axis_matches_official_task_coordinates():
+  position = np.asarray([0.1, 0.2, 0.3], dtype=np.float32)
+  target = np.asarray([0.0, 0.0, 0.35], dtype=np.float32)
+  handle_distance = goal_semantics.success_axis_distance(
+      position, target, 'sawyer_handle_press_side')
+  window_distance = goal_semantics.success_axis_distance(
+      position, target, 'sawyer_window_close')
+  assert abs(handle_distance - 0.05) < 1e-6
+  assert abs(window_distance - 0.10) < 1e-6
+  full_state = np.zeros(11, dtype=np.float32)
+  full_state[4:7] = position
+  assert np.allclose(
+      goal_semantics.success_axis_from_state(
+          full_state, 'sawyer_handle_press_side'), [0.3])
+  assert np.allclose(
+      goal_semantics.success_axis_from_goal(
+          target, 'sawyer_window_close'), [0.0])
 
 
 def test_mechanism_distance_for_both_contracts():

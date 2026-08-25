@@ -22,8 +22,10 @@ def _load(paths: Sequence[str]) -> list[dict[str, Any]]:
   for path_string in paths:
     path = Path(path_string)
     payload = json.loads(path.read_text(encoding='utf-8'))
-    if int(payload.get('audit_version', -1)) != 2:
-      raise ValueError(f'{path} is not a version-2 positive-control audit.')
+    if int(payload.get('audit_version', -1)) != 3:
+      raise ValueError(
+          f'{path} is not a version-3 native-success positive-control audit; '
+          'version-2 full-3D proxy results cannot be promoted.')
     payload['_source'] = str(path)
     payloads.append(payload)
   return payloads
@@ -69,11 +71,13 @@ def aggregate(
               'wrapper_fixed_target_policy'][
                   'positive_reward_success_mean'],
           'fixed_replay_native_endpoint_success': summary['conditions'][
-              'wrapper_fixed_target_replay']['native_target_success_mean'],
+              'wrapper_fixed_target_replay']['native_axis_success_mean'],
           'fixed_replay_fixed_endpoint_success': summary['conditions'][
-              'wrapper_fixed_target_replay']['fixed_target_success_mean'],
+              'wrapper_fixed_target_replay']['fixed_axis_success_mean'],
           'fixed_native_target_distance': summary['pairing'][
               'fixed_to_native_target_distance_mean'],
+          'fixed_native_success_axis_distance': summary['pairing'][
+              'fixed_to_native_success_axis_distance_mean'],
           'native_target_pair_error': summary['pairing'][
               'native_target_pair_linf_error_max'],
           'rand_vec_pair_error': summary['pairing'][
@@ -108,6 +112,7 @@ def aggregate(
                 'fixed_replay_native_endpoint_success',
                 'fixed_replay_fixed_endpoint_success',
                 'fixed_native_target_distance',
+                'fixed_native_success_axis_distance',
             )
         },
         'maxima': {
@@ -130,6 +135,10 @@ def aggregate(
     conclusion = 'current_fixed_targets_valid'
   elif all_fixed_misalignment_confirmed:
     conclusion = 'fixed_global_targets_invalid'
+  elif any(
+      'audit_metric_inconsistent' in task['decision_counts']
+      for task in tasks.values()):
+    conclusion = 'audit_metric_inconsistent'
   elif any(
       'native_positive_control_failed' in task['decision_counts']
       for task in tasks.values()):
@@ -159,7 +168,7 @@ def _markdown(report: dict[str, Any]) -> str:
       f'Conclusion: **{report["conclusion"]}**',
       '',
       '| Task | Native expert | Wrapper/native target | Wrapper/fixed target | '
-      'Fixed replay reaches native target | Fixed replay reaches fixed target '
+      'Fixed replay reaches native axis | Fixed replay reaches fixed axis '
       '| Decision |',
       '|---|---:|---:|---:|---:|---:|---|',
   ]
@@ -193,10 +202,10 @@ def main() -> None:
   parser.add_argument('inputs', nargs='+')
   parser.add_argument(
       '--output',
-      default='logs/goal_validity/positive_controls_summary.json')
+      default='logs/goal_validity/positive_controls_v3_summary.json')
   parser.add_argument(
       '--markdown-output',
-      default='logs/goal_validity/positive_controls_summary.md')
+      default='logs/goal_validity/positive_controls_v3_summary.md')
   parser.add_argument('--strict-promotion', action='store_true')
   args = parser.parse_args()
 
