@@ -1,15 +1,16 @@
-# Direct Task-5/Task-8 axis-reward DCC check
+# Direct Task-5/Task-8 axis-success wrapper correction
 
 Date: 2026-08-25
-Status: implemented; four 1M-step DCC cells are ready to run.
+Status: wrapper evaluator implemented; the proposed 1M training matrix was
+withdrawn in favor of checkpoint-only reevaluation.
 
 ## Purpose
 
-This is the minimal experiment needed to answer whether the historical sparse
-reward is responsible for DCC's weak Task-5 and Task-8 performance. It keeps
-the existing Sawyer wrapper, full-state goal, DCC learner, replay, HER, actor,
-and simulator path unchanged. It does not use MetaWorld reward or success
-information.
+The historical Task-5/Task-8 wrapper had a real success-label error, but DCC is
+reward-free: its actor and contrastive critic do not consume the environment's
+reward. Changing only the emitted sparse reward cannot change DCC gradients.
+It can only change evaluation and reveal false negatives in old success
+curves.
 
 The only change is the local sparse-reward comparison:
 
@@ -30,35 +31,16 @@ one scalar comparison. It adds no environment rollout, native-observation
 conversion, reward reconstruction, or simulator step, so its training cost is
 effectively the same as the original wrapper.
 
-## Minimal performance check
+## Correct minimal check
 
-The matrix contains only four runs:
+Do not retrain DCC to test this correction. Load the historical checkpoints
+and score the old and corrected predicates on the same deterministic rollout.
+That procedure is documented in
+`2026-08-25_task58_checkpoint_reevaluation.md`.
 
-- Task 5 and Task 8;
-- seeds 5 and 6;
-- reset actor and decomposed DCC critic;
-- one million steps per run;
-- the historical `full_state` goal contract;
-- all counterfactual, oracle, action-landscape, shortcut, and representation
-  diagnostics disabled.
-
-Two learners share each L40S. Launch with:
-
-```bash
-sbatch DRAFT_task58_axis_reward.sh
-```
-
-W&B group:
-
-```text
-TASK58-DCC-AXIS-REWARD-1M
-```
-
-Use `evaluator/success_rate` and `evaluator/env_steps` to compare the curves
-with the existing Task-5/Task-8 DCC runs. If both tasks improve clearly, make
-the axis predicates the normal Task-5/Task-8 wrapper behavior and rerun only
-the paper comparison that depends on those tasks. If they do not improve,
-the reward bug is real but is not the main cause of DCC's performance failure.
+The withdrawn files `experiment_configs_task58_axis_reward.py` and
+`DRAFT_task58_axis_reward.sh` were removed so the redundant four-run training
+matrix cannot be submitted accidentally.
 
 ## Code changes
 
@@ -67,14 +49,9 @@ the reward bug is real but is not the main cause of DCC's performance failure.
   threshold 0.05; other tasks reject this mode.
 - `run_continual_contrastive.py`: exposes `--sawyer_success_mode=task_axis` and
   keeps checkpoint identities separate from historical runs.
-- `experiment_configs_task58_axis_reward.py`: four minimal DCC cells.
-- `DRAFT_task58_axis_reward.sh`: two-array Torch launcher, two cells per GPU.
-- `tests/test_task58_axis_reward.py`: reward, wiring, config, and launcher
-  checks.
+- `tests/test_task58_axis_reward.py`: reward and wrapper-wiring checks.
 
 ## Limitations
 
-One million steps is a fast signal check, not a final paper horizon. It is
-enough to determine whether corrected rewards produce a materially healthier
-learning curve before spending time on longer runs. The experiment isolates
-reward semantics; it does not change DCC itself.
+This corrects the reported success definition only. It is not presented as a
+learning intervention for reward-free DCC.

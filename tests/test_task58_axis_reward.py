@@ -10,7 +10,6 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from contrastive import sawyer_success
-from experiment_configs_task58_axis_reward import build_configs
 
 
 class _Environment:
@@ -66,35 +65,6 @@ def test_runner_and_checkpoint_identity_accept_task_axis():
       encoding='utf-8')
   assert "('legacy_distance', 'task_axis', 'native_info')" in source
   assert "config_key += f'_success_{sawyer_success_mode}'" in source
-
-
-def test_minimal_config_matrix():
-  configs = build_configs()
-  assert len(configs) == 4
-  assert {(config['single_task'], config['seed']) for config in configs} == {
-      ('sawyer_handle_press_side', 5),
-      ('sawyer_handle_press_side', 6),
-      ('sawyer_window_close', 5),
-      ('sawyer_window_close', 6),
-  }
-  assert all(config['critic_mode'] == 'decomposed' for config in configs)
-  assert all(config['actor_mode'] == 'reset' for config in configs)
-  assert all(config['base_steps'] == 1_000_000 for config in configs)
-  assert all(config['sawyer_success_mode'] == 'task_axis'
-             for config in configs)
-  assert all(config['counterfactual_rank_interval_steps'] == 0
-             for config in configs)
-  assert all(config['counterfactual_oracle_interval_steps'] == 0
-             for config in configs)
-
-
-def test_launcher_runs_only_the_four_cells():
-  launcher = (REPO_ROOT / 'DRAFT_task58_axis_reward.sh').read_text(
-      encoding='utf-8')
-  assert '#SBATCH --array=0-1' in launcher
-  assert 'export CONFIG_LIMIT=4' in launcher
-  assert 'export TASKS_PER_GPU=2' in launcher
-  assert 'experiment_configs_task58_axis_reward.py' in launcher
 
 
 def main():
