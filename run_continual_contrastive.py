@@ -186,9 +186,10 @@ flags.DEFINE_enum(
     'official Task-5/Task-8 success coordinate.')
 flags.DEFINE_enum(
     'sawyer_success_mode', 'legacy_distance',
-    ('legacy_distance', 'native_info'),
+    ('legacy_distance', 'task_axis', 'native_info'),
     'Sparse reward semantics for custom Sawyer wrappers. legacy_distance '
-    'preserves historical paper runs; native_info uses MetaWorld info[success].')
+    'preserves historical paper runs; task_axis directly checks Task-5 z or '
+    'Task-8 x; native_info uses MetaWorld info[success].')
 flags.DEFINE_bool(
     'profile_runtime', False,
     'Log coarse actor, learner, evaluation, and simulator-diagnostic wall '

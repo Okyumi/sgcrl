@@ -125,9 +125,16 @@ def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
   and goal vectors.  obs_dim is then STATE_DIM_UNIFIED + num_tasks.
 
   ``sawyer_success_mode='legacy_distance'`` reproduces historical rewards.
+  ``'task_axis'`` directly checks handle z on Task 5 and window x on Task 8.
   ``'native_info'`` uses the success predicate returned by MetaWorld itself.
   """
   # pylint: disable=invalid-name
+  if (sawyer_success_mode == 'task_axis'
+      and env_name not in (
+          'sawyer_handle_press_side', 'sawyer_window_close')):
+    raise ValueError(
+        'task_axis success is defined only for sawyer_handle_press_side '
+        'and sawyer_window_close.')
   kwargs = {}
   if env_name == 'sawyer_bin':
     CLASS = SawyerBin
@@ -821,10 +828,15 @@ class SawyerHandlePressSide(
 
   def step(self, action):
     native_result = super(SawyerHandlePressSide, self).step(action)
+    handle_pos = self._get_pos_objects()
+    task_axis = sawyer_success.task_axis_sparse_reward(
+        self, handle_pos, self._goal, axis=2, threshold=0.02)
+    if task_axis is not None:
+      reward, info = task_axis
+      return self._get_obs(), reward, False, info
     native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
-    handle_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - handle_pos)
     obs = self._get_obs()
     r = float(dist < 0.02)
@@ -1029,10 +1041,15 @@ class SawyerWindowClose(
 
   def step(self, action):
     native_result = super(SawyerWindowClose, self).step(action)
+    handle_pos = self._get_pos_objects()
+    task_axis = sawyer_success.task_axis_sparse_reward(
+        self, handle_pos, self._goal, axis=0, threshold=0.05)
+    if task_axis is not None:
+      reward, info = task_axis
+      return self._get_obs(), reward, False, info
     native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
-    handle_pos = self._get_pos_objects()
     dist = np.linalg.norm(self._goal - handle_pos)
     obs = self._get_obs()
     r = float(dist < 0.05)

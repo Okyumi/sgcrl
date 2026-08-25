@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-SUCCESS_MODES = ('legacy_distance', 'native_info')
+SUCCESS_MODES = ('legacy_distance', 'task_axis', 'native_info')
 
 
 def set_success_mode(environment, success_mode: str) -> None:
@@ -12,6 +12,35 @@ def set_success_mode(environment, success_mode: str) -> None:
         f'Unknown Sawyer success mode {success_mode!r}; expected one of '
         f'{SUCCESS_MODES}.')
   environment._sawyer_success_mode = success_mode
+
+
+def task_axis_sparse_reward(
+    environment,
+    mechanism_position,
+    goal,
+    *,
+    axis: int,
+    threshold: float,
+):
+  """Return the fast task-axis reward, or ``None`` in other modes.
+
+  The Task-5/Task-8 wrappers already expose the mechanism position and goal,
+  so this is one scalar comparison with no native-reward query, observation
+  reconstruction, or additional simulator step.
+  """
+  mode = getattr(environment, '_sawyer_success_mode', 'legacy_distance')
+  if mode != 'task_axis':
+    return None
+  distance = abs(
+      float(mechanism_position[axis]) - float(goal[axis]))
+  success = float(distance <= float(threshold))
+  return success, {
+      'success': success,
+      'success_axis_distance': distance,
+      'success_axis_index': int(axis),
+      'success_threshold': float(threshold),
+      'wrapper_success_mode': 'task_axis',
+  }
 
 
 def _metaworld_parent(environment):
@@ -124,7 +153,7 @@ def native_sparse_transition(environment, native_result, action=None):
   native termination fields in ``info`` for auditing.
   """
   mode = getattr(environment, '_sawyer_success_mode', 'legacy_distance')
-  if mode == 'legacy_distance':
+  if mode in ('legacy_distance', 'task_axis'):
     return None
   if mode != 'native_info':
     raise ValueError(f'Invalid Sawyer success mode {mode!r}.')
