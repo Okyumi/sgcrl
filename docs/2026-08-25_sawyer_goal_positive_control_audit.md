@@ -6,10 +6,12 @@ Scope: Task 5 (`sawyer_handle_press_side`) and Task 8
 
 > **Superseded audit contract:** this note documents the V2 full-3D proxy.
 > MetaWorld Task 5 uses only handle z and Task 8 uses only window x for
-> success, so V2 outputs cannot authorize promotion. Use the V4 procedure in
+> success, so V2 outputs cannot authorize promotion. Use the V5 procedure in
 > `2026-08-25_native_success_wrapper_repair_and_10task_revalidation.md`.
 > V3 outputs are also non-promotable because its compatibility fallback passed
 > the custom goal-conditioned observation to MetaWorld `evaluate_state`.
+> V4 outputs are non-promotable because the custom V2 subclasses were
+> internally classified as V1 by MetaWorld's runtime class-name check.
 
 ## Motivation
 

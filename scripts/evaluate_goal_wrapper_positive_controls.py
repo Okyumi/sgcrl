@@ -22,9 +22,9 @@ def _load(paths: Sequence[str]) -> list[dict[str, Any]]:
   for path_string in paths:
     path = Path(path_string)
     payload = json.loads(path.read_text(encoding='utf-8'))
-    if int(payload.get('audit_version', -1)) != 4:
+    if int(payload.get('audit_version', -1)) != 5:
       raise ValueError(
-          f'{path} is not a version-4 native-success positive-control audit; '
+          f'{path} is not a version-5 native-success positive-control audit; '
           'older proxy/adapter results cannot be promoted.')
     payload['_source'] = str(path)
     payloads.append(payload)
@@ -105,6 +105,12 @@ def aggregate(
           'native_policy_trajectory_error': summary['conditions'][
               'wrapper_native_target_policy'][
                   'trajectory_linf_error_vs_native_max'],
+          'native_policy_input_error': summary['conditions'][
+              'wrapper_native_target_policy'][
+                  'policy_input_linf_error_vs_native_max'],
+          'native_policy_action_error': summary['conditions'][
+              'wrapper_native_target_policy'][
+                  'action_linf_error_vs_native_max'],
           'fixed_replay_trajectory_error': summary['conditions'][
               'wrapper_fixed_target_replay'][
                   'trajectory_linf_error_vs_native_max'],
@@ -168,6 +174,8 @@ def aggregate(
                 'initial_mechanism_pair_error',
                 'native_replay_trajectory_error',
                 'native_policy_trajectory_error',
+                'native_policy_input_error',
+                'native_policy_action_error',
                 'fixed_replay_trajectory_error',
                 'native_info_axis_mismatch',
                 'wrapper_reward_info_mismatch',
@@ -219,8 +227,8 @@ def _markdown(report: dict[str, Any]) -> str:
       '| Task | Native expert | Native wrapper policy R/I/A | '
       'Native wrapper replay R/I/A | Fixed wrapper policy R/I/A | '
       'Fixed replay reaches native/fixed axis | Max info/axis mismatch | '
-      'Max reward/info mismatch | Decision |',
-      '|---|---:|---:|---:|---:|---:|---:|---:|---|',
+      'Max policy input/action error | Max reward/info mismatch | Decision |',
+      '|---|---:|---:|---:|---:|---:|---:|---:|---:|---|',
   ]
   for task in report['tasks'].values():
     means = task['means']
@@ -241,6 +249,8 @@ def _markdown(report: dict[str, Any]) -> str:
         f'{means["fixed_replay_native_endpoint_success"]:.3f}/'
         f'{means["fixed_replay_fixed_endpoint_success"]:.3f} | '
         f'{task["maxima"]["native_info_axis_mismatch"]:.3f} | '
+        f'{task["maxima"]["native_policy_input_error"]:.3g}/'
+        f'{task["maxima"]["native_policy_action_error"]:.3g} | '
         f'{task["maxima"]["wrapper_reward_info_mismatch"]:.3f} | '
         f'{decisions} |')
   lines.extend([
@@ -264,10 +274,10 @@ def main() -> None:
   parser.add_argument('inputs', nargs='+')
   parser.add_argument(
       '--output',
-      default='logs/goal_validity/positive_controls_v4_summary.json')
+      default='logs/goal_validity/positive_controls_v5_summary.json')
   parser.add_argument(
       '--markdown-output',
-      default='logs/goal_validity/positive_controls_v4_summary.md')
+      default='logs/goal_validity/positive_controls_v5_summary.md')
   parser.add_argument('--strict-promotion', action='store_true')
   args = parser.parse_args()
 

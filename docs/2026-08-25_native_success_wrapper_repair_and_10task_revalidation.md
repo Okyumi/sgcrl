@@ -1,7 +1,7 @@
 # Native-success wrapper repair and efficient 10-task revalidation
 
 Date: 2026-08-25  
-Status: implemented; V4 positive controls and the 100k/task smoke stage must
+Status: implemented; V5 positive controls and the 100k/task smoke stage must
 pass before full-horizon promotion.
 
 ## Motivation
@@ -78,6 +78,31 @@ wrapper reward remained zero. V4 explicitly calls the first MetaWorld parent
 class's `_get_obs` and `evaluate_state`, so method overriding cannot substitute
 the wrapper observation at this boundary.
 
+V4 then isolated a second compatibility defect. MetaWorld sets `isV2` using
+the runtime-class-name test `"V2" in type(self).__name__`. The local classes
+are genuine V2 subclasses but are named `SawyerHandlePressSide`,
+`SawyerWindowClose`, and so on, so MetaWorld marks them as V1. The V4 reward,
+native-info, and exact-axis signals agree, and exact native-action replay has
+zero trajectory error on both tasks; however, the regenerated expert-policy
+trajectory diverges because the parent observation is laid out as V1. V5
+constructs the native 39-dimensional V2 observation under temporary V2
+bookkeeping while preserving the historical wrapper transition path. It also
+re-evaluates any nominal four- or five-item parent result when the local class
+is detected as a misclassified V2 wrapper, preventing a different MetaWorld
+fork from silently computing success from the custom 22-dimensional layout.
+
+The three-seed V4 summary gives the diagnostic signature directly:
+
+| Task | Native-action replay R/I/A | Regenerated policy R/I/A | Policy trajectory error | Fallback fraction |
+|---|---:|---:|---:|---:|
+| Task 5 | 1.000/1.000/1.000 | 0.000/0.000/0.000 | 0.170 | 1.000 |
+| Task 8 | 1.000/1.000/1.000 | 0.000/0.000/1.000 | 0.204 | 1.000 |
+
+Here `R/I/A` means sparse reward, MetaWorld `info["success"]`, and the
+success-axis proxy. Task 8's apparent policy-axis success came from including
+the reset state although `info` exists only after a step; V5 excludes the
+reset state from all success-proxy gates.
+
 Acme's interface is already used at the correct boundary:
 `contrastive/utils.py` wraps the raw Gym/MetaWorld environment with Acme's
 `GymWrapper`, then applies `StepLimitWrapper`. Moving the custom MuJoCo
@@ -107,7 +132,7 @@ representation experiments. It is deliberately not used in the 10-task paper
 revalidation because its semantic index differs across tasks; those runs keep
 the original `full_state` input architecture and change only reward semantics.
 
-The positive-control audit is now version 4. It logs:
+The positive-control audit is now version 5. It logs:
 
 - authoritative native `info["success"]`;
 - corrected wrapper positive reward;
@@ -120,10 +145,14 @@ The positive-control audit is now version 4. It logs:
 - per-step disagreement between wrapper positive reward and native success;
 - whether the `evaluate_state` compatibility fallback was exercised;
 - policy-trajectory error as well as exact-action replay error.
+- the maximum difference in the scripted policy's seven relevant input
+  coordinates and resulting action, so policy-adapter failures cannot be
+  mislabeled as dynamics failures.
 
-The evaluator refuses V2 and V3 files because neither can authorize promotion:
+The evaluator refuses V2, V3, and V4 files because none can authorize promotion:
 V2 used a full-3D proxy and V3 evaluated the wrong observation in the
-non-standard parent-step fallback. It distinguishes `audit_metric_inconsistent`,
+non-standard parent-step fallback; V4 still constructed the parent observation
+under the erroneous V1 identity. It distinguishes `audit_metric_inconsistent`,
 `native_positive_control_failed`, `custom_wrapper_invalid`,
 `fixed_global_target_misaligned`, `fixed_target_valid`, and `inconclusive`.
 
@@ -133,9 +162,9 @@ The historical fixed target differs from the native target by only about
 $0.00495$ on Task 5's success coordinate (threshold $0.02$) and by $0$ on
 Task 8's success coordinate (threshold $0.05$). Thus V3 does **not** confirm
 that the fixed target is physically invalid; it identifies an audit/reward
-adapter inconsistency that V4 must resolve. Task 5's independently generated
-wrapper-policy behavior remains a separate check, which V4 isolates with its
-policy-trajectory metric.
+adapter inconsistency. V4 subsequently verified reward consistency and exact
+replay, while isolating the remaining policy-observation mismatch. V5 is the
+first audit version that can promote the wrapper.
 
 ## Experiment sequence
 
@@ -151,7 +180,7 @@ Then aggregate them:
 
 ```bash
 python scripts/evaluate_goal_wrapper_positive_controls.py \
-  logs/goal_validity/positive_controls_v4_seed{5,6,7}.json \
+  logs/goal_validity/positive_controls_v5_seed{5,6,7}.json \
   --strict-promotion
 ```
 
@@ -222,8 +251,8 @@ without mixing corrected and legacy rewards.
 - `run_continual_contrastive.py`: flag, all environment sites, W&B manifest,
   console manifest, checkpoint identity, and checkpoint metadata.
 - `contrastive/goal_semantics.py`: official success-axis metadata and helpers.
-- `scripts/audit_sawyer_goal_positive_controls.py`: V4 authoritative metrics.
-- `scripts/evaluate_goal_wrapper_positive_controls.py`: V4-only aggregation
+- `scripts/audit_sawyer_goal_positive_controls.py`: V5 authoritative metrics.
+- `scripts/evaluate_goal_wrapper_positive_controls.py`: V5-only aggregation
   and corrected classifications.
 - `experiment_configs_native_success_wrapper.py`: 100k/task smoke matrix.
 - `experiment_configs_native_success_wrapper_promotion.py`: guarded 8M/task
@@ -239,7 +268,7 @@ without mixing corrected and legacy rewards.
 This repair can establish whether Tasks 5 and 8 failed partly because the
 continual wrapper supplied the wrong sparse reward. V3 does not yet establish
 that claim, because its fallback computed MetaWorld success from the wrong
-observation. The V4 positive controls are the promotion boundary. This work
+observation. The V5 positive controls are the promotion boundary. This work
 does not retroactively
 invalidate comparisons made entirely under the legacy wrapper: those runs
 still compare algorithms under the same historical contract. However, if the

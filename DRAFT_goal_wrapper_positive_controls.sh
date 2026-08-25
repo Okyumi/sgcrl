@@ -19,7 +19,7 @@
 #
 # After all three finish:
 #   python scripts/evaluate_goal_wrapper_positive_controls.py \
-#     logs/goal_validity/positive_controls_v4_seed{5,6,7}.json
+#     logs/goal_validity/positive_controls_v5_seed{5,6,7}.json
 set -euo pipefail
 
 REPO_DIR="/scratch/yd2247/sgcrl"

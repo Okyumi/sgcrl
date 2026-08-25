@@ -49,6 +49,43 @@ class _CustomGoalWrapper(_FakeMetaWorldParent):
     return ('custom', '22d', 'goal', 'observation')
 
 
+class _FakeV2MetaWorldParent:
+
+  def _get_curr_obs_combined_no_goal(self):
+    assert self.isV2 is True
+    assert self._obs_obj_max_len == 14
+    return ('current',) * 18
+
+  def _get_obs(self):
+    current = self._get_curr_obs_combined_no_goal()
+    observation = current + tuple(self._prev_obs) + ('goal',) * 3
+    self._prev_obs = current
+    return observation
+
+  def evaluate_state(self, observation, action):
+    assert len(observation) == 39
+    assert observation[:18] == ('current',) * 18
+    return 4.0, {'success': 1.0, 'v2_observation_used': 1.0}
+
+
+_FakeV2MetaWorldParent.__module__ = 'metaworld.fake'
+
+
+class _MisnamedLocalV2Wrapper(_FakeV2MetaWorldParent):
+
+  def __init__(self):
+    self._sawyer_success_mode = 'native_info'
+    # Mirrors MetaWorld's brittle ``"V2" in type(self).__name__`` result.
+    self.isV2 = False
+    self._obs_obj_max_len = 6
+    self._obs_obj_possible_lens = (6,)
+    self._prev_obs = ('legacy',) * 9
+    self.curr_path_length = 1
+
+  def _get_obs(self):
+    return ('custom',) * 22
+
+
 def test_legacy_is_default_and_returns_control_to_historical_predicate():
   environment = _DummyEnvironment()
   assert sawyer_success.native_sparse_transition(
@@ -114,6 +151,42 @@ def test_fallback_uses_metaworld_parent_observation_not_custom_goal_obs():
   assert info['parent_observation_used'] == 1.0
   assert info['native_step_api'] == (
       'evaluate_state_fallback:_FakeMetaWorldParent:NoneType:-1')
+
+
+def test_misnamed_v2_wrapper_gets_true_v2_observation_without_mutation():
+  environment = _MisnamedLocalV2Wrapper()
+  legacy_state = (
+      environment.isV2,
+      environment._obs_obj_max_len,
+      environment._obs_obj_possible_lens,
+      environment._prev_obs,
+  )
+  observation = sawyer_success.native_observation(environment)
+  assert len(observation) == 39
+  assert observation[:18] == ('current',) * 18
+  assert observation[18:36] == ('current',) * 18
+  assert (
+      environment.isV2,
+      environment._obs_obj_max_len,
+      environment._obs_obj_possible_lens,
+      environment._prev_obs,
+  ) == legacy_state
+
+  _, reward, _, info = sawyer_success.native_sparse_transition(
+      environment, None, action=('executed', 'action'))
+  assert reward == 1.0
+  assert info['v2_observation_used'] == 1.0
+  assert info['native_step_api'] == (
+      'evaluate_state_fallback:_FakeV2MetaWorldParent:NoneType:-1')
+
+  _, reward, _, info = sawyer_success.native_sparse_transition(
+      environment,
+      (('wrong', 'custom', 'observation'), 0.0, False,
+       {'success': 0.0}),
+      action=('executed', 'action'))
+  assert reward == 1.0
+  assert info['v2_observation_used'] == 1.0
+  assert info['native_step_api'] == 'gym_4tuple:native_v2_reevaluated'
 
 
 def test_reward_info_two_tuple_is_supported():

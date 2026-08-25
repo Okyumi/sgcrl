@@ -14,23 +14,84 @@ def set_success_mode(environment, success_mode: str) -> None:
   environment._sawyer_success_mode = success_mode
 
 
+def _metaworld_parent(environment):
+  """Return the native MetaWorld task class below a local subclass."""
+  for parent in type(environment).__mro__[1:]:
+    if (parent.__module__.startswith('metaworld.')
+        and hasattr(parent, '_get_obs')
+        and hasattr(parent, 'evaluate_state')):
+      return parent
+  return None
+
+
+def _copy_if_possible(value):
+  return value.copy() if hasattr(value, 'copy') else value
+
+
+def native_observation(environment, native_parent=None):
+  """Return MetaWorld's V2 observation without changing wrapper semantics.
+
+  The MetaWorld release used by this project infers ``isV2`` from the runtime
+  class name. Local subclasses such as ``SawyerWindowClose`` therefore inherit
+  a V2 task but are incorrectly marked as V1. Calling the parent ``_get_obs``
+  directly would then construct the V1 layout. Build the V2 observation under
+  temporary bookkeeping values and retain a separate native frame-stack state
+  instead of changing the historical wrapper's transition path.
+  """
+  native_parent = native_parent or _metaworld_parent(environment)
+  if native_parent is None:
+    return environment._get_obs()
+  if 'V2' not in native_parent.__name__:
+    return native_parent._get_obs(environment)
+  if not hasattr(environment, 'isV2') or bool(environment.isV2):
+    return native_parent._get_obs(environment)
+
+  required = ('_obs_obj_max_len', '_obs_obj_possible_lens', '_prev_obs')
+  if not all(hasattr(environment, name) for name in required):
+    return native_parent._get_obs(environment)
+
+  old_is_v2 = environment.isV2
+  old_max_len = environment._obs_obj_max_len
+  old_possible_lens = environment._obs_obj_possible_lens
+  old_prev_obs = environment._prev_obs
+  try:
+    environment.isV2 = True
+    environment._obs_obj_max_len = 14
+    environment._obs_obj_possible_lens = (6, 14)
+    current = environment._get_curr_obs_combined_no_goal()
+    native_prev = getattr(environment, '_sawyer_native_v2_prev_obs', None)
+    path_length = int(getattr(environment, 'curr_path_length', 0))
+    previous_path_length = int(getattr(
+        environment, '_sawyer_native_v2_path_length', -1))
+    if (native_prev is None
+        or len(native_prev) != len(current)
+        or path_length < previous_path_length
+        or path_length == 0):
+      native_prev = _copy_if_possible(current)
+    environment._prev_obs = native_prev
+    observation = native_parent._get_obs(environment)
+    environment._sawyer_native_v2_prev_obs = _copy_if_possible(
+        environment._prev_obs)
+    environment._sawyer_native_v2_path_length = path_length
+    return _copy_if_possible(observation)
+  finally:
+    environment.isV2 = old_is_v2
+    environment._obs_obj_max_len = old_max_len
+    environment._obs_obj_possible_lens = old_possible_lens
+    environment._prev_obs = old_prev_obs
+
+
 def _evaluate_state_after_step(environment, action, native_result):
   """Recover MetaWorld reward/info when its parent ``step`` returns nothing."""
   if action is None:
     raise RuntimeError(
         'MetaWorld returned a non-standard step result and no action was '
         'provided for the evaluate_state fallback.')
-  native_parent = None
-  for parent in type(environment).__mro__[1:]:
-    if (parent.__module__.startswith('metaworld.')
-        and hasattr(parent, '_get_obs')
-        and hasattr(parent, 'evaluate_state')):
-      native_parent = parent
-      break
+  native_parent = _metaworld_parent(environment)
   if native_parent is not None:
-    native_observation = native_parent._get_obs(environment)
+    observation = native_observation(environment, native_parent)
     evaluation = native_parent.evaluate_state(
-        environment, native_observation, action)
+        environment, observation, action)
     evaluation_source = native_parent.__name__
   else:
     evaluate_state = getattr(environment, 'evaluate_state', None)
@@ -38,8 +99,8 @@ def _evaluate_state_after_step(environment, action, native_result):
       raise RuntimeError(
           'MetaWorld returned a non-standard step result and the environment '
           'does not expose evaluate_state().')
-    native_observation = environment._get_obs()
-    evaluation = evaluate_state(native_observation, action)
+    observation = environment._get_obs()
+    evaluation = evaluate_state(observation, action)
     evaluation_source = type(environment).__name__
   if not isinstance(evaluation, tuple) or len(evaluation) != 2:
     raise RuntimeError(
@@ -89,6 +150,22 @@ def native_sparse_transition(environment, native_result, action=None):
     (native_reward, native_info, native_terminated, native_truncated,
      native_step_api) = _evaluate_state_after_step(
          environment, action, native_result)
+  native_parent = _metaworld_parent(environment)
+  needs_v2_reevaluation = (
+      native_parent is not None
+      and 'V2' in native_parent.__name__
+      and hasattr(environment, 'isV2')
+      and not bool(environment.isV2)
+      and not native_step_api.startswith('evaluate_state_fallback:'))
+  if needs_v2_reevaluation:
+    if action is None:
+      raise RuntimeError(
+          'A misclassified MetaWorld V2 wrapper requires the executed action '
+          'to reconstruct authoritative reward and success.')
+    observation = native_observation(environment, native_parent)
+    native_reward, native_info = native_parent.evaluate_state(
+        environment, observation, action)
+    native_step_api += ':native_v2_reevaluated'
   native_info = dict(native_info or {})
   if 'success' not in native_info:
     raise RuntimeError(

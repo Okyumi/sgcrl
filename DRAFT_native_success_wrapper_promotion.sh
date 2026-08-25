@@ -13,7 +13,7 @@
 #SBATCH --array=0-2
 
 # Guarded 8M/task paper revalidation. It is intentionally unavailable until
-# the V4 wrapper controls and 100k/task ten-task smoke matrix pass.
+# the V5 wrapper controls and 100k/task ten-task smoke matrix pass.
 # Re-submit the same command after a wall-time exit; task-boundary checkpoints
 # are mode-separated and auto-resume without colliding with legacy runs.
 #
@@ -23,7 +23,7 @@
 set -euo pipefail
 
 if [ "${NATIVE_SUCCESS_WRAPPER_PROMOTED:-false}" != "true" ]; then
-  echo "V4 controls and the ten-task smoke must pass before promotion." >&2
+  echo "V5 controls and the ten-task smoke must pass before promotion." >&2
   exit 2
 fi
 

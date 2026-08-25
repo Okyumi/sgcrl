@@ -29,6 +29,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from contrastive import goal_semantics
+from contrastive import sawyer_success
 
 
 CONDITIONS = (
@@ -105,7 +106,8 @@ def _native_parent(environment):
 
 def _native_observation(environment, parent) -> np.ndarray:
   """Obtain the raw observation expected by MetaWorld scripted policies."""
-  return _as_float_array(parent._get_obs(environment))
+  return _as_float_array(
+      sawyer_success.native_observation(environment, parent))
 
 
 def _mechanism_position(environment) -> np.ndarray:
@@ -175,6 +177,11 @@ def _distance(position: np.ndarray, target: np.ndarray) -> float:
       _as_float_array(position) - _as_float_array(target)))
 
 
+def _post_step_success(distances: Sequence[float], threshold: float) -> float:
+  """Match a step-returned success signal by excluding the reset state."""
+  return float(len(distances) > 1 and min(distances[1:]) <= threshold)
+
+
 def _rollout(
     environment,
     parent,
@@ -187,9 +194,12 @@ def _rollout(
     success_threshold: float,
     replay_actions: Optional[Sequence[np.ndarray]] = None,
     reference_trajectory: Optional[Sequence[np.ndarray]] = None,
+    reference_policy_inputs: Optional[Sequence[np.ndarray]] = None,
+    reference_actions: Optional[Sequence[np.ndarray]] = None,
 ) -> dict[str, Any]:
   """Run a policy or replay actions and retain independent success signals."""
   actions = []
+  policy_inputs = []
   trajectory = [_mechanism_position(environment)]
   native_full_distances = [_distance(trajectory[-1], native_target)]
   fixed_full_distances = [_distance(trajectory[-1], fixed_target)]
@@ -212,8 +222,9 @@ def _rollout(
              if replay_actions is not None else max_steps)
   for step_index in range(horizon):
     if replay_actions is None:
-      action = _as_float_array(
-          policy.get_action(_native_observation(environment, parent)))
+      policy_input = _native_observation(environment, parent)
+      policy_inputs.append(policy_input[:7].copy())
+      action = _as_float_array(policy.get_action(policy_input))
     else:
       action = _as_float_array(replay_actions[step_index])
     clipped = np.clip(
@@ -265,6 +276,26 @@ def _rollout(
           trajectory[index] - reference_trajectory[index])))
                              for index in range(count))
 
+  policy_input_error = float('nan')
+  if reference_policy_inputs is not None and policy_inputs:
+    count = min(len(policy_inputs), len(reference_policy_inputs))
+    policy_input_error = max(float(np.max(np.abs(
+        policy_inputs[index] - reference_policy_inputs[index])))
+                             for index in range(count))
+  action_error = float('nan')
+  if reference_actions is not None and actions:
+    count = min(len(actions), len(reference_actions))
+    action_error = max(float(np.max(np.abs(
+        actions[index] - reference_actions[index])))
+                       for index in range(count))
+
+  # Success returned by ``step`` has no initial-state counterpart, so its
+  # independent proxy must use post-step states only as well.
+  post_native_axis_distances = native_axis_distances[1:]
+  post_fixed_axis_distances = fixed_axis_distances[1:]
+  post_native_full_distances = native_full_distances[1:]
+  post_fixed_full_distances = fixed_full_distances[1:]
+
   return {
       'steps': len(actions),
       'native_info_success': native_info_success,
@@ -275,30 +306,37 @@ def _rollout(
           reward_native_info_mismatch_count / max(len(actions), 1)),
       'evaluate_state_fallback_fraction': (
           evaluate_state_fallback_count / max(len(actions), 1)),
-      'native_axis_success': float(
-          min(native_axis_distances) <= success_threshold),
-      'fixed_axis_success': float(
-          min(fixed_axis_distances) <= success_threshold),
+      'native_axis_success': _post_step_success(
+          native_axis_distances, success_threshold),
+      'fixed_axis_success': _post_step_success(
+          fixed_axis_distances, success_threshold),
       'initial_native_axis_distance': native_axis_distances[0],
-      'minimum_native_axis_distance': min(native_axis_distances),
+      'minimum_native_axis_distance': min(
+          post_native_axis_distances or native_axis_distances),
       'final_native_axis_distance': native_axis_distances[-1],
       'initial_fixed_axis_distance': fixed_axis_distances[0],
-      'minimum_fixed_axis_distance': min(fixed_axis_distances),
+      'minimum_fixed_axis_distance': min(
+          post_fixed_axis_distances or fixed_axis_distances),
       'final_fixed_axis_distance': fixed_axis_distances[-1],
       # Descriptive only: these full-vector distances are not MetaWorld's
       # Task-5/Task-8 success predicates.
       'initial_native_full_3d_distance': native_full_distances[0],
-      'minimum_native_full_3d_distance': min(native_full_distances),
+      'minimum_native_full_3d_distance': min(
+          post_native_full_distances or native_full_distances),
       'final_native_full_3d_distance': native_full_distances[-1],
       'initial_fixed_full_3d_distance': fixed_full_distances[0],
-      'minimum_fixed_full_3d_distance': min(fixed_full_distances),
+      'minimum_fixed_full_3d_distance': min(
+          post_fixed_full_distances or fixed_full_distances),
       'final_fixed_full_3d_distance': fixed_full_distances[-1],
       'action_clip_fraction': action_clip_count / max(len(actions), 1),
       'native_reward_max': _maximum(native_rewards),
       'wrapper_reward_max': _maximum(wrapper_rewards),
       'trajectory_linf_error_vs_native': trajectory_error,
+      'policy_input_linf_error_vs_native': policy_input_error,
+      'action_linf_error_vs_native': action_error,
       '_actions': actions,
       '_trajectory': trajectory,
+      '_policy_inputs': policy_inputs,
   }
 
 
@@ -324,6 +362,8 @@ def _summarize_conditions(
         'minimum_native_full_3d_distance',
         'minimum_fixed_full_3d_distance',
         'trajectory_linf_error_vs_native',
+        'policy_input_linf_error_vs_native',
+        'action_linf_error_vs_native',
     ):
       values = [row[key] for row in rows if key in row]
       if values:
@@ -401,6 +441,10 @@ def classify_task(
       wrapper_native_control_pass
       and wrapper_native_reward_consistent
       and wrapper_native['trajectory_linf_error_vs_native_max'] <=
+      trajectory_tolerance
+      and wrapper_native['policy_input_linf_error_vs_native_max'] <=
+      trajectory_tolerance
+      and wrapper_native['action_linf_error_vs_native_max'] <=
       trajectory_tolerance)
   fixed_target_valid = (
       wrapper_fixed['positive_reward_success_mean'] >= expert_success_min
@@ -612,6 +656,7 @@ def audit_task(
           success_threshold=float(metadata['success_threshold']))
       native_actions = native_policy_result['_actions']
       native_trajectory = native_policy_result['_trajectory']
+      native_policy_inputs = native_policy_result['_policy_inputs']
 
       _set_task_and_reset(wrapper_native, task)
       wrapper_native_target = _as_float_array(wrapper_native._target_pos)
@@ -626,7 +671,9 @@ def audit_task(
           fixed_target=fixed_goal,
           env_name=env_name,
           success_threshold=float(metadata['success_threshold']),
-          reference_trajectory=native_trajectory)
+          reference_trajectory=native_trajectory,
+          reference_policy_inputs=native_policy_inputs,
+          reference_actions=native_actions)
 
       _set_task_and_reset(wrapper_fixed, task)
       wrapper_fixed_rand_vec = _last_rand_vec(wrapper_fixed)
@@ -787,10 +834,10 @@ def main() -> None:
   parser.add_argument('--target-tolerance', type=float, default=1e-6)
   parser.add_argument(
       '--output',
-      default='logs/goal_validity/positive_controls_v4_seed5.json')
+      default='logs/goal_validity/positive_controls_v5_seed5.json')
   parser.add_argument('--wandb-project', default='')
   parser.add_argument(
-      '--wandb-group', default='GOAL-WRAPPER-POSITIVE-CONTROLS-V4')
+      '--wandb-group', default='GOAL-WRAPPER-POSITIVE-CONTROLS-V5')
   parser.add_argument(
       '--strict-current-wrapper', action='store_true',
       help='Exit nonzero unless the historical fixed-target wrapper validates.')
@@ -807,7 +854,7 @@ def main() -> None:
       trajectory_tolerance=args.trajectory_tolerance,
       target_tolerance=args.target_tolerance) for task in tasks]
   payload = {
-      'audit_version': 4,
+      'audit_version': 5,
       'success_semantics': 'metaworld_info_success_and_native_axis_proxy',
       'seed': args.seed,
       'episodes_per_task': args.episodes,
@@ -855,7 +902,7 @@ def main() -> None:
         project=args.wandb_project,
         group=args.wandb_group,
         config={
-            'audit_version': 4,
+            'audit_version': 5,
             'success_semantics':
                 'metaworld_info_success_and_native_axis_proxy',
             'seed': args.seed,
