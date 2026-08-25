@@ -11,6 +11,8 @@ from typing import Tuple
 
 import numpy as np
 
+from contrastive import goal_semantics
+
 
 SUCCESS_MODES = ('goal_distance', 'zero_reward', 'positive_reward')
 
@@ -18,13 +20,16 @@ SUCCESS_MODES = ('goal_distance', 'zero_reward', 'positive_reward')
 def goal_distances(observation: np.ndarray, obs_dim: int) -> Tuple[float, float]:
   """Return full-state and mechanism-coordinate distances to the goal."""
   observation = np.asarray(observation, dtype=np.float64)
-  state = observation[:obs_dim]
-  goal = observation[obs_dim:]
+  state, goal = goal_semantics.split_observation(observation, obs_dim)
   shared = min(state.shape[0], goal.shape[0])
   full = float(np.linalg.norm(state[:shared] - goal[:shared]))
-  if shared < 7:
-    return full, full
-  mechanism = float(np.linalg.norm(state[4:7] - goal[4:7]))
+  mechanism = float(np.linalg.norm(
+      goal_semantics.mechanism_from_state(state)
+      - goal_semantics.mechanism_from_goal(goal)))
+  # Under the success-mechanism contract there are no nuisance coordinates;
+  # make the reported full distance equal the semantically valid distance.
+  if goal.shape[0] == 3:
+    full = mechanism
   return full, mechanism
 
 

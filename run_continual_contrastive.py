@@ -71,6 +71,7 @@ from contrastive import rbc_checkpointing
 from contrastive import intrajectory
 from contrastive import action_ranking_diagnostics
 from contrastive import counterfactual_ranking
+from contrastive import goal_semantics
 from contrastive import phase_gated_control
 from contrastive import outcome_credit
 from contrastive.knowledge_pool import (
@@ -176,6 +177,16 @@ flags.DEFINE_float('logsumexp_penalty', 0.01,
 flags.DEFINE_string('single_task', '',
                     'If set, train on this single environment only '
                     '(e.g., sawyer_shelf_place). Overrides task sequence.')
+flags.DEFINE_enum(
+    'goal_conditioning_mode', 'full_state',
+    goal_semantics.GOAL_CONDITIONING_MODES,
+    'Goal contract seen by the policy and critic. full_state preserves the '
+    'historical hand+gripper+mechanism goal; success_mechanism exposes only '
+    'the mechanism coordinates that define Task-5/Task-8 success.')
+flags.DEFINE_bool(
+    'profile_runtime', False,
+    'Log coarse actor, learner, evaluation, and simulator-diagnostic wall '
+    'times. Uses host clocks only and does not synchronize JAX arrays.')
 # Automatic actor reset during task 0 (dormancy-triggered)
 flags.DEFINE_bool('actor_auto_reset', False,
                   'Monitor actor health during task 0 and automatically reset '
@@ -381,6 +392,16 @@ flags.DEFINE_integer(
     'zero disables it.')
 flags.DEFINE_integer('counterfactual_oracle_num_anchors', 4,
                      'Anchors per condition in each oracle event.')
+flags.DEFINE_enum(
+    'counterfactual_oracle_condition_set', 'all',
+    ('all', 'promotion_only'),
+    'all runs policy/scripted-contact x repeat-1/repeat-5; promotion_only '
+    'runs only scripted-contact/repeat-5 and costs about one quarter as many '
+    'serial MuJoCo rollouts.')
+flags.DEFINE_integer(
+    'counterfactual_oracle_max_events', 0,
+    'Maximum oracle events per task; zero preserves the unlimited legacy '
+    'schedule. Use a small positive value for diagnostic-only runs.')
 flags.DEFINE_bool(
     'phase_gated_control', False,
     'Use a reach/contact gate and execute rank-selected actions for the same '
@@ -709,7 +730,7 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
                use_task_id=True, adapt_heads_only=True, actor_mode='cka',
                dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
                rbc_config=None, in_trajectory_negative_repeats=1,
-               single_task=''):
+               single_task='', goal_conditioning_mode='full_state'):
   """Checkpoint path keyed by all ablation-relevant config.
 
   Base structure: {ckpt_dir}/actor_{mode}_critic_{mode}_tid_{bool}_heads_{bool}/seed_{seed}/task_{id}.pkl
@@ -728,6 +749,8 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
   """
   config_key = (f'actor_{actor_mode}_critic_{critic_mode}'
                 f'_tid_{use_task_id}_heads_{adapt_heads_only}')
+  if goal_conditioning_mode != 'full_state':
+    config_key += f'_goal_{goal_conditioning_mode}'
   if critic_mode in _PLAIN_DCC_MODES and all(
       v is not None for v in (dyn_aux_weight, phi_task_width, phi_task_depth)):
     config_key += (f'_dyn{float(dyn_aux_weight):.3f}'
@@ -756,7 +779,7 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
               rbc_config=None, in_trajectory_negative_repeats=1,
-              single_task=''):
+              single_task='', goal_conditioning_mode='full_state'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode,
                      dyn_aux_weight=dyn_aux_weight,
@@ -765,7 +788,8 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
                      rbc_config=rbc_config,
                      in_trajectory_negative_repeats=
                          in_trajectory_negative_repeats,
-                     single_task=single_task)
+                     single_task=single_task,
+                     goal_conditioning_mode=goal_conditioning_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   # Convert JAX arrays to numpy for pickling
   data_np = jax.tree_util.tree_map(
@@ -780,7 +804,7 @@ def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
               use_task_id=True, adapt_heads_only=True, actor_mode='cka',
               dyn_aux_weight=None, phi_task_width=None, phi_task_depth=None,
               rbc_config=None, in_trajectory_negative_repeats=1,
-              single_task=''):
+              single_task='', goal_conditioning_mode='full_state'):
   path = _ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                      adapt_heads_only, actor_mode,
                      dyn_aux_weight=dyn_aux_weight,
@@ -789,7 +813,8 @@ def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
                      rbc_config=rbc_config,
                      in_trajectory_negative_repeats=
                          in_trajectory_negative_repeats,
-                     single_task=single_task)
+                     single_task=single_task,
+                     goal_conditioning_mode=goal_conditioning_mode)
   if not os.path.exists(path):
     # Migration notice: check whether a legacy (pre-2026-05-14)
     # un-disambiguated decomposed checkpoint exists at the OLD path.
@@ -1718,6 +1743,12 @@ def train_single_task(
   counterfactual_rank_env = None
   counterfactual_validation_env = None
   counterfactual_oracle_envs = {}
+  if FLAGS.counterfactual_oracle_condition_set == 'promotion_only':
+    counterfactual_oracle_conditions = (('scripted_contact', 5),)
+  else:
+    counterfactual_oracle_conditions = (
+        ('policy', 1), ('policy', 5),
+        ('scripted_contact', 1), ('scripted_contact', 5))
   if counterfactual_rank_interval > 0 or counterfactual_oracle_interval > 0:
     if config.obs_dim < 7:
       raise ValueError(
@@ -1744,16 +1775,15 @@ def train_single_task(
     # Repeat-1 and repeat-5 environments for a given anchor mode use the same
     # seed and advance independently. This makes their reset/anchor sequences
     # paired without allowing one condition's rollout to perturb another.
-    for oracle_anchor_mode, oracle_seed_offset in (
-        ('policy', 570), ('scripted_contact', 580)):
-      for oracle_repeat in (1, 5):
-        oracle_env, _ = contrastive_utils.make_environment(
-            env_name, config.start_index, config.end_index,
-            seed + task_id + oracle_seed_offset,
-            fixed_start_end=fixed_goal,
-            task_id=_tid, num_tasks=_ntasks)
-        counterfactual_oracle_envs[
-            (oracle_anchor_mode, oracle_repeat)] = oracle_env
+    for oracle_anchor_mode, oracle_repeat in counterfactual_oracle_conditions:
+      oracle_seed_offset = 570 if oracle_anchor_mode == 'policy' else 580
+      oracle_env, _ = contrastive_utils.make_environment(
+          env_name, config.start_index, config.end_index,
+          seed + task_id + oracle_seed_offset,
+          fixed_start_end=fixed_goal,
+          task_id=_tid, num_tasks=_ntasks)
+      counterfactual_oracle_envs[
+          (oracle_anchor_mode, oracle_repeat)] = oracle_env
 
   # ---- training loop (actor-learner loop) --------------------------------
   actor_logger = make_default_logger(
@@ -1845,11 +1875,26 @@ def train_single_task(
           f'bank_size={neg_bank.size()} goals from '
           f'{neg_bank.num_tasks()} previous tasks.', flush=True)
 
+  runtime_totals = {
+      'actor_seconds': 0.0,
+      'learner_seconds': 0.0,
+      'counterfactual_rank_seconds': 0.0,
+      'counterfactual_oracle_seconds': 0.0,
+      'action_landscape_seconds': 0.0,
+      'evaluation_seconds': 0.0,
+      'rl_metrics_seconds': 0.0,
+  }
+  runtime_started_at = time.perf_counter()
+
   while env_steps_done < train_steps:
     # Actor step: run one full episode and count actual env steps.
     # NOTE: Acme's `EnvironmentLoop.run()` returns None (it only writes logs),
     # so we call `run_episode()` to get the per-episode metrics dict.
+    actor_started_at = time.perf_counter()
     result = env_loop.run_episode()
+    if FLAGS.profile_runtime:
+      runtime_totals['actor_seconds'] += (
+          time.perf_counter() - actor_started_at)
     # Mirror `EnvironmentLoop.run()` behavior: write the episode log.
     env_loop._logger.write(result)  # pylint: disable=protected-access
     episode_steps = int(result['episode_length'])
@@ -1866,7 +1911,11 @@ def train_single_task(
     # Learner step (first call triggers JAX JIT compilation, may be slow)
     if episodes_done == 1:
       print(f'  First learner step (includes JIT compilation)...', flush=True)
+    learner_started_at = time.perf_counter()
     learner.step()
+    if FLAGS.profile_runtime:
+      runtime_totals['learner_seconds'] += (
+          time.perf_counter() - learner_started_at)
     if episodes_done == 1:
       print(f'  JIT compilation done.', flush=True)
 
@@ -1882,6 +1931,7 @@ def train_single_task(
       wandb.log(wandb_diagnostic)
 
     if env_steps_done >= next_counterfactual_rank_at:
+      rank_started_at = time.perf_counter()
       transitions = learner.last_transitions
       if transitions is None:
         raise RuntimeError(
@@ -2022,8 +2072,12 @@ def train_single_task(
           flush=True)
       next_counterfactual_rank_at = (
           env_steps_done + counterfactual_rank_interval)
+      if FLAGS.profile_runtime:
+        runtime_totals['counterfactual_rank_seconds'] += (
+            time.perf_counter() - rank_started_at)
 
     if env_steps_done >= next_counterfactual_oracle_at:
+      oracle_started_at = time.perf_counter()
       transitions = learner.last_transitions
       if transitions is None:
         raise RuntimeError(
@@ -2039,9 +2093,7 @@ def train_single_task(
         return np.asarray(sampler(distribution, key))[0]
 
       oracle_metrics = {}
-      for anchor_mode, action_repeat in (
-          ('policy', 1), ('policy', 5),
-          ('scripted_contact', 1), ('scripted_contact', 5)):
+      for anchor_mode, action_repeat in counterfactual_oracle_conditions:
         oracle_condition_rng = np.random.default_rng(
             seed + 99701 + task_id * 109
             + counterfactual_oracle_event * 1009
@@ -2114,10 +2166,18 @@ def train_single_task(
           f"scripted-r5={oracle_metrics.get('oracle/scripted_contact/repeat5/best_success_fraction', 0.0):.2f}",
           flush=True)
       counterfactual_oracle_event += 1
-      next_counterfactual_oracle_at = (
-          env_steps_done + counterfactual_oracle_interval)
+      oracle_max_events = int(FLAGS.counterfactual_oracle_max_events)
+      if oracle_max_events > 0 and counterfactual_oracle_event >= oracle_max_events:
+        next_counterfactual_oracle_at = float('inf')
+      else:
+        next_counterfactual_oracle_at = (
+            env_steps_done + counterfactual_oracle_interval)
+      if FLAGS.profile_runtime:
+        runtime_totals['counterfactual_oracle_seconds'] += (
+            time.perf_counter() - oracle_started_at)
 
     if env_steps_done >= next_action_landscape_at:
+      landscape_started_at = time.perf_counter()
       transitions = learner.last_transitions
       if transitions is None:
         raise RuntimeError(
@@ -2208,6 +2268,9 @@ def train_single_task(
           flush=True)
       next_action_landscape_at = (
           env_steps_done + action_landscape_interval)
+      if FLAGS.profile_runtime:
+        runtime_totals['action_landscape_seconds'] += (
+            time.perf_counter() - landscape_started_at)
 
     # Log learner metrics to W&B with global env_steps as x-axis
     if FLAGS.use_wandb and wandb is not None and env_steps_done >= next_log_at:
@@ -2234,10 +2297,39 @@ def train_single_task(
       print(f'  Task {task_id} [{env_name}]: '
             f'{env_steps_done}/{train_steps} env steps '
             f'({episodes_done} episodes)', flush=True)
+      if FLAGS.profile_runtime:
+        elapsed = max(time.perf_counter() - runtime_started_at, 1e-9)
+        diagnostic_seconds = sum(
+            runtime_totals[name] for name in (
+                'counterfactual_rank_seconds',
+                'counterfactual_oracle_seconds',
+                'action_landscape_seconds'))
+        accounted = sum(runtime_totals.values())
+        runtime_metrics = {
+            **{f'runtime/{name}': value
+               for name, value in runtime_totals.items()},
+            'runtime/total_seconds': elapsed,
+            'runtime/unaccounted_seconds': max(0.0, elapsed - accounted),
+            'runtime/diagnostic_fraction': diagnostic_seconds / elapsed,
+            'runtime/learner_fraction': (
+                runtime_totals['learner_seconds'] / elapsed),
+            'runtime/env_steps_per_second': env_steps_done / elapsed,
+        }
+        if FLAGS.use_wandb and wandb is not None:
+          runtime_metrics['runtime/env_steps'] = env_steps_done
+          wandb.log(runtime_metrics)
+        print(
+            '  [runtime] '
+            f"actor={runtime_totals['actor_seconds']:.1f}s "
+            f"learner={runtime_totals['learner_seconds']:.1f}s "
+            f'diagnostics={diagnostic_seconds:.1f}s '
+            f'total={elapsed:.1f}s',
+            flush=True)
       next_log_at = env_steps_done + log_every_steps
 
     # Periodic evaluation (deterministic policy on current task)
     if env_steps_done >= next_evaluator_at:
+      evaluation_started_at = time.perf_counter()
       eval_variable_client.update_and_wait()
       eval_successes = []
       eval_returns = []
@@ -2262,10 +2354,14 @@ def train_single_task(
         wandb.log(eval_log)
       print(f'  [eval @ {env_steps_done}] success={eval_success_rate:.1%} '
             f'return={eval_mean_return:.1f}', flush=True)
+      if FLAGS.profile_runtime:
+        runtime_totals['evaluation_seconds'] += (
+            time.perf_counter() - evaluation_started_at)
       next_evaluator_at = env_steps_done + eval_every
 
     # ---- RL representation metrics ----------------------------------------
     if env_steps_done >= next_metrics_frequent:
+      rl_metrics_started_at = time.perf_counter()
       if env_steps_done >= next_metrics_occasional:
         level = 'occasional'
         next_metrics_occasional = env_steps_done + 5 * metrics_every
@@ -2367,6 +2463,9 @@ def train_single_task(
 
       except Exception as e:
         print(f'  [rl_metrics] Warning: {e}', flush=True)
+      if FLAGS.profile_runtime:
+        runtime_totals['rl_metrics_seconds'] += (
+            time.perf_counter() - rl_metrics_started_at)
 
     # Intra-task periodic evaluation on all tasks seen so far
     if FLAGS.intra_eval_previous_tasks and env_steps_done >= next_eval_at:
@@ -2428,7 +2527,8 @@ def train_single_task(
                   if critic_mode == 'rbc_decomposed' else None),
               in_trajectory_negative_repeats=
                   FLAGS.in_trajectory_negative_repeats,
-              single_task=FLAGS.single_task)),
+              single_task=FLAGS.single_task,
+              goal_conditioning_mode=FLAGS.goal_conditioning_mode)),
           f'probe_data_task{task_id}_seed{seed}.npz',
       )
       os.makedirs(os.path.dirname(probe_path), exist_ok=True)
@@ -2615,7 +2715,8 @@ def train_single_task(
               phi_task_depth=FLAGS.phi_task_depth,
               in_trajectory_negative_repeats=
                   FLAGS.in_trajectory_negative_repeats,
-              single_task=FLAGS.single_task)),
+              single_task=FLAGS.single_task,
+              goal_conditioning_mode=FLAGS.goal_conditioning_mode)),
           f'pool_cosine_actor_task{task_id}.npy',
       )
       os.makedirs(os.path.dirname(mat_path), exist_ok=True)
@@ -2669,7 +2770,8 @@ def train_single_task(
                 phi_task_depth=FLAGS.phi_task_depth,
                 in_trajectory_negative_repeats=
                     FLAGS.in_trajectory_negative_repeats,
-                single_task=FLAGS.single_task)),
+                single_task=FLAGS.single_task,
+                goal_conditioning_mode=FLAGS.goal_conditioning_mode)),
             f'pool_cosine_critic_task{task_id}.npy',
         )
         os.makedirs(os.path.dirname(mat_path), exist_ok=True)
@@ -2751,6 +2853,12 @@ def train_single_task(
 
 def main(_):
   seed = FLAGS.seed
+
+  if FLAGS.goal_conditioning_mode == 'success_mechanism' and FLAGS.use_task_id:
+    raise ValueError(
+        'success_mechanism currently requires --nouse_task_id because the '
+        'historical TaskIDGymWrapper appends a non-contiguous task code to '
+        'the goal. The single-task validity cells already disable task IDs.')
 
   # Select task sequence
   if FLAGS.single_task:
@@ -3018,7 +3126,8 @@ def main(_):
               if FLAGS.critic_mode == 'rbc_decomposed' else None),
           in_trajectory_negative_repeats=
               FLAGS.in_trajectory_negative_repeats,
-          single_task=FLAGS.single_task)
+          single_task=FLAGS.single_task,
+          goal_conditioning_mode=FLAGS.goal_conditioning_mode)
       if os.path.exists(probe_path):
         start_task = probe_tid + 1  # resume from the NEXT task
         print(f'  [auto-resume] Found checkpoint for task {probe_tid} '
@@ -3044,9 +3153,10 @@ def main(_):
                       rbc_config=(
                           _rbc_identity_config()
                           if FLAGS.critic_mode == 'rbc_decomposed' else None),
-                      in_trajectory_negative_repeats=
-                          FLAGS.in_trajectory_negative_repeats,
-                      single_task=FLAGS.single_task)
+        in_trajectory_negative_repeats=
+            FLAGS.in_trajectory_negative_repeats,
+        single_task=FLAGS.single_task,
+        goal_conditioning_mode=FLAGS.goal_conditioning_mode)
     theta_base = ckpt['theta_base']
     pool.load_state_dict(ckpt['pool_vectors'])
     prev_q = ckpt['q_params']
@@ -3076,6 +3186,10 @@ def main(_):
   for task_id in range(start_task, num_tasks):
     env_name = task_sequence[task_id]
     params['env_name'] = env_name
+    goal_start, goal_end = goal_semantics.resolve_goal_slice(
+        FLAGS.goal_conditioning_mode, env_name)
+    params['start_index'] = goal_start
+    params['end_index'] = goal_end
 
     # Per-task override for the dynamics auxiliary weight.
     # If --dyn_aux_after_task0 is set (>= 0) and task_id >= 1, use that
@@ -3099,6 +3213,8 @@ def main(_):
     print(f'Actor mode: {FLAGS.actor_mode} | '
           f'Eval: {FLAGS.eval_episodes}ep, K={FLAGS.k_sample_k} | '
           f'20-task: {FLAGS.use_20_tasks}', flush=True)
+    print(f'Goal contract: {FLAGS.goal_conditioning_mode} '
+          f'(state[{goal_start}:{goal_end}])', flush=True)
     print(f'{"="*60}\n', flush=True)
 
     config = contrastive.ContrastiveConfig(**params)
@@ -3119,6 +3235,8 @@ def main(_):
                   'encoder_from_base': FLAGS.encoder_from_base,
                   'use_20_tasks': FLAGS.use_20_tasks,
                   'actor_mode': FLAGS.actor_mode,
+                  'goal_conditioning_mode': FLAGS.goal_conditioning_mode,
+                  'profile_runtime': FLAGS.profile_runtime,
                   'eval_episodes': FLAGS.eval_episodes,
                   'intra_eval_previous_tasks': FLAGS.intra_eval_previous_tasks,
                   'log_rl_metrics': FLAGS.log_rl_metrics,
@@ -3227,6 +3345,10 @@ def main(_):
                       FLAGS.counterfactual_oracle_interval_steps,
                   'counterfactual_oracle_num_anchors':
                       FLAGS.counterfactual_oracle_num_anchors,
+                  'counterfactual_oracle_condition_set':
+                      FLAGS.counterfactual_oracle_condition_set,
+                  'counterfactual_oracle_max_events':
+                      FLAGS.counterfactual_oracle_max_events,
                   'phase_gated_control': FLAGS.phase_gated_control,
                   'phase_gate_reach_mode': FLAGS.phase_gate_reach_mode,
                   'phase_gate_interaction_threshold':
@@ -3402,6 +3524,9 @@ def main(_):
         'composed_policy': composed_policy,
         'task_id': task_id,
         'env_name': env_name,
+        'goal_conditioning_mode': FLAGS.goal_conditioning_mode,
+        'goal_start_index': config.start_index,
+        'goal_end_index': config.end_index,
         'in_trajectory_negative_repeats':
             FLAGS.in_trajectory_negative_repeats,
     }
@@ -3435,7 +3560,8 @@ def main(_):
                   if FLAGS.critic_mode == 'rbc_decomposed' else None),
               in_trajectory_negative_repeats=
                   FLAGS.in_trajectory_negative_repeats,
-              single_task=FLAGS.single_task)
+              single_task=FLAGS.single_task,
+              goal_conditioning_mode=FLAGS.goal_conditioning_mode)
 
     # ---- configurable task-boundary evaluation ---------------------------
     if (
