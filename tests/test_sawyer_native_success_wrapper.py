@@ -38,8 +38,27 @@ def test_native_info_is_authoritative_and_preserves_diagnostics():
   assert done is False
   assert info['success'] == 1.0
   assert info['native_reward'] == 4.2
+  assert info['native_terminated'] is True
+  assert info['native_truncated'] is False
+  assert info['native_step_api'] == 'gym_4tuple'
   assert info['near_object'] == 0.8
   assert info['wrapper_success_mode'] == 'native_info'
+
+
+def test_gymnasium_five_tuple_is_normalized_for_acme():
+  environment = _DummyEnvironment()
+  sawyer_success.set_success_mode(environment, 'native_info')
+  observation, reward, done, info = sawyer_success.native_sparse_transition(
+      environment,
+      ('native_obs', 2.5, False, True,
+       {'success': 0.0, 'unscaled_reward': 2.5}))
+  assert observation == environment.observation
+  assert reward == 0.0
+  assert done is False
+  assert info['native_terminated'] is False
+  assert info['native_truncated'] is True
+  assert info['native_step_api'] == 'gymnasium_5tuple'
+  assert info['unscaled_reward'] == 2.5
 
 
 def test_native_mode_rejects_missing_or_nonbinary_success():

@@ -48,6 +48,19 @@ The corrected transition retains MetaWorld's shaped reward as
 for episode boundaries. The native mode adds neither a second simulator step
 nor a second `evaluate_state` call.
 
+The adapter accepts both step signatures used by supported installations:
+
+```text
+(observation, reward, done, info)
+(observation, reward, terminated, truncated, info)
+```
+
+It normalizes either form to the four-item API expected by the existing Acme
+stack and records `native_terminated`, `native_truncated`, and
+`native_step_api` in `info`. The warning that legacy Gym is unmaintained is not
+the runtime failure and does not justify a one-line import replacement here:
+the current Acme and wrapper stack still consumes Gym's four-item interface.
+
 The flag `--sawyer_success_mode` is propagated through training, evaluation,
 action-landscape environments, counterfactual environments, W&B configs, and
 checkpoint paths. Corrected checkpoints receive the suffix
