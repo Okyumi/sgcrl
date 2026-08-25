@@ -20,6 +20,17 @@ set -euo pipefail
 REPO_DIR="/scratch/yd2247/sgcrl"
 cd "$REPO_DIR"
 
+export SCRATCH="${SCRATCH:-/scratch/$(whoami)}"
+MINICONDA_ROOT="${MINICONDA_ROOT:-$SCRATCH/miniconda3}"
+module purge 2>/dev/null || true
+# shellcheck source=/dev/null
+source "${MINICONDA_ROOT}/etc/profile.d/conda.sh"
+eval "$(conda shell.bash hook)"
+conda activate contrastive_rl
+# shellcheck source=/dev/null
+source "${REPO_DIR}/set_up/torch_hpc_env.sh"
+export MUJOCO_GL=egl
+
 export CONFIG_SCRIPT="experiment_configs_goal_semantics.py"
 export CONFIG_INDEX_OFFSET=0
 export CONFIG_LIMIT=8

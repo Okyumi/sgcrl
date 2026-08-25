@@ -101,6 +101,11 @@ sbatch DRAFT_goal_wrapper_audit.sh
 
 All three array jobs (seeds 5, 6, and 7) must pass before V1.
 
+The V0 launcher requests one GPU even though it does no training. Torch CPU
+nodes have no `GL/osmesa.h`, so CPU-only jobs made `mujoco_py` compile the
+OSMesa shim and failed. With a GPU, `MUJOCO_GL=egl` uses the same headless
+path as the training jobs.
+
 ### V1: matched 1M goal-contract falsification
 
 V1 contains eight runs: Task 5/Task 8, seeds 5/6, and full-state/mechanism-only
@@ -200,7 +205,11 @@ preserve previous behavior.
   using `evaluator/success_rate` and `evaluator/env_steps`.
 - `experiment_configs_goal_semantics_promotion.py` and
   `DRAFT_goal_semantics_promotion.sh`: guarded six-run V2 promotion.
-- `DRAFT_goal_wrapper_audit.sh`: CPU-only V0 array.
+- `DRAFT_goal_wrapper_audit.sh`: V0 array; requests one GPU so `MUJOCO_GL=egl`
+  does not fall back to compiling OSMesa.
+- `DRAFT_goal_semantics.sh`: activates `contrastive_rl` and
+  `set_up/torch_hpc_env.sh` before the dependency-light preflight test, then
+  execs `DRAFT.sh`.
 - `tests/test_goal_semantics.py`: dependency-light contract, metric, config,
   and promotion-guard tests.
 
@@ -233,8 +242,10 @@ Primary performance keys are `evaluator/success_rate` and
 - V1 enumeration: exactly 8 matched configs.
 - V2 enumeration under the explicit guard: exactly 6 configs.
 - The full V0 MuJoCo/MetaWorld audit cannot run in this lightweight workspace;
-  the CPU launcher runs it in the project's `contrastive_rl` Torch environment
-  and fails closed if native semantics or expert solvability do not validate.
+  the CPU launcher runs it in   the project's `contrastive_rl` Torch environment (one GPU for EGL; no
+  training) and fails closed if native semantics or expert solvability do not
+  validate. V1 activates that same environment before `tests/test_goal_semantics.py`
+  so the preflight is not run with login-node base Python.
 
 ## Known limitations
 
