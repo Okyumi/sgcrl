@@ -12,7 +12,7 @@ from experiment_configs_native_success_wrapper import METHODS, SEEDS
 def build_configs():
   if os.environ.get('NATIVE_SUCCESS_WRAPPER_PROMOTED', '').lower() != 'true':
     raise ValueError(
-        'Set NATIVE_SUCCESS_WRAPPER_PROMOTED=true only after the V3 positive '
+        'Set NATIVE_SUCCESS_WRAPPER_PROMOTED=true only after the V4 positive '
         'controls and ten-task smoke matrix pass.')
   configs = []
   for method, actor_mode, critic_mode in METHODS:

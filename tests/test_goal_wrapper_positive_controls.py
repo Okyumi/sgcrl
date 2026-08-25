@@ -28,6 +28,9 @@ def _condition(
       'positive_reward_success_mean': positive_success,
       'native_axis_success_mean': native_axis_success,
       'fixed_axis_success_mean': fixed_axis_success,
+      'native_info_axis_mismatch_fraction_mean': 0.0,
+      'reward_native_info_mismatch_fraction_mean': 0.0,
+      'evaluate_state_fallback_fraction_mean': 1.0,
       'trajectory_linf_error_vs_native_max': trajectory_error,
   }
 
@@ -92,6 +95,8 @@ def test_native_positive_control_failure_takes_precedence():
 def test_native_info_axis_disagreement_is_audit_error():
   summary = _summary()
   summary['conditions']['native_official']['native_axis_success_mean'] = 0.0
+  summary['conditions']['native_official'][
+      'native_info_axis_mismatch_fraction_mean'] = 1.0
   result = _classify(summary)
   assert result['decision'] == 'audit_metric_inconsistent'
 
@@ -129,7 +134,7 @@ def test_config_matrix():
   assert all(config['episodes'] == 50 for config in configs)
   assert all(config['max_steps'] == 150 for config in configs)
   assert all(config['wandb_group'] ==
-             'GOAL-WRAPPER-POSITIVE-CONTROLS-V3'
+             'GOAL-WRAPPER-POSITIVE-CONTROLS-V4'
              for config in configs)
 
 
@@ -143,7 +148,7 @@ def test_three_seed_aggregation_blocks_promotion_on_confirmed_issue():
       summary['classification'] = _classify(summary)
       results.append({'env_name': env_name, 'summary': summary})
     payloads.append({
-        'audit_version': 3,
+        'audit_version': 4,
         'seed': seed,
         'results': results,
     })

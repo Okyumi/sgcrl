@@ -1,7 +1,7 @@
 # Native-success wrapper repair and efficient 10-task revalidation
 
 Date: 2026-08-25  
-Status: implemented; V3 positive controls and the 100k/task smoke stage must
+Status: implemented; V4 positive controls and the 100k/task smoke stage must
 pass before full-horizon promotion.
 
 ## Motivation
@@ -48,7 +48,8 @@ The corrected transition retains MetaWorld's shaped reward as
 for episode boundaries. The native mode adds neither a second simulator step
 nor a second `evaluate_state` call.
 
-The adapter accepts both step signatures used by supported installations:
+The adapter accepts both standard step signatures used by supported
+installations:
 
 ```text
 (observation, reward, done, info)
@@ -68,6 +69,14 @@ already-advanced observation and executed action. This recomputes only reward
 and success; it does **not** take another simulator step. A direct
 `(reward, info)` return is supported as well, and `native_step_api` records
 which path was used.
+
+The V3 controls exposed a subtle bug in that fallback. It passed the custom
+22-dimensional goal-conditioned observation to MetaWorld's
+`evaluate_state`, although MetaWorld expects its own raw observation. That
+made the physical replay and exact success-axis proxy succeed while the
+wrapper reward remained zero. V4 explicitly calls the first MetaWorld parent
+class's `_get_obs` and `evaluate_state`, so method overriding cannot substitute
+the wrapper observation at this boundary.
 
 Acme's interface is already used at the correct boundary:
 `contrastive/utils.py` wraps the raw Gym/MetaWorld environment with Acme's
@@ -98,7 +107,7 @@ representation experiments. It is deliberately not used in the 10-task paper
 revalidation because its semantic index differs across tasks; those runs keep
 the original `full_state` input architecture and change only reward semantics.
 
-The positive-control audit is now version 3. It logs:
+The positive-control audit is now version 4. It logs:
 
 - authoritative native `info["success"]`;
 - corrected wrapper positive reward;
@@ -106,11 +115,27 @@ The positive-control audit is now version 3. It logs:
 - full 3-D distance, labeled descriptive rather than authoritative;
 - native/fixed target distance on the official success axis;
 - paired reset, random-vector, and replay-trajectory errors.
+- per-step disagreement between MetaWorld `info["success"]` and the exact
+  success-axis proxy;
+- per-step disagreement between wrapper positive reward and native success;
+- whether the `evaluate_state` compatibility fallback was exercised;
+- policy-trajectory error as well as exact-action replay error.
 
-The evaluator refuses V2 files because their full-3D proxy cannot authorize
-promotion. It distinguishes `audit_metric_inconsistent`,
+The evaluator refuses V2 and V3 files because neither can authorize promotion:
+V2 used a full-3D proxy and V3 evaluated the wrong observation in the
+non-standard parent-step fallback. It distinguishes `audit_metric_inconsistent`,
 `native_positive_control_failed`, `custom_wrapper_invalid`,
 `fixed_global_target_misaligned`, `fixed_target_valid`, and `inconclusive`.
+
+The submitted V3 results nevertheless contain useful physical evidence. On
+all three seeds, replay trajectories match the native environment exactly.
+The historical fixed target differs from the native target by only about
+$0.00495$ on Task 5's success coordinate (threshold $0.02$) and by $0$ on
+Task 8's success coordinate (threshold $0.05$). Thus V3 does **not** confirm
+that the fixed target is physically invalid; it identifies an audit/reward
+adapter inconsistency that V4 must resolve. Task 5's independently generated
+wrapper-policy behavior remains a separate check, which V4 isolates with its
+policy-trajectory metric.
 
 ## Experiment sequence
 
@@ -126,7 +151,7 @@ Then aggregate them:
 
 ```bash
 python scripts/evaluate_goal_wrapper_positive_controls.py \
-  logs/goal_validity/positive_controls_v3_seed{5,6,7}.json \
+  logs/goal_validity/positive_controls_v4_seed{5,6,7}.json \
   --strict-promotion
 ```
 
@@ -197,8 +222,8 @@ without mixing corrected and legacy rewards.
 - `run_continual_contrastive.py`: flag, all environment sites, W&B manifest,
   console manifest, checkpoint identity, and checkpoint metadata.
 - `contrastive/goal_semantics.py`: official success-axis metadata and helpers.
-- `scripts/audit_sawyer_goal_positive_controls.py`: V3 authoritative metrics.
-- `scripts/evaluate_goal_wrapper_positive_controls.py`: V3-only aggregation
+- `scripts/audit_sawyer_goal_positive_controls.py`: V4 authoritative metrics.
+- `scripts/evaluate_goal_wrapper_positive_controls.py`: V4-only aggregation
   and corrected classifications.
 - `experiment_configs_native_success_wrapper.py`: 100k/task smoke matrix.
 - `experiment_configs_native_success_wrapper_promotion.py`: guarded 8M/task
@@ -212,11 +237,14 @@ without mixing corrected and legacy rewards.
 ## Interpretation and limitations
 
 This repair can establish whether Tasks 5 and 8 failed partly because the
-continual wrapper supplied the wrong sparse reward. It does not retroactively
+continual wrapper supplied the wrong sparse reward. V3 does not yet establish
+that claim, because its fallback computed MetaWorld success from the wrong
+observation. The V4 positive controls are the promotion boundary. This work
+does not retroactively
 invalidate comparisons made entirely under the legacy wrapper: those runs
 still compare algorithms under the same historical contract. However, if the
 corrected full-horizon ranking changes materially, benchmark-faithful claims
-should use the V2 revalidation and describe the legacy result as a controlled
+should use the guarded full-horizon revalidation and describe the legacy result as a controlled
 custom-goal benchmark rather than native MetaWorld success.
 
 MetaWorld's native success is authoritative for reward, while the exposed

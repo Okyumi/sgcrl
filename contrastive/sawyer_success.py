@@ -20,22 +20,38 @@ def _evaluate_state_after_step(environment, action, native_result):
     raise RuntimeError(
         'MetaWorld returned a non-standard step result and no action was '
         'provided for the evaluate_state fallback.')
-  evaluate_state = getattr(environment, 'evaluate_state', None)
-  if not callable(evaluate_state):
-    raise RuntimeError(
-        'MetaWorld returned a non-standard step result and the environment '
-        'does not expose evaluate_state().')
-  evaluation = evaluate_state(environment._get_obs(), action)
+  native_parent = None
+  for parent in type(environment).__mro__[1:]:
+    if (parent.__module__.startswith('metaworld.')
+        and hasattr(parent, '_get_obs')
+        and hasattr(parent, 'evaluate_state')):
+      native_parent = parent
+      break
+  if native_parent is not None:
+    native_observation = native_parent._get_obs(environment)
+    evaluation = native_parent.evaluate_state(
+        environment, native_observation, action)
+    evaluation_source = native_parent.__name__
+  else:
+    evaluate_state = getattr(environment, 'evaluate_state', None)
+    if not callable(evaluate_state):
+      raise RuntimeError(
+          'MetaWorld returned a non-standard step result and the environment '
+          'does not expose evaluate_state().')
+    native_observation = environment._get_obs()
+    evaluation = evaluate_state(native_observation, action)
+    evaluation_source = type(environment).__name__
   if not isinstance(evaluation, tuple) or len(evaluation) != 2:
     raise RuntimeError(
-        'MetaWorld evaluate_state() must return (reward, info); got '
+        f'{evaluation_source}.evaluate_state() must return (reward, info); got '
         f'{type(evaluation).__name__}.')
   native_reward, native_info = evaluation
   result_type = type(native_result).__name__
   result_length = (len(native_result)
                    if hasattr(native_result, '__len__') else -1)
   return (native_reward, native_info, False, False,
-          f'evaluate_state_fallback:{result_type}:{result_length}')
+          f'evaluate_state_fallback:{evaluation_source}:'
+          f'{result_type}:{result_length}')
 
 
 def native_sparse_transition(environment, native_result, action=None):

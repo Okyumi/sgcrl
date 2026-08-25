@@ -22,10 +22,10 @@ def _load(paths: Sequence[str]) -> list[dict[str, Any]]:
   for path_string in paths:
     path = Path(path_string)
     payload = json.loads(path.read_text(encoding='utf-8'))
-    if int(payload.get('audit_version', -1)) != 3:
+    if int(payload.get('audit_version', -1)) != 4:
       raise ValueError(
-          f'{path} is not a version-3 native-success positive-control audit; '
-          'version-2 full-3D proxy results cannot be promoted.')
+          f'{path} is not a version-4 native-success positive-control audit; '
+          'older proxy/adapter results cannot be promoted.')
     payload['_source'] = str(path)
     payloads.append(payload)
   return payloads
@@ -67,9 +67,24 @@ def aggregate(
           'wrapper_native_success': summary['conditions'][
               'wrapper_native_target_policy'][
                   'positive_reward_success_mean'],
+          'wrapper_native_info_success': summary['conditions'][
+              'wrapper_native_target_policy']['native_info_success_mean'],
+          'wrapper_native_axis_success': summary['conditions'][
+              'wrapper_native_target_policy']['native_axis_success_mean'],
+          'wrapper_native_replay_reward_success': summary['conditions'][
+              'wrapper_native_target_replay'][
+                  'positive_reward_success_mean'],
+          'wrapper_native_replay_info_success': summary['conditions'][
+              'wrapper_native_target_replay']['native_info_success_mean'],
+          'wrapper_native_replay_axis_success': summary['conditions'][
+              'wrapper_native_target_replay']['native_axis_success_mean'],
           'wrapper_fixed_success': summary['conditions'][
               'wrapper_fixed_target_policy'][
                   'positive_reward_success_mean'],
+          'wrapper_fixed_info_success': summary['conditions'][
+              'wrapper_fixed_target_policy']['native_info_success_mean'],
+          'wrapper_fixed_axis_success': summary['conditions'][
+              'wrapper_fixed_target_policy']['fixed_axis_success_mean'],
           'fixed_replay_native_endpoint_success': summary['conditions'][
               'wrapper_fixed_target_replay']['native_axis_success_mean'],
           'fixed_replay_fixed_endpoint_success': summary['conditions'][
@@ -87,9 +102,32 @@ def aggregate(
           'native_replay_trajectory_error': summary['conditions'][
               'wrapper_native_target_replay'][
                   'trajectory_linf_error_vs_native_max'],
+          'native_policy_trajectory_error': summary['conditions'][
+              'wrapper_native_target_policy'][
+                  'trajectory_linf_error_vs_native_max'],
           'fixed_replay_trajectory_error': summary['conditions'][
               'wrapper_fixed_target_replay'][
                   'trajectory_linf_error_vs_native_max'],
+          'native_info_axis_mismatch': max(
+              summary['conditions'][condition][
+                  'native_info_axis_mismatch_fraction_mean']
+              for condition in summary['conditions']),
+          'wrapper_reward_info_mismatch': max(
+              summary['conditions'][condition][
+                  'reward_native_info_mismatch_fraction_mean']
+              for condition in (
+                  'wrapper_native_target_policy',
+                  'wrapper_native_target_replay',
+                  'wrapper_fixed_target_policy',
+                  'wrapper_fixed_target_replay')),
+          'wrapper_evaluate_state_fallback_fraction': max(
+              summary['conditions'][condition][
+                  'evaluate_state_fallback_fraction_mean']
+              for condition in (
+                  'wrapper_native_target_policy',
+                  'wrapper_native_target_replay',
+                  'wrapper_fixed_target_policy',
+                  'wrapper_fixed_target_replay')),
       })
     decisions = Counter(row['decision'] for row in seed_rows)
     fixed_misalignment_confirmed = (
@@ -108,7 +146,14 @@ def aggregate(
             for key in (
                 'native_success',
                 'wrapper_native_success',
+                'wrapper_native_info_success',
+                'wrapper_native_axis_success',
+                'wrapper_native_replay_reward_success',
+                'wrapper_native_replay_info_success',
+                'wrapper_native_replay_axis_success',
                 'wrapper_fixed_success',
+                'wrapper_fixed_info_success',
+                'wrapper_fixed_axis_success',
                 'fixed_replay_native_endpoint_success',
                 'fixed_replay_fixed_endpoint_success',
                 'fixed_native_target_distance',
@@ -122,7 +167,11 @@ def aggregate(
                 'rand_vec_pair_error',
                 'initial_mechanism_pair_error',
                 'native_replay_trajectory_error',
+                'native_policy_trajectory_error',
                 'fixed_replay_trajectory_error',
+                'native_info_axis_mismatch',
+                'wrapper_reward_info_mismatch',
+                'wrapper_evaluate_state_fallback_fraction',
             )
         },
     }
@@ -167,10 +216,11 @@ def _markdown(report: dict[str, Any]) -> str:
       '',
       f'Conclusion: **{report["conclusion"]}**',
       '',
-      '| Task | Native expert | Wrapper/native target | Wrapper/fixed target | '
-      'Fixed replay reaches native axis | Fixed replay reaches fixed axis '
-      '| Decision |',
-      '|---|---:|---:|---:|---:|---:|---|',
+      '| Task | Native expert | Native wrapper policy R/I/A | '
+      'Native wrapper replay R/I/A | Fixed wrapper policy R/I/A | '
+      'Fixed replay reaches native/fixed axis | Max info/axis mismatch | '
+      'Max reward/info mismatch | Decision |',
+      '|---|---:|---:|---:|---:|---:|---:|---:|---|',
   ]
   for task in report['tasks'].values():
     means = task['means']
@@ -179,12 +229,24 @@ def _markdown(report: dict[str, Any]) -> str:
         for name, count in sorted(task['decision_counts'].items()))
     lines.append(
         f'| {task["label"]} | {means["native_success"]:.3f} | '
-        f'{means["wrapper_native_success"]:.3f} | '
-        f'{means["wrapper_fixed_success"]:.3f} | '
-        f'{means["fixed_replay_native_endpoint_success"]:.3f} | '
+        f'{means["wrapper_native_success"]:.3f}/'
+        f'{means["wrapper_native_info_success"]:.3f}/'
+        f'{means["wrapper_native_axis_success"]:.3f} | '
+        f'{means["wrapper_native_replay_reward_success"]:.3f}/'
+        f'{means["wrapper_native_replay_info_success"]:.3f}/'
+        f'{means["wrapper_native_replay_axis_success"]:.3f} | '
+        f'{means["wrapper_fixed_success"]:.3f}/'
+        f'{means["wrapper_fixed_info_success"]:.3f}/'
+        f'{means["wrapper_fixed_axis_success"]:.3f} | '
+        f'{means["fixed_replay_native_endpoint_success"]:.3f}/'
         f'{means["fixed_replay_fixed_endpoint_success"]:.3f} | '
+        f'{task["maxima"]["native_info_axis_mismatch"]:.3f} | '
+        f'{task["maxima"]["wrapper_reward_info_mismatch"]:.3f} | '
         f'{decisions} |')
   lines.extend([
+      '',
+      '`R/I/A` denotes wrapper positive-reward success, MetaWorld '
+      '`info["success"]`, and the exact task-axis success proxy.',
       '',
       f'Promotion allowed: **{report["promotion_allowed"]}**',
       '',
@@ -202,10 +264,10 @@ def main() -> None:
   parser.add_argument('inputs', nargs='+')
   parser.add_argument(
       '--output',
-      default='logs/goal_validity/positive_controls_v3_summary.json')
+      default='logs/goal_validity/positive_controls_v4_summary.json')
   parser.add_argument(
       '--markdown-output',
-      default='logs/goal_validity/positive_controls_v3_summary.md')
+      default='logs/goal_validity/positive_controls_v4_summary.md')
   parser.add_argument('--strict-promotion', action='store_true')
   args = parser.parse_args()
 

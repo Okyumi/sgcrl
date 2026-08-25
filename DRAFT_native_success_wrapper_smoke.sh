@@ -18,7 +18,7 @@
 # Prerequisite:
 #   sbatch DRAFT_goal_wrapper_positive_controls.sh
 #   python scripts/evaluate_goal_wrapper_positive_controls.py \
-#     logs/goal_validity/positive_controls_v3_seed{5,6,7}.json \
+#     logs/goal_validity/positive_controls_v4_seed{5,6,7}.json \
 #     --strict-promotion
 #
 # Launch:

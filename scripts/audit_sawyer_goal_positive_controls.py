@@ -199,6 +199,9 @@ def _rollout(
       trajectory[-1], fixed_target, env_name)]
   native_info_success = 0.0
   positive_reward_success = 0.0
+  native_info_axis_mismatch_count = 0
+  reward_native_info_mismatch_count = 0
+  evaluate_state_fallback_count = 0
   action_clip_count = 0
   native_rewards = []
   wrapper_rewards = []
@@ -231,6 +234,11 @@ def _rollout(
     native_info_success = max(native_info_success, step_native_success)
     positive_reward_success = max(
         positive_reward_success, float(reward > 0.0))
+    reward_native_info_mismatch_count += int(
+        float(reward > 0.0) != step_native_success)
+    evaluate_state_fallback_count += int(
+        str(info.get('native_step_api', '')).startswith(
+            'evaluate_state_fallback:'))
 
     mechanism = _mechanism_position(environment)
     trajectory.append(mechanism)
@@ -240,6 +248,12 @@ def _rollout(
         mechanism, native_target, env_name))
     fixed_axis_distances.append(goal_semantics.success_axis_distance(
         mechanism, fixed_target, env_name))
+    active_target = _as_float_array(environment._target_pos).reshape(-1)[-3:]
+    active_axis_success = float(
+        goal_semantics.success_axis_distance(
+            mechanism, active_target, env_name) <= success_threshold)
+    native_info_axis_mismatch_count += int(
+        step_native_success != active_axis_success)
     if done:
       break
 
@@ -255,6 +269,12 @@ def _rollout(
       'steps': len(actions),
       'native_info_success': native_info_success,
       'positive_reward_success': positive_reward_success,
+      'native_info_axis_mismatch_fraction': (
+          native_info_axis_mismatch_count / max(len(actions), 1)),
+      'reward_native_info_mismatch_fraction': (
+          reward_native_info_mismatch_count / max(len(actions), 1)),
+      'evaluate_state_fallback_fraction': (
+          evaluate_state_fallback_count / max(len(actions), 1)),
       'native_axis_success': float(
           min(native_axis_distances) <= success_threshold),
       'fixed_axis_success': float(
@@ -338,9 +358,25 @@ def classify_task(
       (wrapper_fixed_replay, 'fixed_axis_success_mean'),
   )
   native_metric_consistent = all(
-      abs(condition['native_info_success_mean'] - condition[axis_key])
+      condition.get(
+          'native_info_axis_mismatch_fraction_mean',
+          abs(condition['native_info_success_mean'] - condition[axis_key]))
       <= target_tolerance
       for condition, axis_key in success_metric_pairs)
+  def _reward_consistent(condition):
+    return condition.get(
+        'reward_native_info_mismatch_fraction_mean',
+        abs(condition['positive_reward_success_mean']
+            - condition['native_info_success_mean'])) <= target_tolerance
+
+  wrapper_native_reward_consistent = all(
+      _reward_consistent(condition)
+      for condition in (wrapper_native, wrapper_native_replay))
+  wrapper_fixed_reward_consistent = all(
+      _reward_consistent(condition)
+      for condition in (wrapper_fixed, wrapper_fixed_replay))
+  wrapper_reward_consistent = (
+      wrapper_native_reward_consistent and wrapper_fixed_reward_consistent)
   native_control_pass = (
       native_metric_consistent
       and native['native_info_success_mean'] >= expert_success_min
@@ -361,6 +397,11 @@ def classify_task(
       trajectory_tolerance
       and wrapper_native_replay[
           'trajectory_linf_error_vs_native_max'] <= trajectory_tolerance)
+  wrapper_native_control_pass = (
+      wrapper_native_control_pass
+      and wrapper_native_reward_consistent
+      and wrapper_native['trajectory_linf_error_vs_native_max'] <=
+      trajectory_tolerance)
   fixed_target_valid = (
       wrapper_fixed['positive_reward_success_mean'] >= expert_success_min
       and wrapper_fixed['native_info_success_mean'] >= expert_success_min
@@ -370,7 +411,8 @@ def classify_task(
       and wrapper_fixed_replay['native_info_success_mean'] >=
       expert_success_min
       and wrapper_fixed_replay['fixed_axis_success_mean'] >=
-      expert_success_min)
+      expert_success_min
+      and wrapper_fixed_reward_consistent)
   fixed_replay_reaches_native_endpoint = (
       wrapper_fixed_replay['native_axis_success_mean'] >=
       expert_success_min
@@ -388,7 +430,7 @@ def classify_task(
       and fixed_replay_reaches_native_endpoint
       and meaningful_target_mismatch)
 
-  if not native_metric_consistent:
+  if not native_metric_consistent or not wrapper_reward_consistent:
     decision = 'audit_metric_inconsistent'
   elif not native_control_pass:
     decision = 'native_positive_control_failed'
@@ -405,6 +447,10 @@ def classify_task(
       'decision': decision,
       'decision_code': DECISION_CODES[decision],
       'native_metric_consistent': native_metric_consistent,
+      'wrapper_reward_consistent': wrapper_reward_consistent,
+      'wrapper_native_reward_consistent':
+          wrapper_native_reward_consistent,
+      'wrapper_fixed_reward_consistent': wrapper_fixed_reward_consistent,
       'native_control_pass': native_control_pass,
       'wrapper_native_control_pass': wrapper_native_control_pass,
       'fixed_target_valid': fixed_target_valid,
@@ -579,7 +625,8 @@ def audit_task(
           native_target=native_target,
           fixed_target=fixed_goal,
           env_name=env_name,
-          success_threshold=float(metadata['success_threshold']))
+          success_threshold=float(metadata['success_threshold']),
+          reference_trajectory=native_trajectory)
 
       _set_task_and_reset(wrapper_fixed, task)
       wrapper_fixed_rand_vec = _last_rand_vec(wrapper_fixed)
@@ -596,7 +643,8 @@ def audit_task(
           native_target=native_target,
           fixed_target=fixed_goal,
           env_name=env_name,
-          success_threshold=float(metadata['success_threshold']))
+          success_threshold=float(metadata['success_threshold']),
+          reference_trajectory=native_trajectory)
 
       _set_task_and_reset(wrapper_native, task)
       wrapper_native_replay_result = _rollout(
@@ -704,6 +752,12 @@ def _wandb_metrics(payload: dict[str, Any]) -> dict[str, float]:
             classification['native_control_pass']),
         prefix + 'native_metric_consistent': float(
             classification['native_metric_consistent']),
+        prefix + 'wrapper_reward_consistent': float(
+            classification['wrapper_reward_consistent']),
+        prefix + 'wrapper_native_reward_consistent': float(
+            classification['wrapper_native_reward_consistent']),
+        prefix + 'wrapper_fixed_reward_consistent': float(
+            classification['wrapper_fixed_reward_consistent']),
         prefix + 'wrapper_native_control_pass': float(
             classification['wrapper_native_control_pass']),
         prefix + 'fixed_target_valid': float(
@@ -733,10 +787,10 @@ def main() -> None:
   parser.add_argument('--target-tolerance', type=float, default=1e-6)
   parser.add_argument(
       '--output',
-      default='logs/goal_validity/positive_controls_v3_seed5.json')
+      default='logs/goal_validity/positive_controls_v4_seed5.json')
   parser.add_argument('--wandb-project', default='')
   parser.add_argument(
-      '--wandb-group', default='GOAL-WRAPPER-POSITIVE-CONTROLS-V3')
+      '--wandb-group', default='GOAL-WRAPPER-POSITIVE-CONTROLS-V4')
   parser.add_argument(
       '--strict-current-wrapper', action='store_true',
       help='Exit nonzero unless the historical fixed-target wrapper validates.')
@@ -753,7 +807,7 @@ def main() -> None:
       trajectory_tolerance=args.trajectory_tolerance,
       target_tolerance=args.target_tolerance) for task in tasks]
   payload = {
-      'audit_version': 3,
+      'audit_version': 4,
       'success_semantics': 'metaworld_info_success_and_native_axis_proxy',
       'seed': args.seed,
       'episodes_per_task': args.episodes,
@@ -801,7 +855,7 @@ def main() -> None:
         project=args.wandb_project,
         group=args.wandb_group,
         config={
-            'audit_version': 3,
+            'audit_version': 4,
             'success_semantics':
                 'metaworld_info_success_and_native_axis_proxy',
             'seed': args.seed,

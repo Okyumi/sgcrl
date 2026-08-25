@@ -27,6 +27,28 @@ class _DummyEnvironment:
     return 7.5, {'success': 1.0, 'fallback_metric': 3.0}
 
 
+class _FakeMetaWorldParent:
+
+  def _get_obs(self):
+    return ('native', 'metaworld', 'observation')
+
+  def evaluate_state(self, observation, action):
+    assert observation == ('native', 'metaworld', 'observation')
+    return 9.0, {'success': 1.0, 'parent_observation_used': 1.0}
+
+
+_FakeMetaWorldParent.__module__ = 'metaworld.fake'
+
+
+class _CustomGoalWrapper(_FakeMetaWorldParent):
+
+  def __init__(self):
+    self._sawyer_success_mode = 'native_info'
+
+  def _get_obs(self):
+    return ('custom', '22d', 'goal', 'observation')
+
+
 def test_legacy_is_default_and_returns_control_to_historical_predicate():
   environment = _DummyEnvironment()
   assert sawyer_success.native_sparse_transition(
@@ -79,7 +101,19 @@ def test_none_parent_result_uses_evaluate_state_without_second_step():
   assert environment.last_evaluated_action == action
   assert info['native_reward'] == 7.5
   assert info['fallback_metric'] == 3.0
-  assert info['native_step_api'] == 'evaluate_state_fallback:NoneType:-1'
+  assert info['native_step_api'] == (
+      'evaluate_state_fallback:_DummyEnvironment:NoneType:-1')
+
+
+def test_fallback_uses_metaworld_parent_observation_not_custom_goal_obs():
+  environment = _CustomGoalWrapper()
+  _, reward, _, info = sawyer_success.native_sparse_transition(
+      environment, None, action=('executed', 'action'))
+  assert reward == 1.0
+  assert info['native_reward'] == 9.0
+  assert info['parent_observation_used'] == 1.0
+  assert info['native_step_api'] == (
+      'evaluate_state_fallback:_FakeMetaWorldParent:NoneType:-1')
 
 
 def test_reward_info_two_tuple_is_supported():
