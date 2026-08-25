@@ -21,11 +21,13 @@ SUCCESS_MECHANISM_TASKS = (
 MECHANISM_STATE_SLICE = slice(4, 7)
 VALIDITY_TASKS = {
     'sawyer_handle_press_side': {
+        'native_env_name': 'handle-press-side-v2',
         'fixed_goal': np.asarray([-0.07, 0.68, 0.07], dtype=np.float32),
         'success_threshold': 0.02,
         'policy_class': 'SawyerHandlePressSideV2Policy',
     },
     'sawyer_window_close': {
+        'native_env_name': 'window-close-v2',
         'fixed_goal': np.asarray([0.0, 0.80, 0.20], dtype=np.float32),
         'success_threshold': 0.05,
         'policy_class': 'SawyerWindowCloseV2Policy',
