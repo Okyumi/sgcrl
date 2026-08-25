@@ -16,9 +16,15 @@ class _DummyEnvironment:
 
   def __init__(self):
     self.observation = ('custom', 'goal', 'observation')
+    self.last_evaluated_action = None
 
   def _get_obs(self):
     return self.observation
+
+  def evaluate_state(self, observation, action):
+    assert observation == self.observation
+    self.last_evaluated_action = action
+    return 7.5, {'success': 1.0, 'fallback_metric': 3.0}
 
 
 def test_legacy_is_default_and_returns_control_to_historical_predicate():
@@ -61,6 +67,31 @@ def test_gymnasium_five_tuple_is_normalized_for_acme():
   assert info['unscaled_reward'] == 2.5
 
 
+def test_none_parent_result_uses_evaluate_state_without_second_step():
+  environment = _DummyEnvironment()
+  sawyer_success.set_success_mode(environment, 'native_info')
+  action = ('the', 'executed', 'action')
+  observation, reward, done, info = sawyer_success.native_sparse_transition(
+      environment, None, action=action)
+  assert observation == environment.observation
+  assert reward == 1.0
+  assert done is False
+  assert environment.last_evaluated_action == action
+  assert info['native_reward'] == 7.5
+  assert info['fallback_metric'] == 3.0
+  assert info['native_step_api'] == 'evaluate_state_fallback:NoneType:-1'
+
+
+def test_reward_info_two_tuple_is_supported():
+  environment = _DummyEnvironment()
+  sawyer_success.set_success_mode(environment, 'native_info')
+  _, reward, _, info = sawyer_success.native_sparse_transition(
+      environment, (1.25, {'success': 0.0}))
+  assert reward == 0.0
+  assert info['native_reward'] == 1.25
+  assert info['native_step_api'] == 'metaworld_reward_info_2tuple'
+
+
 def test_native_mode_rejects_missing_or_nonbinary_success():
   environment = _DummyEnvironment()
   sawyer_success.set_success_mode(environment, 'native_info')
@@ -78,7 +109,7 @@ def test_all_custom_sawyer_steps_offer_native_mode():
   source = (REPO_ROOT / 'env_utils.py').read_text(encoding='utf-8')
   assert source.count('native_result = super(Sawyer') == 13
   assert source.count(
-      'native_sparse = _native_sparse_transition(self, native_result)') == 13
+      'native_sparse = _native_sparse_transition(self, native_result, action)') == 13
   assert "sawyer_success_mode='legacy_distance'" in source
 
 

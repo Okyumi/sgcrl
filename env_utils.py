@@ -39,7 +39,7 @@ def _set_sawyer_success_mode(environment, success_mode):
   sawyer_success.set_success_mode(environment, success_mode)
 
 
-def _native_sparse_transition(environment, native_result):
+def _native_sparse_transition(environment, native_result, action):
   """Convert MetaWorld's authoritative success signal to a sparse reward.
 
   Returns ``None`` in legacy mode so each wrapper can execute its historical
@@ -47,7 +47,8 @@ def _native_sparse_transition(environment, native_result):
   reuses the already-computed parent transition, so it adds no simulator step
   or extra ``evaluate_state`` call.
   """
-  return sawyer_success.native_sparse_transition(environment, native_result)
+  return sawyer_success.native_sparse_transition(
+      environment, native_result, action=action)
 
 
 class TaskIDGymWrapper(gym.Wrapper):
@@ -244,7 +245,7 @@ class SawyerBin(
 
   def step(self, action):
     native_result = super(SawyerBin, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     obj_pos = self._get_pos_objects()
@@ -317,7 +318,7 @@ class SawyerBox(
 
   def step(self, action):
     native_result = super(SawyerBox, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     obj_pos = self._get_pos_objects()
@@ -392,7 +393,7 @@ class SawyerPeg(
 
   def step(self, action):
     native_result = super(SawyerPeg, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     obj_head = self._get_site_pos("pegHead")
@@ -463,7 +464,7 @@ class SawyerPushBack(
 
   def step(self, action):
     native_result = super(SawyerPushBack, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     obj_pos = self._get_pos_objects()
@@ -539,7 +540,7 @@ class SawyerHammer(
 
   def step(self, action):
     native_result = super(SawyerHammer, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     pos_objects = self._get_pos_objects()
@@ -610,7 +611,7 @@ class SawyerPushWall(
 
   def step(self, action):
     native_result = super(SawyerPushWall, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     obj_pos = self._get_pos_objects()
@@ -679,7 +680,7 @@ class SawyerFaucetClose(
 
   def step(self, action):
     native_result = super(SawyerFaucetClose, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     handle_pos = self._get_pos_objects()
@@ -750,7 +751,7 @@ class SawyerStickPull(
 
   def step(self, action):
     native_result = super(SawyerStickPull, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     pos_objects = self._get_pos_objects()
@@ -820,7 +821,7 @@ class SawyerHandlePressSide(
 
   def step(self, action):
     native_result = super(SawyerHandlePressSide, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     handle_pos = self._get_pos_objects()
@@ -889,7 +890,7 @@ class SawyerPush(
 
   def step(self, action):
     native_result = super(SawyerPush, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     obj_pos = self._get_pos_objects()
@@ -958,7 +959,7 @@ class SawyerShelfPlace(
 
   def step(self, action):
     native_result = super(SawyerShelfPlace, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     obj_pos = self._get_pos_objects()
@@ -1028,7 +1029,7 @@ class SawyerWindowClose(
 
   def step(self, action):
     native_result = super(SawyerWindowClose, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     handle_pos = self._get_pos_objects()
@@ -1098,7 +1099,7 @@ class SawyerPegUnplugSide(
 
   def step(self, action):
     native_result = super(SawyerPegUnplugSide, self).step(action)
-    native_sparse = _native_sparse_transition(self, native_result)
+    native_sparse = _native_sparse_transition(self, native_result, action)
     if native_sparse is not None:
       return native_sparse
     peg_pos = self._get_pos_objects()

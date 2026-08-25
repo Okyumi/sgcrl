@@ -61,6 +61,22 @@ stack and records `native_terminated`, `native_truncated`, and
 the runtime failure and does not justify a one-line import replacement here:
 the current Acme and wrapper stack still consumes Gym's four-item interface.
 
+The pinned MetaWorld fork may also advance the simulator while returning
+`None`, because its task subclasses historically recomputed their own reward.
+For that case the adapter calls the inherited MetaWorld `evaluate_state` on the
+already-advanced observation and executed action. This recomputes only reward
+and success; it does **not** take another simulator step. A direct
+`(reward, info)` return is supported as well, and `native_step_api` records
+which path was used.
+
+Acme's interface is already used at the correct boundary:
+`contrastive/utils.py` wraps the raw Gym/MetaWorld environment with Acme's
+`GymWrapper`, then applies `StepLimitWrapper`. Moving the custom MuJoCo
+subclasses themselves to `dm_env.Environment` would require rewriting reset,
+step, spaces/specs, scripted-policy access, and audit state restoration. It
+would not remove the need to adapt the installed MetaWorld parent API, so the
+small raw-environment compatibility layer is the safer fix.
+
 The flag `--sawyer_success_mode` is propagated through training, evaluation,
 action-landscape environments, counterfactual environments, W&B configs, and
 checkpoint paths. Corrected checkpoints receive the suffix
