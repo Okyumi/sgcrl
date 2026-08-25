@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-SUCCESS_MODES = ('legacy_distance', 'task_axis', 'native_info')
+SUCCESS_MODES = ('corrected', 'legacy_distance', 'task_axis', 'native_info')
 
 
 def set_success_mode(environment, success_mode: str) -> None:
@@ -28,8 +28,8 @@ def task_axis_sparse_reward(
   so this is one scalar comparison with no native-reward query, observation
   reconstruction, or additional simulator step.
   """
-  mode = getattr(environment, '_sawyer_success_mode', 'legacy_distance')
-  if mode != 'task_axis':
+  mode = getattr(environment, '_sawyer_success_mode', 'corrected')
+  if mode not in ('corrected', 'task_axis'):
     return None
   distance = abs(
       float(mechanism_position[axis]) - float(goal[axis]))
@@ -39,7 +39,7 @@ def task_axis_sparse_reward(
       'success_axis_distance': distance,
       'success_axis_index': int(axis),
       'success_threshold': float(threshold),
-      'wrapper_success_mode': 'task_axis',
+      'wrapper_success_mode': mode,
   }
 
 
@@ -145,15 +145,15 @@ def _evaluate_state_after_step(environment, action, native_result):
 
 
 def native_sparse_transition(environment, native_result, action=None):
-  """Return a native sparse transition, or ``None`` for legacy semantics.
+  """Return a native sparse transition, or ``None`` for local semantics.
 
   MetaWorld releases in this project exist behind both the legacy Gym
   four-item API and the Gymnasium-style five-item API.  The custom wrapper
   continues to expose the four-item API expected by Acme, while retaining the
   native termination fields in ``info`` for auditing.
   """
-  mode = getattr(environment, '_sawyer_success_mode', 'legacy_distance')
-  if mode in ('legacy_distance', 'task_axis'):
+  mode = getattr(environment, '_sawyer_success_mode', 'corrected')
+  if mode in ('corrected', 'legacy_distance', 'task_axis'):
     return None
   if mode != 'native_info':
     raise ValueError(f'Invalid Sawyer success mode {mode!r}.')

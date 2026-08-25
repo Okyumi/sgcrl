@@ -69,27 +69,49 @@ def success_flags(observation, obs_dim: int, env_name: str):
 
 
 class PairedTask58SuccessObserver:
-  """Score both success definitions on exactly the same episode trajectory."""
+  """Score success and failure stage on one Task-5/Task-8 trajectory."""
 
-  def __init__(self, obs_dim: int, env_name: str):
+  def __init__(self, obs_dim: int, env_name: str,
+               emitted_success_mode: str = 'legacy_distance',
+               interaction_threshold: float = 0.09,
+               movement_threshold: float = 0.005):
     if env_name not in TASK58_SUCCESS_SPECS:
       raise ValueError(
           f'Paired Task-5/Task-8 scoring does not support {env_name!r}.')
     self._obs_dim = int(obs_dim)
     self._env_name = env_name
+    if emitted_success_mode not in ('legacy_distance', 'corrected'):
+      raise ValueError(
+          'emitted_success_mode must be legacy_distance or corrected; got '
+          f'{emitted_success_mode!r}.')
+    self._emitted_success_mode = emitted_success_mode
+    self._interaction_threshold = float(interaction_threshold)
+    self._movement_threshold = float(movement_threshold)
     self._legacy_successes = []
     self._axis_successes = []
     self._legacy_distances = []
     self._axis_distances = []
+    self._hand_mechanism_distances = []
+    self._mechanism_axis_displacements = []
+    self._initial_axis_distance = np.inf
+    self._initial_mechanism_axis = 0.0
     self._reward_mismatches = 0
 
   def observe_first(self, env, timestep):
-    del env, timestep
+    del env
     self._legacy_successes = []
     self._axis_successes = []
     self._legacy_distances = []
     self._axis_distances = []
+    self._hand_mechanism_distances = []
+    self._mechanism_axis_displacements = []
     self._reward_mismatches = 0
+    observation = np.asarray(timestep.observation)
+    _, self._initial_axis_distance = success_distances(
+        observation, self._obs_dim, self._env_name)
+    spec = TASK58_SUCCESS_SPECS[self._env_name]
+    self._initial_mechanism_axis = float(
+        observation[MECHANISM_START + spec.axis])
 
   def observe(self, env, timestep, action):
     del env, action
@@ -102,16 +124,30 @@ class PairedTask58SuccessObserver:
     self._axis_distances.append(axis_distance)
     self._legacy_successes.append(legacy_success)
     self._axis_successes.append(axis_success)
+    observation = np.asarray(timestep.observation)
+    hand = observation[:3]
+    mechanism = observation[MECHANISM_START:MECHANISM_END]
+    spec = TASK58_SUCCESS_SPECS[self._env_name]
+    self._hand_mechanism_distances.append(float(
+        np.linalg.norm(hand - mechanism)))
+    self._mechanism_axis_displacements.append(abs(
+        float(mechanism[spec.axis]) - self._initial_mechanism_axis))
 
-    # The evaluation environment deliberately runs in legacy mode.  This
-    # verifies that the observation-based paired scorer exactly reproduces
-    # the old metric before comparing it with the corrected metric.
     emitted_success = float(timestep.reward or 0.0) > 0.5
-    self._reward_mismatches += int(emitted_success != legacy_success)
+    expected_success = (
+        legacy_success if self._emitted_success_mode == 'legacy_distance'
+        else axis_success)
+    self._reward_mismatches += int(emitted_success != expected_success)
 
   def get_metrics(self):
     legacy_success = any(self._legacy_successes)
     axis_success = any(self._axis_successes)
+    interaction_steps = sum(
+        distance <= self._interaction_threshold
+        for distance in self._hand_mechanism_distances)
+    max_axis_displacement = max(
+        self._mechanism_axis_displacements, default=0.0)
+    min_axis_distance = min(self._axis_distances, default=np.inf)
     return {
         'legacy_success': float(legacy_success),
         'task_axis_success': float(axis_success),
@@ -120,5 +156,18 @@ class PairedTask58SuccessObserver:
             self._legacy_distances, default=np.inf)),
         'task_axis_min_distance': float(min(
             self._axis_distances, default=np.inf)),
+        'success_reward_mismatch_steps': float(self._reward_mismatches),
+        # Backward-compatible key consumed by the historical-checkpoint
+        # reevaluator, whose emitted mode is always legacy_distance.
         'legacy_reward_mismatch_steps': float(self._reward_mismatches),
+        'approach_success': float(interaction_steps > 0),
+        'interaction_step_fraction': float(
+            interaction_steps / max(len(self._hand_mechanism_distances), 1)),
+        'minimum_hand_mechanism_distance': float(min(
+            self._hand_mechanism_distances, default=np.inf)),
+        'mechanism_moved': float(
+            max_axis_displacement >= self._movement_threshold),
+        'max_mechanism_axis_displacement': float(max_axis_displacement),
+        'max_task_axis_progress': float(
+            self._initial_axis_distance - min_axis_distance),
     }

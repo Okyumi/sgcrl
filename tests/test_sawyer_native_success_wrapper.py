@@ -217,14 +217,14 @@ def test_all_custom_sawyer_steps_offer_native_mode():
   assert source.count('native_result = super(Sawyer') == 13
   assert source.count(
       'native_sparse = _native_sparse_transition(self, native_result, action)') == 13
-  assert "sawyer_success_mode='legacy_distance'" in source
+  assert "sawyer_success_mode='corrected'" in source
 
 
 def test_runtime_propagation_and_checkpoint_separation():
   runner = (REPO_ROOT / 'run_continual_contrastive.py').read_text(
       encoding='utf-8')
   launcher = (REPO_ROOT / 'DRAFT.sh').read_text(encoding='utf-8')
-  assert "'sawyer_success_mode', 'legacy_distance'" in runner
+  assert "'sawyer_success_mode', 'corrected'" in runner
   assert "config_key += f'_success_{sawyer_success_mode}'" in runner
   assert runner.count(
       'sawyer_success_mode=FLAGS.sawyer_success_mode') >= 10

@@ -14,7 +14,7 @@ from contrastive import sawyer_success
 
 class _Environment:
 
-  def __init__(self, mode='task_axis'):
+  def __init__(self, mode='corrected'):
     self._sawyer_success_mode = mode
 
 
@@ -60,10 +60,16 @@ def test_wrapper_wiring_is_task_specific():
   assert 'task_axis success is defined only for' in source
 
 
-def test_runner_and_checkpoint_identity_accept_task_axis():
+def test_corrected_is_the_default_and_has_separate_checkpoint_identity():
   source = (REPO_ROOT / 'run_continual_contrastive.py').read_text(
       encoding='utf-8')
-  assert "('legacy_distance', 'task_axis', 'native_info')" in source
+  env_source = (REPO_ROOT / 'env_utils.py').read_text(encoding='utf-8')
+  utils_source = (REPO_ROOT / 'contrastive' / 'utils.py').read_text(
+      encoding='utf-8')
+  assert "'sawyer_success_mode', 'corrected'" in source
+  assert "('corrected', 'legacy_distance', 'task_axis', 'native_info')" in source
+  assert "sawyer_success_mode='corrected'" in env_source
+  assert "sawyer_success_mode='corrected'" in utils_source
   assert "config_key += f'_success_{sawyer_success_mode}'" in source
 
 

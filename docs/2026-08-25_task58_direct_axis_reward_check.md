@@ -21,8 +21,9 @@ r_8 = \mathbb{1}[|x_{window}-x_{goal}|\le 0.05].
 $$
 
 The historical wrapper instead used a full three-dimensional Euclidean
-distance. The new mode is named `task_axis`; `legacy_distance` remains the
-default until the performance check is complete.
+distance. The normal mode is now named `corrected`; `task_axis` remains an
+alias for the earlier Task-5/Task-8-only implementation, and
+`legacy_distance` is retained only for historical reproduction.
 
 ## Runtime
 
@@ -44,11 +45,13 @@ matrix cannot be submitted accidentally.
 
 ## Code changes
 
-- `contrastive/sawyer_success.py`: dependency-light `task_axis` reward helper.
+- `contrastive/sawyer_success.py`: dependency-light corrected axis helper and
+  explicit historical mode.
 - `env_utils.py`: Task 5 uses axis 2 at threshold 0.02; Task 8 uses axis 0 at
   threshold 0.05; other tasks reject this mode.
-- `run_continual_contrastive.py`: exposes `--sawyer_success_mode=task_axis` and
-  keeps checkpoint identities separate from historical runs.
+- `run_continual_contrastive.py`: makes
+  `--sawyer_success_mode=corrected` the default and keeps checkpoint
+  identities separate from historical runs.
 - `tests/test_task58_axis_reward.py`: reward and wrapper-wiring checks.
 
 ## Limitations

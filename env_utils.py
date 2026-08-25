@@ -117,15 +117,17 @@ def euler2quat(euler):
 
 
 def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
-         sawyer_success_mode='legacy_distance'):
+         sawyer_success_mode='corrected'):
   """Loads the train and eval environments, as well as the obs_dim.
 
   If task_id and num_tasks are provided, wraps the environment with
   TaskIDGymWrapper to append a one-hot task identifier to both state
   and goal vectors.  obs_dim is then STATE_DIM_UNIFIED + num_tasks.
 
-  ``sawyer_success_mode='legacy_distance'`` reproduces historical rewards.
-  ``'task_axis'`` directly checks handle z on Task 5 and window x on Task 8.
+  ``sawyer_success_mode='corrected'`` uses the task axis for Tasks 5/8 and
+  keeps the existing local predicate for every other Sawyer task.
+  ``'legacy_distance'`` reproduces historical rewards, while ``'task_axis'``
+  is the old Task-5/Task-8-only spelling of the corrected predicate.
   ``'native_info'`` uses the success predicate returned by MetaWorld itself.
   """
   # pylint: disable=invalid-name

@@ -74,6 +74,7 @@ from contrastive import counterfactual_ranking
 from contrastive import goal_semantics
 from contrastive import phase_gated_control
 from contrastive import outcome_credit
+from contrastive import task58_reevaluation
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
     cosine_matrix_from_vectors,
@@ -185,11 +186,13 @@ flags.DEFINE_enum(
     'three mechanism coordinates; native_success_axis exposes only the exact '
     'official Task-5/Task-8 success coordinate.')
 flags.DEFINE_enum(
-    'sawyer_success_mode', 'legacy_distance',
-    ('legacy_distance', 'task_axis', 'native_info'),
-    'Sparse reward semantics for custom Sawyer wrappers. legacy_distance '
-    'preserves historical paper runs; task_axis directly checks Task-5 z or '
-    'Task-8 x; native_info uses MetaWorld info[success].')
+    'sawyer_success_mode', 'corrected',
+    ('corrected', 'legacy_distance', 'task_axis', 'native_info'),
+    'Sparse success semantics for custom Sawyer wrappers. corrected is the '
+    'normal behavior: Task 5 uses z, Task 8 uses x, and other tasks retain '
+    'their local predicates. legacy_distance reproduces historical paper '
+    'runs; task_axis is the Task-5/8-only alias; native_info uses MetaWorld '
+    'info[success].')
 flags.DEFINE_bool(
     'profile_runtime', False,
     'Log coarse actor, learner, evaluation, and simulator-diagnostic wall '
@@ -768,8 +771,11 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
   if (critic_mode in _PLAIN_DCC_MODES
       and int(in_trajectory_negative_repeats) > 1):
     config_key += f'_itn{int(in_trajectory_negative_repeats)}'
-    if single_task:
-      config_key += f'_env_{single_task}'
+  # Single-task policies for different environments must never share task_0.
+  # Historically this suffix was added only when repeats > 1, which made
+  # ordinary repeat-1 Task-5 and Task-8 jobs overwrite one another.
+  if critic_mode in _PLAIN_DCC_MODES and single_task:
+    config_key += f'_env_{single_task}'
   if critic_mode == 'rbc_decomposed':
     if rbc_config is None:
       raise ValueError('rbc_config is required for RBC-DCC checkpoints.')
@@ -1726,6 +1732,21 @@ def train_single_task(
           start_index=config.start_index,
           end_index=config.end_index),
   ]
+  task58_stage_metrics_enabled = (
+      env_name in task58_reevaluation.TASK58_SUCCESS_SPECS
+      and FLAGS.goal_conditioning_mode == 'full_state'
+      and FLAGS.sawyer_success_mode in (
+          'corrected', 'task_axis', 'legacy_distance'))
+  if task58_stage_metrics_enabled:
+    emitted_success_mode = (
+        'legacy_distance'
+        if FLAGS.sawyer_success_mode == 'legacy_distance'
+        else 'corrected')
+    eval_observers.append(
+        task58_reevaluation.PairedTask58SuccessObserver(
+            obs_dim=config.obs_dim,
+            env_name=env_name,
+            emitted_success_mode=emitted_success_mode))
   evaluator_logger = make_default_logger(
       'evaluator', save_data=True, save_dir=log_dir,
       add_uid=config.add_uid, use_wandb=config.use_wandb,
@@ -2355,12 +2376,37 @@ def train_single_task(
       eval_variable_client.update_and_wait()
       eval_successes = []
       eval_returns = []
+      task58_episode_metrics = {}
       for _ in range(FLAGS.eval_episodes):
         ep_result = eval_loop.run_episode()
         eval_successes.append(ep_result.get('success', 0))
         eval_returns.append(float(ep_result.get('episode_return', 0)))
+        if task58_stage_metrics_enabled:
+          for name in (
+              'legacy_success',
+              'task_axis_success',
+              'axis_rescued_success',
+              'approach_success',
+              'interaction_step_fraction',
+              'minimum_hand_mechanism_distance',
+              'mechanism_moved',
+              'max_mechanism_axis_displacement',
+              'max_task_axis_progress',
+              'legacy_min_distance',
+              'task_axis_min_distance',
+              'success_reward_mismatch_steps'):
+            task58_episode_metrics.setdefault(name, []).append(
+                float(ep_result[name]))
       eval_success_rate = np.mean(eval_successes)
       eval_mean_return = np.mean(eval_returns)
+      task58_eval_metrics = {
+          name: float(np.mean(values))
+          for name, values in task58_episode_metrics.items()
+      }
+      if task58_eval_metrics.get('success_reward_mismatch_steps', 0.0) > 0:
+        raise RuntimeError(
+            'Task-5/Task-8 trajectory scorer disagreed with the corrected '
+            'wrapper reward during evaluation.')
       eval_phase_metrics = (
           eval_actor.get_and_reset_metrics()
           if phase_control_enabled else {})
@@ -2373,9 +2419,21 @@ def train_single_task(
         eval_log.update({
             f'evaluator/{name}': float(value)
             for name, value in eval_phase_metrics.items()})
+        eval_log.update({
+            f'evaluator/task58/{name}': value
+            for name, value in task58_eval_metrics.items()})
         wandb.log(eval_log)
       print(f'  [eval @ {env_steps_done}] success={eval_success_rate:.1%} '
             f'return={eval_mean_return:.1f}', flush=True)
+      if task58_stage_metrics_enabled:
+        print(
+            '  [task58 stages] '
+            f"legacy={task58_eval_metrics['legacy_success']:.1%} "
+            f"axis={task58_eval_metrics['task_axis_success']:.1%} "
+            f"approach={task58_eval_metrics['approach_success']:.1%} "
+            f"moved={task58_eval_metrics['mechanism_moved']:.1%} "
+            f"progress={task58_eval_metrics['max_task_axis_progress']:.4f}",
+            flush=True)
       if FLAGS.profile_runtime:
         runtime_totals['evaluation_seconds'] += (
             time.perf_counter() - evaluation_started_at)

@@ -162,7 +162,7 @@ class ObservationFilterWrapper(base.EnvironmentWrapper):
 def make_environment(env_name, start_index, end_index,
                      seed, fixed_start_end=None,
                      task_id=None, num_tasks=None,
-                     sawyer_success_mode='legacy_distance'):
+                     sawyer_success_mode='corrected'):
   """Creates the environment.
 
   Args:
@@ -174,8 +174,10 @@ def make_environment(env_name, start_index, end_index,
     task_id: if provided (with num_tasks), appends one-hot task identifier
       to both state and goal via TaskIDGymWrapper in env_utils.
     num_tasks: total number of tasks for the one-hot encoding.
-    sawyer_success_mode: ``legacy_distance`` preserves the paper wrapper;
-      ``native_info`` uses MetaWorld's authoritative success predicate.
+    sawyer_success_mode: ``corrected`` uses Task-5 z and Task-8 x while
+      retaining existing predicates elsewhere; ``legacy_distance`` preserves
+      the historical paper wrapper; ``native_info`` uses MetaWorld's
+      authoritative success predicate.
   Returns:
     env: the environment
     obs_dim: integer specifying the size of the observations, before
