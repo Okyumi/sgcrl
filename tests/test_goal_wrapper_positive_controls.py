@@ -143,6 +143,8 @@ def test_launcher_activates_project_environment():
   assert 'conda activate contrastive_rl' in launcher
   assert 'audit_sawyer_goal_positive_controls.py' in launcher
   assert '#SBATCH --array=0-2' in launcher
+  assert '#SBATCH --gres=gpu:1' in launcher
+  assert 'MUJOCO_GL=egl' in launcher
   assert '--strict-current-wrapper' not in launcher
 
 

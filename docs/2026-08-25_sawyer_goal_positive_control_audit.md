@@ -86,7 +86,8 @@ historical coordinate is separated from MetaWorld's own physical goal marker.
 - `experiment_configs_goal_wrapper_positive_controls.py`
   - enumerates seeds 5, 6, and 7 with 50 episodes per task.
 - `DRAFT_goal_wrapper_positive_controls.sh`
-  - CPU-only Torch-HPC array launcher;
+  - Torch-HPC array launcher; requests one GPU so `MUJOCO_GL=egl` does not
+    fall back to compiling OSMesa on CPU nodes;
   - explicitly activates `contrastive_rl` before importing NumPy, MetaWorld,
     or MuJoCo.
 - `scripts/evaluate_goal_wrapper_positive_controls.py`
@@ -103,7 +104,7 @@ No actor, critic, replay, learner, or training configuration is changed.
 
 ## Launch and aggregation
 
-Run the three CPU array jobs:
+Run the three array jobs (one GPU each, EGL headless, no training):
 
 ```bash
 sbatch DRAFT_goal_wrapper_positive_controls.sh
@@ -185,7 +186,9 @@ audit determines whether they remain comparable.
 
 Validation includes Python compilation, shell syntax, three-config expansion,
 and dependency-light tests for every decision branch. Full physics validation
-must run on Torch inside the project's `contrastive_rl` environment.
+must run on Torch inside the project's `contrastive_rl` environment, on a
+GPU node so `mujoco_py` can use EGL. CPU-only jobs fail compiling OSMesa
+because Torch CPU images do not ship `GL/osmesa.h`.
 
 The scripted policy establishes interface and task solvability, not DCC
 learnability. The audit intentionally uses official ML1 task objects; if the

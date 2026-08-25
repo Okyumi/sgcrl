@@ -4,6 +4,7 @@
 #SBATCH --account=torch_pr_301_tandon_advanced
 #SBATCH --time=03:00:00
 #SBATCH --nodes=1
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32GB
 #SBATCH --output=/scratch/yd2247/sgcrl/logs/goal_validity/controls_%A_%a.out
@@ -11,7 +12,9 @@
 #SBATCH --mail-user=yd2247@nyu.edu
 #SBATCH --array=0-2
 
-# Paired CPU-only positive controls for seeds 5, 6, and 7:
+# Paired positive controls for seeds 5, 6, and 7.  A GPU is required so
+# mujoco_py uses EGL instead of compiling the OSMesa CPU shim
+# (GL/osmesa.h is not present on Torch CPU nodes).  No training.
 #   sbatch DRAFT_goal_wrapper_positive_controls.sh
 #
 # After all three finish:
@@ -31,6 +34,8 @@ eval "$(conda shell.bash hook)"
 conda activate contrastive_rl
 # shellcheck source=/dev/null
 source "${REPO_DIR}/set_up/torch_hpc_env.sh"
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
 
 SETTING="${SLURM_ARRAY_TASK_ID:-0}"
 eval "$(python experiment_configs_goal_wrapper_positive_controls.py \
