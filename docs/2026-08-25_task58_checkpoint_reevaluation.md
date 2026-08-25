@@ -32,10 +32,17 @@ reward emitted by the legacy wrapper. Any disagreement aborts the result.
 
 The matrix is Task 5/Task 8 by seeds 5/6/7, with 100 episodes per checkpoint.
 The documented C2 checkpoint root is
-`/scratch/yd2247/sgcrl/logs/continual_checkpoints`, and the expected checkpoint
-identity is reset actor, decomposed critic, no task ID, dynamics weight 1.0,
-and a 256x4 task head. Actor network width and depth are inferred directly
-from the saved policy parameters, including the historical 1024-wide actor.
+`/scratch/yd2247/sgcrl/logs/continual_checkpoints`. On disk, the original C2
+seeds 5/6/7 live in the pre-disambiguation directory
+
+`actor_reset_critic_decomposed_tid_False_heads_True/seed_{seed}/task_{k}.pkl`
+
+(`k` is 5 for handle-press-side and 8 for window-close). That identity is
+reset actor, decomposed critic, no task ID. The later
+`..._dyn1.000_pt256x4` suffix was added after those runs; it does **not**
+contain Task-5/Task-8 checkpoints for seeds 5/6/7. Actor network width and
+depth are inferred directly from the saved policy parameters, including the
+historical 1024-wide actor.
 
 ## Run
 

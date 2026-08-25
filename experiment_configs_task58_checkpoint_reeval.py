@@ -11,7 +11,15 @@ TASKS = (
     (8, 'sawyer_window_close'),
 )
 SEEDS = (5, 6, 7)
+# Historical C2 DCC checkpoints for seeds 5/6/7 were written before
+# ``_ckpt_path`` started appending ``_dyn{w}_pt{W}x{D}``. Those six
+# Task-5/Task-8 actors live in the unsuffixed directory. The later
+# ``..._dyn1.000_pt256x4`` tree has seeds 97-101 (and incomplete seed 5
+# with only task_0), not the C2 seed-5/6/7 matrix.
 CHECKPOINT_CONFIG = (
+    'actor_reset_critic_decomposed_tid_False_heads_True'
+)
+DISAMBIGUATED_CHECKPOINT_CONFIG = (
     'actor_reset_critic_decomposed_tid_False_heads_True_'
     'dyn1.000_pt256x4'
 )
