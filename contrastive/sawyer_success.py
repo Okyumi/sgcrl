@@ -5,6 +5,26 @@ from __future__ import annotations
 SUCCESS_MODES = ('corrected', 'legacy_distance', 'task_axis', 'native_info')
 
 
+def synchronize_simulator_after_reset(environment) -> None:
+  """Refresh site/body positions after a reset mutates MuJoCo joint state.
+
+  MetaWorld's Window-Close V2 reset writes ``window_slide`` directly and then
+  returns an observation without forwarding the simulator. Under mujoco-py,
+  site positions therefore still describe the pre-write state until the first
+  environment step. This helper makes a reset observation and the first
+  post-reset transition refer to the same physical state.
+
+  The failure is explicit because silently skipping the forward pass would
+  recreate the observation defect on an unsupported simulator adapter.
+  """
+  simulator = getattr(environment, 'sim', None)
+  forward = getattr(simulator, 'forward', None)
+  if not callable(forward):
+    raise RuntimeError(
+        'Sawyer reset synchronization requires environment.sim.forward().')
+  forward()
+
+
 def set_success_mode(environment, success_mode: str) -> None:
   """Validate and attach a versioned Sawyer success contract."""
   if success_mode not in SUCCESS_MODES:

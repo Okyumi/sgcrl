@@ -50,6 +50,7 @@ def test_corrected_observer_identifies_failure_stage_without_new_rollouts():
   assert metrics['task_axis_success'] == 1.0
   assert metrics['approach_success'] == 1.0
   assert metrics['mechanism_moved'] == 1.0
+  assert np.isclose(metrics['initial_task_axis_distance'], 0.13)
   assert metrics['max_task_axis_progress'] > 0.12
   assert metrics['success_reward_mismatch_steps'] == 0.0
 
@@ -85,6 +86,7 @@ def test_runner_logs_lightweight_task58_stage_metrics():
   assert "'approach_success'" in source
   assert "'mechanism_moved'" in source
   assert "'max_task_axis_progress'" in source
+  assert "'initial_task_axis_distance'" in source
   assert 'ordinary repeat-1 Task-5 and Task-8 jobs overwrite' in source
 
 

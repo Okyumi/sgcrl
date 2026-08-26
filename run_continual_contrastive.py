@@ -2392,6 +2392,7 @@ def train_single_task(
               'mechanism_moved',
               'max_mechanism_axis_displacement',
               'max_task_axis_progress',
+              'initial_task_axis_distance',
               'legacy_min_distance',
               'task_axis_min_distance',
               'success_reward_mismatch_steps'):

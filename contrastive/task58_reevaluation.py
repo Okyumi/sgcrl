@@ -152,6 +152,7 @@ class PairedTask58SuccessObserver:
         'legacy_success': float(legacy_success),
         'task_axis_success': float(axis_success),
         'axis_rescued_success': float(axis_success and not legacy_success),
+        'initial_task_axis_distance': float(self._initial_axis_distance),
         'legacy_min_distance': float(min(
             self._legacy_distances, default=np.inf)),
         'task_axis_min_distance': float(min(

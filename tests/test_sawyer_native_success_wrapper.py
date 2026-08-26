@@ -27,6 +27,21 @@ class _DummyEnvironment:
     return 7.5, {'success': 1.0, 'fallback_metric': 3.0}
 
 
+class _FakeSimulator:
+
+  def __init__(self):
+    self.forward_calls = 0
+
+  def forward(self):
+    self.forward_calls += 1
+
+
+class _ResetEnvironment:
+
+  def __init__(self):
+    self.sim = _FakeSimulator()
+
+
 class _FakeMetaWorldParent:
 
   def _get_obs(self):
@@ -90,6 +105,21 @@ def test_legacy_is_default_and_returns_control_to_historical_predicate():
   environment = _DummyEnvironment()
   assert sawyer_success.native_sparse_transition(
       environment, ('native_obs', 4.2, False, {'success': 1.0})) is None
+
+
+def test_reset_synchronization_forwards_simulator_once():
+  environment = _ResetEnvironment()
+  sawyer_success.synchronize_simulator_after_reset(environment)
+  assert environment.sim.forward_calls == 1
+
+
+def test_reset_synchronization_fails_if_forward_is_unavailable():
+  try:
+    sawyer_success.synchronize_simulator_after_reset(object())
+  except RuntimeError as error:
+    assert 'sim.forward()' in str(error)
+  else:
+    raise AssertionError('Expected missing reset synchronization to fail.')
 
 
 def test_native_info_is_authoritative_and_preserves_diagnostics():
@@ -218,6 +248,23 @@ def test_all_custom_sawyer_steps_offer_native_mode():
   assert source.count(
       'native_sparse = _native_sparse_transition(self, native_result, action)') == 13
   assert "sawyer_success_mode='corrected'" in source
+
+
+def test_window_close_reset_synchronizes_before_observation():
+  source = (REPO_ROOT / 'env_utils.py').read_text(encoding='utf-8')
+  window_wrapper = source.split(
+      'class SawyerWindowClose(', 1)[1].split(
+          'class SawyerPegUnplugSide(', 1)[0]
+  reset_body = window_wrapper.split('def reset(self):', 1)[1].split(
+      'def step(self, action):', 1)[0]
+  assert 'super(SawyerWindowClose, self).reset()' in reset_body
+  assert 'sawyer_success.synchronize_simulator_after_reset(self)' in reset_body
+  assert reset_body.index(
+      'super(SawyerWindowClose, self).reset()') < reset_body.index(
+          'sawyer_success.synchronize_simulator_after_reset(self)')
+  assert reset_body.index(
+      'sawyer_success.synchronize_simulator_after_reset(self)') < (
+          reset_body.index('return self._get_obs()'))
 
 
 def test_runtime_propagation_and_checkpoint_separation():

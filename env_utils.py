@@ -1034,6 +1034,10 @@ class SawyerWindowClose(
 
   def reset(self):
     super(SawyerWindowClose, self).reset()
+    # MetaWorld Window-Close V2 writes the window-slide qpos after it last
+    # queried the handle site. Forward once so the reset observation exposes
+    # the actual open-window handle position, not the stale pre-reset site.
+    sawyer_success.synchronize_simulator_after_reset(self)
     if self._fixed_start_end is not None:
       self._goal = np.array(self._fixed_start_end, dtype=np.float32)
       self._target_pos = self._goal.copy()
