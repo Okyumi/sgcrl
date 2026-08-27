@@ -113,6 +113,7 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
   legacy_false_positive_steps = 0
   captured_successful_state = None
   captured_details = None
+  captured_success_slack = float('-inf')
   reported_horizons = set()
 
   for seed in seeds:
@@ -154,13 +155,18 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
               legacy_positive and not expected_success)
           if expected_success:
             episode_success = True
-            if captured_successful_state is None:
+            success_slack = min(
+                0.12 - handle_distance,
+                insertion['signed_insertion_margin'])
+            if success_slack > captured_success_slack:
+              captured_success_slack = success_slack
               captured_successful_state = state11.tolist()
               captured_details = {
                   'seed': int(seed),
                   'episode': int(episode),
                   'step': int(step),
                   'handle_target_distance': handle_distance,
+                  'success_slack': success_slack,
                   'stick_end': stick_end.tolist(),
                   **insertion,
               }
@@ -218,7 +224,7 @@ def main():
       training_horizon=args.training_horizon,
       expert_success_min=args.expert_success_min)
   result = {
-      'protocol': 'stick_pull_corrected_wrapper_smoke_v1',
+      'protocol': 'stick_pull_corrected_wrapper_smoke_v2',
       'passed': summary['classification']['passed'],
       'summary': summary,
   }

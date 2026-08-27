@@ -82,9 +82,11 @@ change reward-free DCC training or prevent the critic from ignoring stick use.
 
 The new evaluation-only audit runs the official scripted policy, compares the
 corrected wrapper reward and info to the independent insertion predicate, and
-captures a genuinely successful state. It also computes a signed insertion
-margin that fits the existing unused `state[10]` slot and is nonnegative
-exactly when all insertion gates pass:
+captures the most robust successful state already present in those
+trajectories. Robustness maximizes the minimum slack across the handle-distance
+and insertion gates. The audit also computes a signed insertion margin that
+fits the existing unused `state[10]` slot and is nonnegative exactly when all
+insertion gates pass:
 
 ```bash
 sbatch DRAFT_stick_pull_wrapper_smoke.sh
