@@ -18,6 +18,7 @@ def _summary():
       'reported_training_horizon': 150,
       'reset_success_count': 0,
       'state_mechanism_linf_error_max': 0.0,
+      'exposed_goal_linf_error_max': 0.0,
       'goal_mechanism_linf_error_max': 0.0,
       'internal_goal_linf_error_max': 0.0,
       'internal_target_linf_error_max': 0.0,

@@ -189,8 +189,9 @@ flags.DEFINE_enum(
     'sawyer_success_mode', 'corrected',
     ('corrected', 'legacy_distance', 'task_axis', 'native_info'),
     'Sparse success semantics for custom Sawyer wrappers. corrected is the '
-    'normal behavior: Task 5 uses z, Task 8 uses x, and other tasks retain '
-    'their local predicates. legacy_distance reproduces historical paper '
+    'normal behavior: Task 5 uses z, Task 8 uses x, Stick Pull requires an '
+    'inserted stick, and other tasks retain their local predicates. '
+    'legacy_distance reproduces historical paper '
     'runs; task_axis is the Task-5/8-only alias; native_info uses MetaWorld '
     'info[success].')
 flags.DEFINE_bool(

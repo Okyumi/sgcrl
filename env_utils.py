@@ -34,6 +34,61 @@ FULL_OBS_DIM = STATE_DIM_UNIFIED + GOAL_DIM_UNIFIED  # 22
 SAWYER_SUCCESS_MODES = sawyer_success.SUCCESS_MODES
 
 
+# The historical Task-5/Task-8 wrappers invented a hand/gripper pose around
+# the mechanism target.  The simulator audit in
+# docs/2026-08-27_task58_corrected_wrapper_smoke_and_goal_audit.md showed that
+# those complete seven-coordinate goals are not states the simulator visits.
+# These replacements were captured from actual successful scripted-policy
+# transitions under the fixed targets below.  Legacy mode retains the invented
+# goals byte-for-byte; corrected/native runs condition on reachable successful
+# states while keeping the original mechanism target and success predicate.
+TASK58_FIXED_MECHANISM_TARGETS = {
+    'sawyer_handle_press_side': np.array(
+        [-0.07, 0.68, 0.07], dtype=np.float32),
+    'sawyer_window_close': np.array(
+        [0.0, 0.80, 0.20], dtype=np.float32),
+}
+
+TASK58_REACHABLE_SUCCESS_GOALS = {
+    'sawyer_handle_press_side': np.array([
+        -0.06560678035020828,
+        0.7041487693786621,
+        0.09986630827188492,
+        0.296682745218277,
+        -0.07112127542495728,
+        0.7078117728233337,
+        0.07460593432188034,
+    ], dtype=np.float32),
+    'sawyer_window_close': np.array([
+        -0.09732835739850998,
+        0.7052891850471497,
+        0.25837814807891846,
+        0.2966759502887726,
+        0.012448099441826344,
+        0.7327626943588257,
+        0.20000000298023224,
+    ], dtype=np.float32),
+}
+
+
+def _task58_reachable_success_goal(
+    env_name, fixed_start_end, sawyer_success_mode):
+  """Return a captured full-state goal for corrected fixed-goal runs."""
+  if (env_name not in TASK58_REACHABLE_SUCCESS_GOALS
+      or sawyer_success_mode == 'legacy_distance'
+      or fixed_start_end is None):
+    return None
+  expected_target = TASK58_FIXED_MECHANISM_TARGETS[env_name]
+  supplied_target = np.asarray(fixed_start_end, dtype=np.float32)
+  if supplied_target.shape != (3,) or not np.allclose(
+      supplied_target, expected_target, rtol=0.0, atol=1e-6):
+    raise ValueError(
+        f'The corrected reachable full-state goal for {env_name} was '
+        f'validated only with fixed mechanism target {expected_target.tolist()}; '
+        f'got {supplied_target.tolist()}.')
+  return TASK58_REACHABLE_SUCCESS_GOALS[env_name].copy()
+
+
 def _set_sawyer_success_mode(environment, success_mode):
   """Select sparse-reward semantics without changing historical defaults."""
   sawyer_success.set_success_mode(environment, success_mode)
@@ -124,8 +179,10 @@ def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
   TaskIDGymWrapper to append a one-hot task identifier to both state
   and goal vectors.  obs_dim is then STATE_DIM_UNIFIED + num_tasks.
 
-  ``sawyer_success_mode='corrected'`` uses the task axis for Tasks 5/8 and
-  keeps the existing local predicate for every other Sawyer task.
+  ``sawyer_success_mode='corrected'`` uses the task axis for Tasks 5/8,
+  requires handle position plus stick insertion for Stick Pull, and keeps the
+  existing local predicate for every other Sawyer task. Corrected/native fixed
+  Task-5/Task-8 runs also expose captured reachable-successful full goals.
   ``'legacy_distance'`` reproduces historical rewards, while ``'task_axis'``
   is the old Task-5/Task-8-only spelling of the corrected predicate.
   ``'native_info'`` uses the success predicate returned by MetaWorld itself.
@@ -174,6 +231,8 @@ def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
     CLASS = SawyerHandlePressSide
     max_episode_steps = 150
     kwargs['fixed_start_end'] = fixed_start_end
+    kwargs['fixed_goal_state'] = _task58_reachable_success_goal(
+        env_name, fixed_start_end, sawyer_success_mode)
   elif env_name == 'sawyer_push':
     CLASS = SawyerPush
     max_episode_steps = 150
@@ -186,6 +245,8 @@ def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
     CLASS = SawyerWindowClose
     max_episode_steps = 150
     kwargs['fixed_start_end'] = fixed_start_end
+    kwargs['fixed_goal_state'] = _task58_reachable_success_goal(
+        env_name, fixed_start_end, sawyer_success_mode)
   elif env_name == 'sawyer_peg_unplug_side':
     CLASS = SawyerPegUnplugSide
     max_episode_steps = 150
@@ -736,7 +797,9 @@ class SawyerStickPull(
 
   State = hand (3), gripper (1), stick position (3), handle/insertion (3) = 10 dims.
   _get_pos_objects() returns stick (3) + handle (3); both included so state is not truncated.
-  Goal = hand_above (3), gripper (1), handle target (3) = 7 dims. Success when handle within 0.05 of goal.
+  Goal = hand, gripper, desired stick and handle positions. Corrected success
+  requires handle distance <= 0.12 and an inserted stick endpoint; the legacy
+  predicate retains handle distance only.
   Padding: state 10->STATE_DIM_UNIFIED, goal 7->GOAL_DIM_UNIFIED for continual RL.
   """
 
@@ -765,6 +828,12 @@ class SawyerStickPull(
       return native_sparse
     pos_objects = self._get_pos_objects()
     handle_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
+    corrected_sparse = sawyer_success.stick_pull_sparse_reward(
+        self, handle_pos, self._goal, self._get_site_pos('stick_end'),
+        threshold=0.12)
+    if corrected_sparse is not None:
+      reward, info = corrected_sparse
+      return self._get_obs(), reward, False, info
     dist = np.linalg.norm(self._goal - handle_pos)
     obs = self._get_obs()
     r = float(dist < 0.12)  # MetaWorld uses 0.12 for stick-pull
@@ -810,8 +879,16 @@ class SawyerHandlePressSide(
   Goal = same structure. Success when handle within 0.02 of goal (TARGET_RADIUS).
   """
 
-  def __init__(self, fixed_start_end=None):
+  def __init__(self, fixed_start_end=None, fixed_goal_state=None):
     self._goal = np.zeros(3)
+    self._fixed_goal_state = (
+        None if fixed_goal_state is None
+        else np.asarray(fixed_goal_state, dtype=np.float32).copy())
+    if (self._fixed_goal_state is not None
+        and self._fixed_goal_state.shape != (7,)):
+      raise ValueError(
+          'Task-5 fixed_goal_state must contain hand(3), gripper(1), '
+          'and handle(3).')
     super(SawyerHandlePressSide, self).__init__()
     self._partially_observable = False
     self._freeze_rand_vec = False
@@ -859,11 +936,14 @@ class SawyerHandlePressSide(
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     handle_pos = self._get_pos_objects()
     state = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
-    goal = np.concatenate([
-        self._goal + np.array([0.0, 0.0, 0.03]),
-        [0.4],
-        self._goal,
-    ])
+    if self._fixed_goal_state is not None:
+      goal = self._fixed_goal_state
+    else:
+      goal = np.concatenate([
+          self._goal + np.array([0.0, 0.0, 0.03]),
+          [0.4],
+          self._goal,
+      ])
     state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
     goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
     return np.concatenate([state_padded, goal_padded]).astype(np.float32)
@@ -1023,8 +1103,16 @@ class SawyerWindowClose(
   Goal = same structure. Success when handle within 0.05 of goal (TARGET_RADIUS).
   """
 
-  def __init__(self, fixed_start_end=None):
+  def __init__(self, fixed_start_end=None, fixed_goal_state=None):
     self._goal = np.zeros(3)
+    self._fixed_goal_state = (
+        None if fixed_goal_state is None
+        else np.asarray(fixed_goal_state, dtype=np.float32).copy())
+    if (self._fixed_goal_state is not None
+        and self._fixed_goal_state.shape != (7,)):
+      raise ValueError(
+          'Task-8 fixed_goal_state must contain hand(3), gripper(1), '
+          'and window-handle(3).')
     super(SawyerWindowClose, self).__init__()
     self._partially_observable = False
     self._freeze_rand_vec = False
@@ -1076,11 +1164,14 @@ class SawyerWindowClose(
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0.0, 1.0)
     handle_pos = self._get_pos_objects()
     state = np.concatenate((pos_hand, [gripper_distance_apart], handle_pos))
-    goal = np.concatenate([
-        self._goal + np.array([0.0, 0.0, 0.03]),
-        [0.4],
-        self._goal,
-    ])
+    if self._fixed_goal_state is not None:
+      goal = self._fixed_goal_state
+    else:
+      goal = np.concatenate([
+          self._goal + np.array([0.0, 0.0, 0.03]),
+          [0.4],
+          self._goal,
+      ])
     state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
     goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
     return np.concatenate([state_padded, goal_padded]).astype(np.float32)

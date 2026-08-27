@@ -1,20 +1,20 @@
 #!/bin/bash
 #SBATCH --verbose
-#SBATCH --job-name=task58_wrapper_smoke
+#SBATCH --job-name=stick_pull_smoke
 #SBATCH --account=torch_pr_301_tandon_advanced
 #SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16GB
-#SBATCH --output=/scratch/yd2247/sgcrl/logs/wrapper_smoke/task58_%j.out
-#SBATCH --error=/scratch/yd2247/sgcrl/logs/wrapper_smoke/task58_%j.err
+#SBATCH --output=/scratch/yd2247/sgcrl/logs/wrapper_smoke/stick_pull_%j.out
+#SBATCH --error=/scratch/yd2247/sgcrl/logs/wrapper_smoke/stick_pull_%j.err
 #SBATCH --mail-user=yd2247@nyu.edu
 
-# Evaluation-only simulator gate for the original Task-5/Task-8 wrappers.
+# Evaluation-only gate for corrected Stick-Pull success and goal semantics.
 # No learner, replay server, checkpoint, or W&B run is created.
 #
-#   sbatch DRAFT_task58_wrapper_smoke.sh
+#   sbatch DRAFT_stick_pull_wrapper_smoke.sh
 set -euo pipefail
 
 REPO_DIR="/scratch/yd2247/sgcrl"
@@ -33,13 +33,11 @@ export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
 
 mkdir -p logs/wrapper_smoke
-python tests/test_task58_corrected_wrapper_smoke.py
-python tests/test_task58_axis_reward.py
-python tests/test_task58_reachable_success_goals.py
-python -u scripts/smoke_test_task58_corrected_wrapper.py \
+python tests/test_stick_pull_corrected_success.py
+python tests/test_stick_pull_wrapper_smoke.py
+python -u scripts/smoke_test_stick_pull_corrected_wrapper.py \
   --seeds 5 6 7 \
   --episodes 5 \
   --training-horizon 150 \
-  --max-steps 200 \
   --expert-success-min 0.80 \
-  --output logs/wrapper_smoke/task58_corrected_wrapper.json
+  --output logs/wrapper_smoke/stick_pull_corrected_wrapper.json

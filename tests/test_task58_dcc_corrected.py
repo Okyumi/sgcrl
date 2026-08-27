@@ -76,6 +76,9 @@ def test_six_clean_single_task_cells():
   assert all(config['action_landscape_diagnostic_interval_steps'] == 0
              for config in configs)
   assert all(config['log_rl_metrics'] is False for config in configs)
+  assert all(config['wandb_group'] ==
+             'TASK58-DCC-CORRECTED-REACHABLE-GOAL-1M'
+             for config in configs)
 
 
 def test_runner_logs_lightweight_task58_stage_metrics():
@@ -97,6 +100,8 @@ def test_launcher_runs_six_cells_without_probe_preflights():
   assert 'CONFIG_LIMIT=6' in launcher
   assert 'TASKS_PER_GPU=2' in launcher
   assert 'experiment_configs_task58_dcc_corrected.py' in launcher
+  assert 'tests/test_task58_reachable_success_goals.py' in launcher
+  assert 'task58_dcc_corrected_goal_v2' in launcher
   assert 'COUNTERFACTUAL' not in launcher
   assert 'ACTION_LANDSCAPE_SELF_TEST' not in launcher
 

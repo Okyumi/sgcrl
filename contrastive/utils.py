@@ -174,10 +174,11 @@ def make_environment(env_name, start_index, end_index,
     task_id: if provided (with num_tasks), appends one-hot task identifier
       to both state and goal via TaskIDGymWrapper in env_utils.
     num_tasks: total number of tasks for the one-hot encoding.
-    sawyer_success_mode: ``corrected`` uses Task-5 z and Task-8 x while
-      retaining existing predicates elsewhere; ``legacy_distance`` preserves
-      the historical paper wrapper; ``native_info`` uses MetaWorld's
-      authoritative success predicate.
+    sawyer_success_mode: ``corrected`` uses Task-5 z, Task-8 x, and the full
+      Stick-Pull handle-plus-insertion predicate while retaining existing
+      predicates elsewhere; ``legacy_distance`` preserves the historical
+      paper wrapper; ``native_info`` uses MetaWorld's authoritative success
+      predicate.
   Returns:
     env: the environment
     obs_dim: integer specifying the size of the observations, before

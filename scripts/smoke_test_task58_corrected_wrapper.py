@@ -70,18 +70,22 @@ def _mechanism(environment) -> np.ndarray:
   return position
 
 
-def _observation_errors(observation, environment, obs_dim, fixed_goal):
+def _observation_errors(
+    observation, environment, obs_dim, fixed_goal, conditioned_goal):
   if observation.shape != (2 * obs_dim,):
     raise RuntimeError(
         f'Expected observation shape {(2 * obs_dim,)}, got '
         f'{observation.shape}.')
   state_mechanism = observation[4:7]
+  exposed_goal = observation[obs_dim:obs_dim + 7]
   goal_mechanism = observation[obs_dim + 4:obs_dim + 7]
   return {
       'state_mechanism_linf_error': float(np.max(np.abs(
           state_mechanism - _mechanism(environment)))),
+      'exposed_goal_linf_error': float(np.max(np.abs(
+          exposed_goal - conditioned_goal))),
       'goal_mechanism_linf_error': float(np.max(np.abs(
-          goal_mechanism - fixed_goal))),
+          goal_mechanism - conditioned_goal[4:7]))),
       'internal_goal_linf_error': float(np.max(np.abs(
           np.asarray(environment._goal, dtype=np.float32) - fixed_goal))),
       'internal_target_linf_error': float(np.max(np.abs(
@@ -131,8 +135,8 @@ def classify_task(summary, *, expert_success_min, observation_tolerance,
           summary['reset_success_count'] == 0,
       'reset_and_rollout_observations_match_simulator':
           summary['state_mechanism_linf_error_max'] <= observation_tolerance,
-      'exposed_goal_matches_fixed_goal':
-          summary['goal_mechanism_linf_error_max'] <= goal_tolerance,
+      'exposed_goal_matches_reachable_success_goal':
+          summary['exposed_goal_linf_error_max'] <= goal_tolerance,
       'internal_goal_matches_fixed_goal':
           summary['internal_goal_linf_error_max'] <= goal_tolerance,
       'internal_target_matches_fixed_goal':
@@ -188,6 +192,11 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
         env_name,
         fixed_start_end=fixed_goal,
         sawyer_success_mode='corrected')
+    conditioned_goal = np.asarray(
+        environment._fixed_goal_state, dtype=np.float32)
+    if conditioned_goal.shape != (7,):
+      raise RuntimeError(
+          f'{env_name} did not expose a seven-coordinate corrected goal.')
     reported_horizons.add(int(reported_horizon))
     parent = _native_parent(environment)
     try:
@@ -197,7 +206,8 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
         zero_reset_observation = _reset(environment)
         zero_before = _mechanism(environment)
         zero_errors = _observation_errors(
-            zero_reset_observation, environment, obs_dim, fixed_goal)
+            zero_reset_observation, environment, obs_dim, fixed_goal,
+            conditioned_goal)
         zero_expected, zero_initial_distance = _expected_success(
             zero_before, fixed_goal, env_name)
         reset_success_count += int(zero_expected)
@@ -208,7 +218,8 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
         zero_displacements.append(float(np.max(np.abs(
             zero_after - zero_before))))
         zero_step_errors = _observation_errors(
-            zero_observation, environment, obs_dim, fixed_goal)
+            zero_observation, environment, obs_dim, fixed_goal,
+            conditioned_goal)
         _update_maxima(maxima, zero_errors)
         _update_maxima(maxima, zero_step_errors)
         zero_step_expected, _ = _expected_success(
@@ -221,7 +232,7 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
         observation = _reset(environment)
         initial_mechanism = _mechanism(environment)
         initial_errors = _observation_errors(
-            observation, environment, obs_dim, fixed_goal)
+            observation, environment, obs_dim, fixed_goal, conditioned_goal)
         _update_maxima(maxima, initial_errors)
         initial_success, initial_distance = _expected_success(
             initial_mechanism, fixed_goal, env_name)
@@ -246,7 +257,8 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
           observation, reward, done, info = _step(environment, action)
           steps = step_index
           errors = _observation_errors(
-              observation, environment, obs_dim, fixed_goal)
+              observation, environment, obs_dim, fixed_goal,
+              conditioned_goal)
           _update_maxima(maxima, errors)
           expected, axis_distance = _expected_success(
               _mechanism(environment), fixed_goal, env_name)
@@ -320,6 +332,8 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
     reported_horizon = training_horizon
   summary = {
       'env_name': env_name,
+      'mechanism_target': fixed_goal.tolist(),
+      'conditioned_reachable_success_goal': conditioned_goal.tolist(),
       'success_axis_state_indices': list(
           metadata['success_state_indices']),
       'success_threshold': float(metadata['success_threshold']),
@@ -375,7 +389,8 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
       'minimum_any_state_full_goal_linf_error':
           minimum_any_state_full_goal_linf_error,
       # This state was actually visited while the official axis predicate was
-      # true, so it is a reachable-successful replacement goal by construction.
+      # true. It remains useful for detecting drift from the selected
+      # reachable-successful goal on a later simulator installation.
       'closest_successful_state': closest_successful_state,
   })
   summary['classification'] = classify_task(
@@ -405,7 +420,7 @@ def main():
     parser.error('--max-steps must be at least --training-horizon.')
 
   results = {
-      'protocol': 'task58_corrected_wrapper_smoke_v2',
+      'protocol': 'task58_corrected_wrapper_smoke_v3',
       'success_mode': 'corrected',
       'seeds': args.seeds,
       'episodes_per_seed': args.episodes,

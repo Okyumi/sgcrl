@@ -1,6 +1,8 @@
 """Dependency-light sparse-success adapter for custom Sawyer wrappers."""
 from __future__ import annotations
 
+import math
+
 
 SUCCESS_MODES = ('corrected', 'legacy_distance', 'task_axis', 'native_info')
 
@@ -58,6 +60,48 @@ def task_axis_sparse_reward(
       'success': success,
       'success_axis_distance': distance,
       'success_axis_index': int(axis),
+      'success_threshold': float(threshold),
+      'wrapper_success_mode': mode,
+  }
+
+
+def stick_pull_sparse_reward(
+    environment,
+    handle_position,
+    goal,
+    stick_end_position,
+    *,
+    threshold: float = 0.12,
+):
+  """Return corrected Stick-Pull success, or ``None`` in other modes.
+
+  MetaWorld requires both the handle to reach the target and the far end of
+  the stick to remain inserted through the handle.  The historical wrapper
+  checked only handle distance, allowing a policy to receive success by
+  pushing the object directly.  This helper mirrors the official geometric
+  insertion predicate without changing the observation or taking a simulator
+  step.
+  """
+  mode = getattr(environment, '_sawyer_success_mode', 'corrected')
+  if mode != 'corrected':
+    return None
+  handle = tuple(float(value) for value in handle_position)
+  target = tuple(float(value) for value in goal)
+  stick_end = tuple(float(value) for value in stick_end_position)
+  if not (len(handle) == len(target) == len(stick_end) == 3):
+    raise ValueError(
+        'Stick-Pull success requires 3-D handle, target, and stick-end '
+        'positions.')
+  target_distance = math.dist(handle, target)
+  inserted = (
+      stick_end[0] >= handle[0]
+      and abs(stick_end[1] - handle[1]) <= 0.040
+      and abs(stick_end[2] - handle[2]) <= 0.060)
+  success = float(target_distance <= float(threshold) and inserted)
+  return success, {
+      'success': success,
+      'handle_target_distance': target_distance,
+      'stick_is_inserted': float(inserted),
       'success_threshold': float(threshold),
       'wrapper_success_mode': mode,
   }

@@ -46,7 +46,7 @@ def build_configs():
           'profile_runtime': True,
           'intra_eval_previous': False,
           'post_task_eval_scope': 'current',
-          'wandb_group': 'TASK58-DCC-CORRECTED-WRAPPER-1M',
+          'wandb_group': 'TASK58-DCC-CORRECTED-REACHABLE-GOAL-1M',
       })
   return configs
 
