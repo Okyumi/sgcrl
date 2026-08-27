@@ -67,8 +67,11 @@ def test_config_matrix_targets_six_historical_checkpoints():
       (task_id, seed) for task_id in (5, 8) for seed in (5, 6, 7)
   }
   assert all(config['episodes'] == 100 for config in configs)
-  assert all('actor_reset_critic_decomposed_tid_False_heads_True_' in
-             config['checkpoint_relative'] for config in configs)
+  assert all(config['checkpoint_relative'].startswith(
+      'actor_reset_critic_decomposed_tid_False_heads_True/seed_')
+             for config in configs)
+  assert all('_dyn1.000_pt256x4' not in config['checkpoint_relative']
+             for config in configs)
   assert all(config['checkpoint_relative'].endswith(
       f"task_{config['task_id']}.pkl") for config in configs)
 
