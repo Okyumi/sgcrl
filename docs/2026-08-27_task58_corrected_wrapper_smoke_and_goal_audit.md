@@ -92,6 +92,22 @@ errors, maximum zero-action displacement, reward and info mismatch counts,
 success rate by step 150, success rate by step 200, late-success rate, and the
 first success step for every episode.
 
+Protocol V2 also separates benchmark success from complete-goal reachability.
+At every officially successful state inside the 150-step horizon it records
+the error between the seven semantic state coordinates and the seven
+synthetic goal coordinates: hand xyz, normalized gripper opening, and
+mechanism xyz. It reports bitwise equality, thresholds at `1e-6`, `1e-3`, and
+`1e-2`, and the minimum/mean/maximum L-infinity and L2 errors. The JSON embeds
+the closest actually visited successful state. That vector is a candidate
+replacement goal which is reachable and successful by construction.
+
+Exact equality is descriptive, not a sensible continuous-control acceptance
+gate: even the SGCRL problem statement notes that continuous systems do not
+hit a real-valued goal exactly. The useful decision is whether the synthetic
+goal lies near the observed successful-state manifold; if it does not, the
+captured successful state should replace the invented hand/gripper goal before
+rerunning DCC.
+
 ## Validation
 
 The dependency-light tests exercise a passing result, the historical Task-8

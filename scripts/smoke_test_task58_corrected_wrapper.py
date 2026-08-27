@@ -97,6 +97,30 @@ def _expected_success(mechanism, fixed_goal, env_name):
   return float(distance <= float(metadata['success_threshold'])), distance
 
 
+def full_goal_errors(observation, obs_dim, semantic_dim=7):
+  """Compare the actually visited state with the complete synthetic goal.
+
+  Task 5 and Task 8 have seven semantic coordinates (hand xyz, normalized
+  gripper opening, mechanism xyz); the remaining four coordinates are padding.
+  Exact floating-point equality is recorded separately from useful distance
+  measures because equality has probability zero under continuous control.
+  """
+  observation = np.asarray(observation, dtype=np.float32)
+  state = observation[:obs_dim][:semantic_dim]
+  goal = observation[obs_dim:][:semantic_dim]
+  difference = state - goal
+  return {
+      'full_goal_linf_error': float(np.max(np.abs(difference))),
+      'full_goal_l2_error': float(np.linalg.norm(difference)),
+      'hand_goal_l2_error': float(np.linalg.norm(difference[:3])),
+      'gripper_goal_abs_error': float(abs(difference[3])),
+      'mechanism_goal_l2_error': float(np.linalg.norm(difference[4:7])),
+      'bitwise_equal': bool(np.array_equal(state, goal)),
+      'state': state.copy(),
+      'goal': goal.copy(),
+  }
+
+
 def classify_task(summary, *, expert_success_min, observation_tolerance,
                   goal_tolerance, zero_action_tolerance):
   """Return a deterministic pass/fail decision and all failed gates."""
@@ -154,6 +178,9 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
   post_horizon_success_count = 0
   zero_displacements = []
   reported_horizons = set()
+  successful_full_goal_rows = []
+  closest_successful_state = None
+  minimum_any_state_full_goal_linf_error = float('inf')
 
   for seed in seeds:
     np.random.seed(seed)
@@ -199,6 +226,10 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
         initial_success, initial_distance = _expected_success(
             initial_mechanism, fixed_goal, env_name)
         reset_success_count += int(initial_success)
+        initial_full_goal = full_goal_errors(observation, obs_dim)
+        minimum_any_state_full_goal_linf_error = min(
+            minimum_any_state_full_goal_linf_error,
+            initial_full_goal['full_goal_linf_error'])
         policy = policy_type()
         first_success_step = None
         min_axis_distance = initial_distance
@@ -220,12 +251,40 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
           expected, axis_distance = _expected_success(
               _mechanism(environment), fixed_goal, env_name)
           min_axis_distance = min(min_axis_distance, axis_distance)
+          full_goal = full_goal_errors(observation, obs_dim)
+          if step_index <= training_horizon:
+            minimum_any_state_full_goal_linf_error = min(
+                minimum_any_state_full_goal_linf_error,
+                full_goal['full_goal_linf_error'])
           reward_axis_mismatch_steps += int(
               float(reward > 0.0) != expected)
           info_axis_mismatch_steps += int(
               float(info.get('success', -1.0)) != expected)
           if expected and first_success_step is None:
             first_success_step = step_index
+          if expected and step_index <= training_horizon:
+            successful_row = {
+                key: value for key, value in full_goal.items()
+                if key not in ('state', 'goal')
+            }
+            successful_row.update({
+                'seed': int(seed),
+                'episode': episode,
+                'step': step_index,
+                'success_axis_distance': axis_distance,
+                'state': full_goal['state'].tolist(),
+                'goal': full_goal['goal'].tolist(),
+            })
+            successful_full_goal_rows.append(successful_row)
+            if (closest_successful_state is None
+                or successful_row['full_goal_linf_error']
+                < closest_successful_state['full_goal_linf_error']):
+              closest_successful_state = dict(successful_row)
+          # Once success has occurred, continue only to the real training
+          # horizon so the audit can find whether a later successful state is
+          # closer to the complete synthetic goal.  The 151--200 extension is
+          # used only for episodes that failed inside the training horizon.
+          if step_index >= training_horizon and first_success_step is not None:
             break
           if done:
             break
@@ -277,6 +336,48 @@ def smoke_task(env_name: str, *, seeds: Sequence[int], episodes: int,
       'post_horizon_success_rate': post_horizon_success_count / max(total, 1),
       **{key + '_max': value for key, value in maxima.items()},
   }
+  if successful_full_goal_rows:
+    for key in (
+        'full_goal_linf_error',
+        'full_goal_l2_error',
+        'hand_goal_l2_error',
+        'gripper_goal_abs_error',
+        'mechanism_goal_l2_error',
+    ):
+      values = [float(row[key]) for row in successful_full_goal_rows]
+      summary[key + '_at_success_min'] = min(values)
+      summary[key + '_at_success_mean'] = float(np.mean(values))
+      summary[key + '_at_success_max'] = max(values)
+  else:
+    for key in (
+        'full_goal_linf_error',
+        'full_goal_l2_error',
+        'hand_goal_l2_error',
+        'gripper_goal_abs_error',
+        'mechanism_goal_l2_error',
+    ):
+      summary[key + '_at_success_min'] = float('nan')
+      summary[key + '_at_success_mean'] = float('nan')
+      summary[key + '_at_success_max'] = float('nan')
+  summary.update({
+      'successful_state_samples': len(successful_full_goal_rows),
+      'bitwise_exact_full_goal_visits': sum(
+          int(row['bitwise_equal']) for row in successful_full_goal_rows),
+      'full_goal_visits_within_1e-6': sum(
+          int(row['full_goal_linf_error'] <= 1e-6)
+          for row in successful_full_goal_rows),
+      'full_goal_visits_within_1e-3': sum(
+          int(row['full_goal_linf_error'] <= 1e-3)
+          for row in successful_full_goal_rows),
+      'full_goal_visits_within_1e-2': sum(
+          int(row['full_goal_linf_error'] <= 1e-2)
+          for row in successful_full_goal_rows),
+      'minimum_any_state_full_goal_linf_error':
+          minimum_any_state_full_goal_linf_error,
+      # This state was actually visited while the official axis predicate was
+      # true, so it is a reachable-successful replacement goal by construction.
+      'closest_successful_state': closest_successful_state,
+  })
   summary['classification'] = classify_task(
       summary,
       expert_success_min=expert_success_min,
@@ -304,7 +405,7 @@ def main():
     parser.error('--max-steps must be at least --training-horizon.')
 
   results = {
-      'protocol': 'task58_corrected_wrapper_smoke_v1',
+      'protocol': 'task58_corrected_wrapper_smoke_v2',
       'success_mode': 'corrected',
       'seeds': args.seeds,
       'episodes_per_seed': args.episodes,

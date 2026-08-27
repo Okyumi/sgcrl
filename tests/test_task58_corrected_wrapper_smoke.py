@@ -10,6 +10,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.smoke_test_task58_corrected_wrapper import classify_task
+from scripts.smoke_test_task58_corrected_wrapper import full_goal_errors
 
 
 def _summary():
@@ -58,6 +59,18 @@ def test_reward_and_solvability_fail_independently():
   assert not result['passed']
   assert 'reward_matches_axis_predicate' in result['failed_gates']
   assert 'scripted_policy_solves_by_training_horizon' in result['failed_gates']
+
+
+def test_full_goal_errors_use_all_seven_semantic_coordinates():
+  observation = [0.0] * 22
+  observation[0:7] = [1.0, 2.0, 3.0, 0.2, 4.0, 5.0, 6.0]
+  observation[11:18] = [1.0, 2.0, 2.5, 0.4, 4.0, 5.0, 5.9]
+  result = full_goal_errors(observation, 11)
+  assert result['full_goal_linf_error'] == 0.5
+  assert result['hand_goal_l2_error'] == 0.5
+  assert abs(result['gripper_goal_abs_error'] - 0.2) < 1e-6
+  assert abs(result['mechanism_goal_l2_error'] - 0.1) < 1e-5
+  assert not result['bitwise_equal']
 
 
 def test_launcher_is_short_evaluation_only_gate():
