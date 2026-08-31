@@ -1759,7 +1759,8 @@ def train_single_task(
         task58_reevaluation.PairedTask58SuccessObserver(
             obs_dim=config.obs_dim,
             env_name=env_name,
-            emitted_success_mode=emitted_success_mode))
+            emitted_success_mode=emitted_success_mode,
+            mechanism_target=fixed_goal))
   evaluator_logger = make_default_logger(
       'evaluator', save_data=True, save_dir=log_dir,
       add_uid=config.add_uid, use_wandb=config.use_wandb,

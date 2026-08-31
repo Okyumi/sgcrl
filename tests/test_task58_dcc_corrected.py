@@ -32,7 +32,8 @@ def _observation(hand, mechanism, goal, obs_dim=11):
 
 def test_corrected_observer_identifies_failure_stage_without_new_rollouts():
   observer = PairedTask58SuccessObserver(
-      11, 'sawyer_handle_press_side', emitted_success_mode='corrected')
+      11, 'sawyer_handle_press_side', emitted_success_mode='corrected',
+      mechanism_target=np.asarray([-0.07, 0.68, 0.07], dtype=np.float32))
   observer.observe_first(None, _TimeStep(
       _observation(
           hand=[0.0, 0.0, 0.3],
@@ -52,6 +53,39 @@ def test_corrected_observer_identifies_failure_stage_without_new_rollouts():
   assert metrics['mechanism_moved'] == 1.0
   assert np.isclose(metrics['initial_task_axis_distance'], 0.13)
   assert metrics['max_task_axis_progress'] > 0.12
+  assert metrics['success_reward_mismatch_steps'] == 0.0
+
+
+def test_corrected_observer_rejects_missing_wrapper_target():
+  try:
+    PairedTask58SuccessObserver(
+        11, 'sawyer_window_close', emitted_success_mode='corrected')
+  except ValueError as error:
+    assert 'full-state conditioning goal is not a success target' in str(error)
+  else:
+    raise AssertionError('Corrected scorer accepted no wrapper target.')
+
+
+def test_corrected_observer_uses_wrapper_target_not_conditioning_goal():
+  """A reachable goal may sit inside the success region, not at its center."""
+  observer = PairedTask58SuccessObserver(
+      11, 'sawyer_window_close', emitted_success_mode='corrected',
+      mechanism_target=np.asarray([0.0, 0.80, 0.20], dtype=np.float32))
+  conditioning_goal = [0.10, 0.81, 0.20]
+  observer.observe_first(None, _TimeStep(
+      _observation(
+          hand=[0.0, 0.0, 0.3], mechanism=[0.20, 0.80, 0.20],
+          goal=conditioning_goal),
+      reward=0.0))
+  # This state passes the wrapper threshold around x=0.0, even though it is
+  # not within 0.05 of the conditioning goal's x=0.10.
+  observer.observe(None, _TimeStep(
+      _observation(
+          hand=[0.0, 0.0, 0.2], mechanism=[0.049, 0.80, 0.20],
+          goal=conditioning_goal),
+      reward=1.0), action=np.zeros(4))
+  metrics = observer.get_metrics()
+  assert metrics['task_axis_success'] == 1.0
   assert metrics['success_reward_mismatch_steps'] == 0.0
 
 

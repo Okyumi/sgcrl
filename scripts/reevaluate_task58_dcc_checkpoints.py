@@ -184,7 +184,8 @@ def reevaluate(args):
       variable_client,
       backend='cpu')
   observer = task58_reevaluation.PairedTask58SuccessObserver(
-      obs_dim, args.env_name)
+      obs_dim, args.env_name,
+      mechanism_target=FIXED_GOALS[args.env_name])
   loop = environment_loop.EnvironmentLoop(
       environment, actor, observers=[observer])
 

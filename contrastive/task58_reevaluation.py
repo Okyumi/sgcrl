@@ -27,12 +27,18 @@ MECHANISM_START = 4
 MECHANISM_END = 7
 
 
-def success_distances(observation, obs_dim: int, env_name: str):
+def success_distances(observation, obs_dim: int, env_name: str,
+                      mechanism_target=None):
   """Return historical full-3D and corrected task-axis distances.
 
   ``observation`` must use the historical full-state contract
   ``[state, goal]``.  The mechanism occupies coordinates ``state[4:7]`` and
   the corresponding goal coordinates ``goal[4:7]`` for both tasks.
+
+  ``mechanism_target`` is the authoritative task target used by the wrapper.
+  It must be supplied when the exposed full-state conditioning goal is a
+  captured reachable state whose mechanism coordinates need not equal that
+  target exactly.
   """
   if env_name not in TASK58_SUCCESS_SPECS:
     raise ValueError(
@@ -47,15 +53,22 @@ def success_distances(observation, obs_dim: int, env_name: str):
         f'got obs_dim={obs_dim}, observation size={observation.size}.')
 
   mechanism = observation[MECHANISM_START:MECHANISM_END]
-  goal = observation[
-      obs_dim + MECHANISM_START:obs_dim + MECHANISM_END]
+  if mechanism_target is None:
+    target = observation[
+        obs_dim + MECHANISM_START:obs_dim + MECHANISM_END]
+  else:
+    target = np.asarray(mechanism_target)
+    if target.shape != (3,):
+      raise ValueError(
+          f'mechanism_target must have shape (3,), got {target.shape}.')
   spec = TASK58_SUCCESS_SPECS[env_name]
-  legacy_distance = float(np.linalg.norm(mechanism - goal))
-  axis_distance = abs(float(mechanism[spec.axis] - goal[spec.axis]))
+  legacy_distance = float(np.linalg.norm(mechanism - target))
+  axis_distance = abs(float(mechanism[spec.axis] - target[spec.axis]))
   return legacy_distance, axis_distance
 
 
-def success_flags(observation, obs_dim: int, env_name: str):
+def success_flags(observation, obs_dim: int, env_name: str,
+                  mechanism_target=None):
   """Return ``(legacy_success, task_axis_success)`` for one state.
 
   The strict historical comparison matches ``env_utils.py``.  The inclusive
@@ -63,7 +76,7 @@ def success_flags(observation, obs_dim: int, env_name: str):
   ``task_axis`` wrapper mode.
   """
   legacy_distance, axis_distance = success_distances(
-      observation, obs_dim, env_name)
+      observation, obs_dim, env_name, mechanism_target)
   threshold = TASK58_SUCCESS_SPECS[env_name].threshold
   return legacy_distance < threshold, axis_distance <= threshold
 
@@ -74,7 +87,8 @@ class PairedTask58SuccessObserver:
   def __init__(self, obs_dim: int, env_name: str,
                emitted_success_mode: str = 'legacy_distance',
                interaction_threshold: float = 0.09,
-               movement_threshold: float = 0.005):
+               movement_threshold: float = 0.005,
+               mechanism_target=None):
     if env_name not in TASK58_SUCCESS_SPECS:
       raise ValueError(
           f'Paired Task-5/Task-8 scoring does not support {env_name!r}.')
@@ -85,6 +99,19 @@ class PairedTask58SuccessObserver:
           'emitted_success_mode must be legacy_distance or corrected; got '
           f'{emitted_success_mode!r}.')
     self._emitted_success_mode = emitted_success_mode
+    self._mechanism_target = (
+        None if mechanism_target is None
+        else np.asarray(mechanism_target, dtype=np.float32).copy())
+    if (emitted_success_mode == 'corrected'
+        and self._mechanism_target is None):
+      raise ValueError(
+          'Corrected Task-5/Task-8 scoring requires the wrapper mechanism '
+          'target; the full-state conditioning goal is not a success target.')
+    if (self._mechanism_target is not None
+        and self._mechanism_target.shape != (3,)):
+      raise ValueError(
+          'mechanism_target must have shape (3,), got '
+          f'{self._mechanism_target.shape}.')
     self._interaction_threshold = float(interaction_threshold)
     self._movement_threshold = float(movement_threshold)
     self._legacy_successes = []
@@ -108,7 +135,7 @@ class PairedTask58SuccessObserver:
     self._reward_mismatches = 0
     observation = np.asarray(timestep.observation)
     _, self._initial_axis_distance = success_distances(
-        observation, self._obs_dim, self._env_name)
+        observation, self._obs_dim, self._env_name, self._mechanism_target)
     spec = TASK58_SUCCESS_SPECS[self._env_name]
     self._initial_mechanism_axis = float(
         observation[MECHANISM_START + spec.axis])
@@ -116,7 +143,8 @@ class PairedTask58SuccessObserver:
   def observe(self, env, timestep, action):
     del env, action
     legacy_distance, axis_distance = success_distances(
-        timestep.observation, self._obs_dim, self._env_name)
+        timestep.observation, self._obs_dim, self._env_name,
+        self._mechanism_target)
     threshold = TASK58_SUCCESS_SPECS[self._env_name].threshold
     legacy_success = legacy_distance < threshold
     axis_success = axis_distance <= threshold

@@ -126,6 +126,22 @@ the dynamics auxiliary on and off, all on matched seeds 5 through 14. This is
 110 runs, not a nine-plus-one grid. It remains locked until the twelve Task-5/8
 DCC runs and the short ten-task wrapper smoke pass.
 
+## 2026-08-31 Task-8 evaluation-target repair
+
+Task-8 seed 7 stopped during evaluation because the independent trajectory
+scorer compared the handle with the mechanism coordinates inside the captured
+full-state conditioning goal. The corrected wrapper instead compared the
+handle with the task's fixed mechanism target. A captured successful state can
+sit anywhere inside the success region, so those two references need not be
+identical.
+
+The evaluator now receives the wrapper's fixed mechanism target explicitly.
+It uses that target for both the old 3-D diagnostic and the corrected axis
+diagnostic. Corrected scoring fails immediately if this target is omitted,
+which prevents the conditioning goal from silently becoming the success
+target again. The full-state goal is unchanged and remains the exact reachable
+state validated by the V3 smoke test.
+
 ## Local validation
 
 The dependency-light tests cover:
