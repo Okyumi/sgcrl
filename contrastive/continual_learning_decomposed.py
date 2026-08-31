@@ -527,9 +527,10 @@ class ContinualDecomposedLearner(acme.Learner):
       p_task = critic_params_dict['phi_task']
       p_psi = critic_params_dict['psi']
 
-      logits = decomp_nets.apply_score(p_b, p_phi, p_task, p_psi,
-                                       transitions.observation,
-                                       transitions.action)
+      (logits, sa_shared, sa_task,
+       goal_repr) = decomp_nets.apply_score_with_components(
+           p_b, p_phi, p_task, p_psi, transitions.observation,
+           transitions.action)
       B = logits.shape[0]
       I = jnp.eye(B)
 
@@ -552,6 +553,25 @@ class ContinualDecomposedLearner(acme.Learner):
       logits_pos = jnp.sum(logits * I) / jnp.sum(I)
       logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
       lse = jax.nn.logsumexp(logits, axis=1) ** 2
+      shared_scale = jnp.asarray(
+          decomp_nets.shared_repr_scale, dtype=sa_shared.dtype)
+      shared_norm = jnp.linalg.norm(sa_shared, axis=1)
+      scaled_shared_norm = shared_scale * shared_norm
+      task_norm = jnp.linalg.norm(sa_task, axis=1)
+      combined_norm = jnp.linalg.norm(
+          shared_scale * sa_shared + sa_task, axis=1)
+      branch_cosine = jnp.sum(sa_shared * sa_task, axis=1) / jnp.maximum(
+          shared_norm * task_norm, 1e-8)
+      if decomp_nets.combine_mode == 'add':
+        shared_goal_repr = goal_repr
+        task_goal_repr = goal_repr
+      else:
+        shared_goal_repr, task_goal_repr = jnp.split(goal_repr, 2, axis=1)
+      shared_goal_score = jnp.sum(
+          shared_scale * sa_shared * shared_goal_repr, axis=1)
+      task_goal_score = jnp.sum(sa_task * task_goal_repr, axis=1)
+      shared_score_fraction = jnp.abs(shared_goal_score) / jnp.maximum(
+          jnp.abs(shared_goal_score) + jnp.abs(task_goal_score), 1e-8)
       aux = dict(
           critic_loss=total,
           infonce=total,
@@ -560,6 +580,17 @@ class ContinualDecomposedLearner(acme.Learner):
           categorical_accuracy=cat_acc,
           logits_pos=logits_pos,
           logits_neg=logits_neg,
+          shared_scale=shared_scale,
+          shared_norm=jnp.mean(shared_norm),
+          scaled_shared_norm=jnp.mean(scaled_shared_norm),
+          task_norm=jnp.mean(task_norm),
+          combined_norm=jnp.mean(combined_norm),
+          scaled_shared_to_task_norm=jnp.mean(
+              scaled_shared_norm / jnp.maximum(task_norm, 1e-8)),
+          shared_task_cosine=jnp.mean(branch_cosine),
+          shared_goal_score_abs=jnp.mean(jnp.abs(shared_goal_score)),
+          task_goal_score_abs=jnp.mean(jnp.abs(task_goal_score)),
+          shared_score_fraction=jnp.mean(shared_score_fraction),
       )
       return total, aux
 
@@ -1033,6 +1064,17 @@ class ContinualDecomposedLearner(acme.Learner):
           'logits_pos': c_aux['logits_pos'],
           'logits_neg': c_aux['logits_neg'],
           'decomp/L_dyn': d_aux['dyn_mse'],
+          'decomp/shared_scale': c_aux['shared_scale'],
+          'decomp/shared_norm': c_aux['shared_norm'],
+          'decomp/scaled_shared_norm': c_aux['scaled_shared_norm'],
+          'decomp/task_norm': c_aux['task_norm'],
+          'decomp/combined_norm': c_aux['combined_norm'],
+          'decomp/scaled_shared_to_task_norm':
+              c_aux['scaled_shared_to_task_norm'],
+          'decomp/shared_task_cosine': c_aux['shared_task_cosine'],
+          'decomp/shared_goal_score_abs': c_aux['shared_goal_score_abs'],
+          'decomp/task_goal_score_abs': c_aux['task_goal_score_abs'],
+          'decomp/shared_score_fraction': c_aux['shared_score_fraction'],
           'actor_loss': a_aux['actor_loss'],
           'entropy_mean': a_aux['entropy_mean'],
           'alpha_loss': al_loss_val,

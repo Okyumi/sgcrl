@@ -94,7 +94,9 @@ class DecomposedCriticNetworks:
 
   # Convenience apply fns that callers may use directly.
   apply_sa_repr: Optional[Callable] = None  # composed phi(s,a)
+  apply_sa_components: Optional[Callable] = None  # raw shared/task branches
   apply_score: Optional[Callable] = None    # full (B, B) critic score
+  apply_score_with_components: Optional[Callable] = None
   apply_paired_score: Optional[Callable] = None  # matched triples, shape (B,)
 
 
@@ -117,6 +119,7 @@ def make_decomposed_networks(
     repr_norm: bool = False,
     combine_mode: str = 'add',
     goal_encoder_mode: str = 'shared',
+    shared_repr_scale: float = 1.0,
     action_effect_hidden_dim: int = 256,
     action_effect_output_dim: Optional[int] = None,
     action_effect_include_goal: bool = False,
@@ -154,7 +157,7 @@ def make_decomposed_networks(
         ``config.energy_fn``.
     repr_norm: if True, L2-normalise sa and g embeddings before scoring,
         matching ``contrastive.networks.make_networks(repr_norm=...)``.
-    combine_mode: 'add' (default; z_sa = h_phi(b_shared) + phi_task) or
+    combine_mode: 'add' (default; z_sa = alpha*h_phi(b_shared) + phi_task) or
         'concat' (z_sa = [h_phi(b_shared); phi_task]). When 'concat',
         the goal side passes psi(g) through a learnable Linear projection
         to the resulting 2*repr_dim space so the scoring function still
@@ -164,6 +167,8 @@ def make_decomposed_networks(
         combine_mode (so combine='add' + goal='projected' is a useful
         ablation that tests whether the extra goal head matters in the
         additive case).
+    shared_repr_scale: fixed nonnegative alpha multiplying the shared
+        contrastive branch. The default 1.0 is the original DCC.
 
   Returns:
     A ``DecomposedCriticNetworks`` instance with all init / apply
@@ -182,6 +187,11 @@ def make_decomposed_networks(
     raise ValueError(
         f'goal_encoder_mode must be shared or projected, got '
         f'{goal_encoder_mode!r}')
+  if not np.isfinite(shared_repr_scale) or shared_repr_scale < 0:
+    raise ValueError(
+        'shared_repr_scale must be finite and nonnegative, got '
+        f'{shared_repr_scale!r}')
+  shared_repr_scale = float(shared_repr_scale)
   z_sa_dim = repr_dim if combine_mode == 'add' else 2 * repr_dim
   use_psi_proj = (combine_mode == 'concat') or (
       goal_encoder_mode == 'projected')
@@ -321,16 +331,23 @@ def make_decomposed_networks(
     return {'psi': p_psi, 'psi_proj': p_proj}
   init_psi = _init_psi_combined
 
-  def apply_sa_repr(params_b_shared, params_h_phi, params_phi_task,
-                    obs, action):
-    """Composed contrastive embedding (additive or concatenated)."""
+  def apply_sa_components(params_b_shared, params_h_phi, params_phi_task,
+                          obs, action):
+    """Return the unscaled shared and task-specific embeddings."""
     hidden = b_shared.apply(params_b_shared, obs, action)
     sa_shared = h_phi.apply(params_h_phi, hidden)
     sa_task = phi_task.apply(params_phi_task, obs, action)
+    return sa_shared, sa_task
+
+  def apply_sa_repr(params_b_shared, params_h_phi, params_phi_task,
+                    obs, action):
+    """Composed contrastive embedding (additive or concatenated)."""
+    sa_shared, sa_task = apply_sa_components(
+        params_b_shared, params_h_phi, params_phi_task, obs, action)
     if combine_mode == 'add':
-      return sa_shared + sa_task
+      return shared_repr_scale * sa_shared + sa_task
     # 'concat': dim becomes 2*repr_dim, which is z_sa_dim.
-    return jnp.concatenate([sa_shared, sa_task], axis=-1)
+    return jnp.concatenate([shared_repr_scale * sa_shared, sa_task], axis=-1)
 
   def apply_psi(params_psi_bundle, obs, params_psi_proj=None):
     """Goal embedding.
@@ -381,6 +398,32 @@ def make_decomposed_networks(
     # inner_product (SGCRL default)
     return jnp.einsum('ik,jk->ij', sa, g)
 
+  def apply_score_with_components(
+      params_b_shared, params_h_phi, params_phi_task, params_psi,
+      obs, action, params_psi_proj=None):
+    """Score matrix plus branch embeddings for cheap diagnostics."""
+    sa_shared, sa_task = apply_sa_components(
+        params_b_shared, params_h_phi, params_phi_task, obs, action)
+    if combine_mode == 'add':
+      sa = shared_repr_scale * sa_shared + sa_task
+    else:
+      sa = jnp.concatenate(
+          [shared_repr_scale * sa_shared, sa_task], axis=-1)
+    g = apply_psi(params_psi, obs, params_psi_proj)
+    scored_sa, scored_g = sa, g
+    if repr_norm:
+      scored_sa = scored_sa / jnp.maximum(
+          jnp.linalg.norm(scored_sa, axis=1, keepdims=True), 1e-8)
+      scored_g = scored_g / jnp.maximum(
+          jnp.linalg.norm(scored_g, axis=1, keepdims=True), 1e-8)
+    if energy_fn == 'l2':
+      logits = -jnp.sqrt(jnp.sum(
+          (scored_sa[:, None, :] - scored_g[None, :, :]) ** 2,
+          axis=-1) + 1e-6)
+    else:
+      logits = jnp.einsum('ik,jk->ij', scored_sa, scored_g)
+    return logits, sa_shared, sa_task, g
+
   def apply_paired_score(
       params_b_shared, params_h_phi, params_phi_task, params_psi,
       obs, action, params_psi_proj=None):
@@ -413,7 +456,9 @@ def make_decomposed_networks(
       repr_dim=repr_dim, hidden_dim=hidden_dim_actual,
       action_dim=num_dimensions,
       apply_sa_repr=apply_sa_repr,
+      apply_sa_components=apply_sa_components,
       apply_score=apply_score,
+      apply_score_with_components=apply_score_with_components,
       apply_paired_score=apply_paired_score,
   )
   # Attach extra fields outside the dataclass field list so older callers
@@ -424,4 +469,5 @@ def make_decomposed_networks(
   bundle.init_psi_proj = init_psi_proj
   bundle.apply_psi_proj = (psi_proj.apply if psi_proj is not None else None)
   bundle.use_psi_proj = use_psi_proj
+  bundle.shared_repr_scale = shared_repr_scale
   return bundle

@@ -58,6 +58,7 @@ class ContinualConfig:
   # auxiliary regresses the masked next state; mu controls its weight.
   # See docs/2026-05-08_plan_proposal1_dyn_aux.md for the full design.
   dyn_aux_weight: float = 1.0           # mu in the algorithm
+  shared_repr_scale: float = 1.0        # alpha*phi_shared + phi_task
   phi_task_width: int = 256             # smaller than the shared body
   phi_task_depth: int = 4               # one residual block (block_size=4)
 

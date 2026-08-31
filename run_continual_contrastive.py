@@ -117,6 +117,11 @@ flags.DEFINE_integer('base_steps', 8_000_000, 'Env steps for base task.')
 flags.DEFINE_integer('k_max', 10, 'Max pool size before merging.')
 flags.DEFINE_string('checkpoint_dir', 'logs/continual_checkpoints',
                     'Directory for cross-task checkpoints.')
+flags.DEFINE_string(
+    'resume_checkpoint_dir', '',
+    'Optional source directory for the checkpoint loaded before '
+    '--start_task. New checkpoints are still written to --checkpoint_dir. '
+    'Empty means read and write the same directory.')
 flags.DEFINE_bool('use_wandb', True, 'Log to W&B.')
 flags.DEFINE_string('wandb_project', 'continual_gcrl_paper',
                     'W&B project name.')
@@ -253,6 +258,11 @@ flags.DEFINE_float('dyn_aux_weight', 1.0,
                    'Weight on the masked-dynamics auxiliary loss (mu) when '
                    'critic_mode="decomposed". 0.0 disables L_dyn (used for '
                    'the regression-check cell N5). Plan section 6.')
+flags.DEFINE_float(
+    'shared_repr_scale', 1.0,
+    'Fixed alpha in alpha * phi_shared(s,a) + phi_task(s,a) for plain '
+    'DCC. 1.0 is the original DCC; 0.0 removes the shared branch from '
+    'the contrastive score while leaving dynamics training on.')
 flags.DEFINE_float('dyn_aux_after_task0', -1.0,
                    'If non-negative, override dyn_aux_weight to this value '
                    'starting at task 1 (the base task k=0 still uses '
@@ -1111,6 +1121,8 @@ def train_single_task(
         combine_mode=getattr(continual_cfg, 'combine_mode', 'add'),
         goal_encoder_mode=getattr(
             continual_cfg, 'goal_encoder_mode', 'shared'),
+        shared_repr_scale=getattr(
+            continual_cfg, 'shared_repr_scale', 1.0),
         action_effect_hidden_dim=getattr(
             continual_cfg, 'action_effect_hidden_dim', 256),
         action_effect_output_dim=(
@@ -2971,6 +2983,7 @@ def main(_):
       # defaults; submit scripts override per cell via
       # experiment_configs.py).
       dyn_aux_weight=FLAGS.dyn_aux_weight,
+      shared_repr_scale=FLAGS.shared_repr_scale,
       phi_task_width=FLAGS.phi_task_width,
       phi_task_depth=FLAGS.phi_task_depth,
       combine_mode=FLAGS.combine_mode,
@@ -3229,7 +3242,9 @@ def main(_):
       print(f'  All {num_tasks} tasks already completed. Nothing to do.',
             flush=True)
       return
-    ckpt = load_ckpt(FLAGS.checkpoint_dir, start_task - 1, seed,
+    resume_checkpoint_dir = (
+        FLAGS.resume_checkpoint_dir or FLAGS.checkpoint_dir)
+    ckpt = load_ckpt(resume_checkpoint_dir, start_task - 1, seed,
                       critic_mode=FLAGS.critic_mode,
                       use_task_id=FLAGS.use_task_id,
                       adapt_heads_only=FLAGS.adapt_heads_only,
@@ -3343,6 +3358,8 @@ def main(_):
                   'neg_bank_max_tasks': FLAGS.neg_bank_max_tasks,
                   'dyn_aux_weight': FLAGS.dyn_aux_weight,
                   'dyn_aux_after_task0': FLAGS.dyn_aux_after_task0,
+                  'shared_repr_scale': FLAGS.shared_repr_scale,
+                  'resume_checkpoint_dir': FLAGS.resume_checkpoint_dir,
                   'phi_task_width': FLAGS.phi_task_width,
                   'phi_task_depth': FLAGS.phi_task_depth,
                   'combine_mode': FLAGS.combine_mode,
