@@ -105,6 +105,10 @@ def test_launcher_runs_twelve_cells_without_probe_preflights():
   assert 'experiment_configs_task58_dcc_corrected.py' in launcher
   assert 'tests/test_task58_reachable_success_goals.py' in launcher
   assert 'task58_dcc_dyn_ablation_v1' in launcher
+  assert 'conda activate contrastive_rl' in launcher
+  assert 'set_up/torch_hpc_env.sh' in launcher
+  assert launcher.index('conda activate contrastive_rl') < launcher.index(
+      'tests/test_task58_dcc_corrected.py')
   assert 'COUNTERFACTUAL' not in launcher
   assert 'ACTION_LANDSCAPE_SELF_TEST' not in launcher
 

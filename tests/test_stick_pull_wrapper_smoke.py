@@ -5,11 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import numpy as np
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.smoke_test_stick_pull_corrected_wrapper import classify_summary
+from scripts.smoke_test_stick_pull_corrected_wrapper import full_goal_errors
 from scripts.smoke_test_stick_pull_corrected_wrapper import insertion_metrics
 
 
@@ -24,6 +27,40 @@ def _summary():
       'success_rate': 1.0,
       'captured_successful_state': [0.0] * 11,
   }
+
+
+def test_full_goal_errors_reports_component_distances():
+  observation = np.array([
+      1.0, 2.0, 3.0, 0.5,
+      4.0, 5.0, 6.0,
+      7.0, 8.0, 9.0,
+      0.1,
+      1.1, 2.1, 3.1, 0.6,
+      4.2, 5.2, 6.2,
+      7.3, 8.3, 9.3,
+      0.2,
+  ], dtype=np.float32)
+  metrics = full_goal_errors(observation, obs_dim=11)
+  assert np.isclose(metrics['full_goal_linf_error'], 0.3)
+  assert metrics['hand_goal_l2_error'] > 0.0
+  assert metrics['stick_com_goal_l2_error'] > 0.0
+  assert metrics['handle_goal_l2_error'] > 0.0
+  assert np.isclose(metrics['insertion_margin_goal_abs_error'], 0.1)
+  assert not metrics['bitwise_equal']
+
+
+def test_summary_with_goal_revisit_metrics_still_passes():
+  summary = _summary()
+  summary.update({
+      'successful_state_samples': 12,
+      'full_goal_visits_within_1e-2': 4,
+      'full_goal_linf_error_at_success_min': 0.01,
+      'full_goal_linf_error_at_success_mean': 0.15,
+      'full_goal_linf_error_at_success_max': 0.4,
+      'minimum_any_state_full_goal_linf_error': 0.005,
+  })
+  result = classify_summary(summary)
+  assert result['passed']
 
 
 def test_insertion_margin_matches_all_three_official_gates():

@@ -31,6 +31,17 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.45
 export LOG_DIR="/scratch/yd2247/sgcrl/logs/task58_dcc_dyn_ablation_v1/runs"
 export CHECKPOINT_DIR="/scratch/yd2247/sgcrl/logs/task58_dcc_dyn_ablation_v1/checkpoints"
 
+export SCRATCH="${SCRATCH:-/scratch/$(whoami)}"
+MINICONDA_ROOT="${MINICONDA_ROOT:-$SCRATCH/miniconda3}"
+module purge 2>/dev/null || true
+# shellcheck source=/dev/null
+source "${MINICONDA_ROOT}/etc/profile.d/conda.sh"
+eval "$(conda shell.bash hook)"
+conda activate contrastive_rl
+# shellcheck source=/dev/null
+source "${REPO_DIR}/set_up/torch_hpc_env.sh"
+export MUJOCO_GL=egl
+
 python tests/test_task58_dcc_corrected.py
 python tests/test_task58_reachable_success_goals.py
 exec bash "$REPO_DIR/DRAFT.sh"

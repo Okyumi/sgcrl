@@ -140,3 +140,18 @@ The dependency-light tests cover:
 
 Real MuJoCo validation remains a cluster step because the local project
 interpreter does not include the pinned simulator stack.
+
+## 2026-08-31 launcher fix (job 16659678)
+
+Array job `16659678` failed immediately on array task 0 with
+`ModuleNotFoundError: No module named 'numpy'` because
+`DRAFT_task58_dcc_corrected.sh` ran the dependency-light preflight tests
+before activating `contrastive_rl` and sourcing `set_up/torch_hpc_env.sh`.
+The launcher now mirrors `DRAFT_goal_semantics.sh`: conda activation and
+`MUJOCO_GL=egl` happen before `tests/test_task58_dcc_corrected.py`.
+
+Resubmit with:
+
+```bash
+sbatch DRAFT_task58_dcc_corrected.sh
+```

@@ -17,6 +17,7 @@ from contrastive import sawyer_success
 
 
 FIXED_TARGET = np.array([0.41, 0.54, 0.02], dtype=np.float32)
+SEMANTIC_DIM = 11
 
 
 def insertion_metrics(handle, stick_end):
@@ -35,6 +36,65 @@ def insertion_metrics(handle, stick_end):
       'signed_insertion_margin': float(np.min(margins)),
       'axis_margins': margins.tolist(),
   }
+
+
+def full_goal_errors(observation, obs_dim, semantic_dim=SEMANTIC_DIM):
+  """Compare the visited state with the fixed full-state goal."""
+  observation = np.asarray(observation, dtype=np.float32)
+  state = observation[:obs_dim][:semantic_dim]
+  goal = observation[obs_dim:][:semantic_dim]
+  difference = state - goal
+  return {
+      'full_goal_linf_error': float(np.max(np.abs(difference))),
+      'full_goal_l2_error': float(np.linalg.norm(difference)),
+      'hand_goal_l2_error': float(np.linalg.norm(difference[:3])),
+      'gripper_goal_abs_error': float(abs(difference[3])),
+      'stick_com_goal_l2_error': float(np.linalg.norm(difference[4:7])),
+      'handle_goal_l2_error': float(np.linalg.norm(difference[7:10])),
+      'insertion_margin_goal_abs_error': float(abs(difference[10])),
+      'bitwise_equal': bool(np.array_equal(state, goal)),
+      'state': state.copy(),
+      'goal': goal.copy(),
+  }
+
+
+def _aggregate_success_goal_metrics(successful_rows):
+  """Summarize how often successful states revisit the fixed full goal."""
+  metric_keys = (
+      'full_goal_linf_error',
+      'full_goal_l2_error',
+      'hand_goal_l2_error',
+      'gripper_goal_abs_error',
+      'stick_com_goal_l2_error',
+      'handle_goal_l2_error',
+      'insertion_margin_goal_abs_error',
+  )
+  summary = {
+      'successful_state_samples': len(successful_rows),
+      'bitwise_exact_full_goal_visits': sum(
+          int(row['bitwise_equal']) for row in successful_rows),
+      'full_goal_visits_within_1e-6': sum(
+          int(row['full_goal_linf_error'] <= 1e-6)
+          for row in successful_rows),
+      'full_goal_visits_within_1e-3': sum(
+          int(row['full_goal_linf_error'] <= 1e-3)
+          for row in successful_rows),
+      'full_goal_visits_within_1e-2': sum(
+          int(row['full_goal_linf_error'] <= 1e-2)
+          for row in successful_rows),
+  }
+  if successful_rows:
+    for key in metric_keys:
+      values = [float(row[key]) for row in successful_rows]
+      summary[key + '_at_success_min'] = min(values)
+      summary[key + '_at_success_mean'] = float(np.mean(values))
+      summary[key + '_at_success_max'] = max(values)
+  else:
+    for key in metric_keys:
+      summary[key + '_at_success_min'] = float('nan')
+      summary[key + '_at_success_mean'] = float('nan')
+      summary[key + '_at_success_max'] = float('nan')
+  return summary
 
 
 def classify_summary(summary, *, expert_success_min=0.8):
@@ -118,6 +178,9 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
   captured_successful_state = None
   captured_details = None
   captured_success_slack = float('-inf')
+  closest_successful_state = None
+  successful_full_goal_rows = []
+  minimum_any_state_full_goal_linf_error = float('inf')
   state_insertion_margin_error_max = 0.0
   exposed_goal_linf_error_max = 0.0
   reported_horizons = set()
@@ -145,6 +208,10 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
             float(np.max(np.abs(
                 observation[obs_dim:2 * obs_dim]
                 - env_utils.STICK_PULL_REACHABLE_SUCCESS_GOAL))))
+        reset_full_goal = full_goal_errors(observation, obs_dim)
+        minimum_any_state_full_goal_linf_error = min(
+            minimum_any_state_full_goal_linf_error,
+            reset_full_goal['full_goal_linf_error'])
         reset_success_count += int(reset_success)
         policy = policies.SawyerStickPullV2Policy()
         episode_success = False
@@ -167,6 +234,10 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
               float(np.max(np.abs(
                   observation[obs_dim:2 * obs_dim]
                   - env_utils.STICK_PULL_REACHABLE_SUCCESS_GOAL))))
+          full_goal = full_goal_errors(observation, obs_dim)
+          minimum_any_state_full_goal_linf_error = min(
+              minimum_any_state_full_goal_linf_error,
+              full_goal['full_goal_linf_error'])
           reward_mismatch_steps += int(
               bool(reward > 0.0) != expected_success)
           info_mismatch_steps += int(
@@ -180,6 +251,22 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
             success_slack = min(
                 0.12 - handle_distance,
                 insertion['signed_insertion_margin'])
+            successful_row = {
+                key: value for key, value in full_goal.items()
+                if key not in ('state', 'goal')
+            }
+            successful_row.update({
+                'seed': int(seed),
+                'episode': int(episode),
+                'step': int(step),
+                'handle_target_distance': handle_distance,
+                'success_slack': success_slack,
+            })
+            successful_full_goal_rows.append(successful_row)
+            if (closest_successful_state is None
+                or successful_row['full_goal_linf_error']
+                < closest_successful_state['full_goal_linf_error']):
+              closest_successful_state = dict(successful_row)
             if success_slack > captured_success_slack:
               captured_success_slack = success_slack
               captured_successful_state = state11.tolist()
@@ -205,6 +292,8 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
   summary = {
       'env_name': 'sawyer_stick_pull',
       'fixed_target': FIXED_TARGET.tolist(),
+      'conditioned_reachable_success_goal': (
+          env_utils.STICK_PULL_REACHABLE_SUCCESS_GOAL.tolist()),
       'episodes': total_episodes,
       'reported_training_horizon': (
           next(iter(reported_horizons))
@@ -220,6 +309,11 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
       'legacy_false_positive_steps': legacy_false_positive_steps,
       'legacy_false_positive_fraction': (
           legacy_false_positive_steps / max(legacy_positive_steps, 1)),
+      'minimum_any_state_full_goal_linf_error': (
+          minimum_any_state_full_goal_linf_error
+          if np.isfinite(minimum_any_state_full_goal_linf_error)
+          else float('nan')),
+      'closest_successful_state': closest_successful_state,
       # Proposed corrected state/goal semantics:
       # hand(3), gripper(1), stick COM(3), handle(3), insertion margin(1).
       'captured_successful_state_semantics': (
@@ -228,6 +322,7 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
       'captured_successful_state': captured_successful_state,
       'captured_successful_state_details': captured_details,
   }
+  summary.update(_aggregate_success_goal_metrics(successful_full_goal_rows))
   summary['classification'] = classify_summary(
       summary, expert_success_min=expert_success_min)
   return summary
@@ -249,7 +344,7 @@ def main():
       training_horizon=args.training_horizon,
       expert_success_min=args.expert_success_min)
   result = {
-      'protocol': 'stick_pull_corrected_wrapper_smoke_v3',
+      'protocol': 'stick_pull_corrected_wrapper_smoke_v4',
       'passed': summary['classification']['passed'],
       'summary': summary,
   }
