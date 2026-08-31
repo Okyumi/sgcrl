@@ -55,12 +55,14 @@ def test_corrected_observer_identifies_failure_stage_without_new_rollouts():
   assert metrics['success_reward_mismatch_steps'] == 0.0
 
 
-def test_six_clean_single_task_cells():
+def test_twelve_matched_single_task_cells():
   configs = build_configs()
-  assert len(configs) == 6
-  assert {(config['single_task'], config['seed']) for config in configs} == {
-      (env_name, seed)
+  assert len(configs) == 12
+  assert {(config['single_task'], config['dyn_aux_weight'], config['seed'])
+          for config in configs} == {
+      (env_name, dyn_aux_weight, seed)
       for env_name in ('sawyer_handle_press_side', 'sawyer_window_close')
+      for dyn_aux_weight in (0.0, 1.0)
       for seed in (5, 6, 7)
   }
   assert all(config['critic_mode'] == 'decomposed' for config in configs)
@@ -68,6 +70,7 @@ def test_six_clean_single_task_cells():
   assert all(config['sawyer_success_mode'] == 'corrected'
              for config in configs)
   assert all(config['base_steps'] == 1_000_000 for config in configs)
+  assert {config['dyn_aux_weight'] for config in configs} == {0.0, 1.0}
   assert all(config['network_width'] == 1024 for config in configs)
   assert all(config['counterfactual_rank_interval_steps'] == 0
              for config in configs)
@@ -77,7 +80,7 @@ def test_six_clean_single_task_cells():
              for config in configs)
   assert all(config['log_rl_metrics'] is False for config in configs)
   assert all(config['wandb_group'] ==
-             'TASK58-DCC-CORRECTED-REACHABLE-GOAL-1M'
+             'TASK58-DCC-CORRECTED-DYN-ABLATION-1M'
              for config in configs)
 
 
@@ -93,15 +96,15 @@ def test_runner_logs_lightweight_task58_stage_metrics():
   assert 'ordinary repeat-1 Task-5 and Task-8 jobs overwrite' in source
 
 
-def test_launcher_runs_six_cells_without_probe_preflights():
+def test_launcher_runs_twelve_cells_without_probe_preflights():
   launcher = (REPO_ROOT / 'DRAFT_task58_dcc_corrected.sh').read_text(
       encoding='utf-8')
-  assert '#SBATCH --array=0-2' in launcher
-  assert 'CONFIG_LIMIT=6' in launcher
+  assert '#SBATCH --array=0-5' in launcher
+  assert 'CONFIG_LIMIT=12' in launcher
   assert 'TASKS_PER_GPU=2' in launcher
   assert 'experiment_configs_task58_dcc_corrected.py' in launcher
   assert 'tests/test_task58_reachable_success_goals.py' in launcher
-  assert 'task58_dcc_corrected_goal_v2' in launcher
+  assert 'task58_dcc_dyn_ablation_v1' in launcher
   assert 'COUNTERFACTUAL' not in launcher
   assert 'ACTION_LANDSCAPE_SELF_TEST' not in launcher
 

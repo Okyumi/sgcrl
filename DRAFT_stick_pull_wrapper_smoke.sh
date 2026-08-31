@@ -34,6 +34,7 @@ export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
 
 mkdir -p logs/wrapper_smoke
 python tests/test_stick_pull_corrected_success.py
+python tests/test_stick_pull_reachable_success_goal.py
 python tests/test_stick_pull_wrapper_smoke.py
 python -u scripts/smoke_test_stick_pull_corrected_wrapper.py \
   --seeds 5 6 7 \

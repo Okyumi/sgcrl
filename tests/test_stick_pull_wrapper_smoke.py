@@ -19,6 +19,8 @@ def _summary():
       'reset_success_count': 0,
       'reward_mismatch_steps': 0,
       'info_mismatch_steps': 0,
+      'state_insertion_margin_error_max': 0.0,
+      'exposed_goal_linf_error_max': 0.0,
       'success_rate': 1.0,
       'captured_successful_state': [0.0] * 11,
   }

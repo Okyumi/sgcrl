@@ -47,6 +47,10 @@ def classify_summary(summary, *, expert_success_min=0.8):
           summary['reward_mismatch_steps'] == 0,
       'info_matches_official_predicate':
           summary['info_mismatch_steps'] == 0,
+      'state_insertion_margin_matches_simulator':
+          summary['state_insertion_margin_error_max'] <= 1e-6,
+      'exposed_goal_matches_reachable_success_goal':
+          summary['exposed_goal_linf_error_max'] <= 1e-6,
       'scripted_policy_solves_by_training_horizon':
           summary['success_rate'] >= expert_success_min,
       'captured_successful_goal_exists':
@@ -114,6 +118,8 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
   captured_successful_state = None
   captured_details = None
   captured_success_slack = float('-inf')
+  state_insertion_margin_error_max = 0.0
+  exposed_goal_linf_error_max = 0.0
   reported_horizons = set()
 
   for seed in seeds:
@@ -129,8 +135,16 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
     try:
       for episode in range(episodes):
         observation = _reset(environment)
-        _, reset_success, _, _, _ = _state_and_success(
+        reset_state, reset_success, _, _, _ = _state_and_success(
             environment, observation)
+        state_insertion_margin_error_max = max(
+            state_insertion_margin_error_max,
+            abs(float(observation[10]) - float(reset_state[10])))
+        exposed_goal_linf_error_max = max(
+            exposed_goal_linf_error_max,
+            float(np.max(np.abs(
+                observation[obs_dim:2 * obs_dim]
+                - env_utils.STICK_PULL_REACHABLE_SUCCESS_GOAL))))
         reset_success_count += int(reset_success)
         policy = policies.SawyerStickPullV2Policy()
         episode_success = False
@@ -145,6 +159,14 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
           observation, reward, done, info = _step(environment, action)
           (state11, expected_success, handle_distance, stick_end,
            insertion) = _state_and_success(environment, observation)
+          state_insertion_margin_error_max = max(
+              state_insertion_margin_error_max,
+              abs(float(observation[10]) - float(state11[10])))
+          exposed_goal_linf_error_max = max(
+              exposed_goal_linf_error_max,
+              float(np.max(np.abs(
+                  observation[obs_dim:2 * obs_dim]
+                  - env_utils.STICK_PULL_REACHABLE_SUCCESS_GOAL))))
           reward_mismatch_steps += int(
               bool(reward > 0.0) != expected_success)
           info_mismatch_steps += int(
@@ -191,6 +213,9 @@ def run_audit(*, seeds, episodes, training_horizon, expert_success_min):
       'success_rate': successes / max(total_episodes, 1),
       'reward_mismatch_steps': reward_mismatch_steps,
       'info_mismatch_steps': info_mismatch_steps,
+      'state_insertion_margin_error_max':
+          state_insertion_margin_error_max,
+      'exposed_goal_linf_error_max': exposed_goal_linf_error_max,
       'legacy_positive_steps': legacy_positive_steps,
       'legacy_false_positive_steps': legacy_false_positive_steps,
       'legacy_false_positive_fraction': (
@@ -224,7 +249,7 @@ def main():
       training_horizon=args.training_horizon,
       expert_success_min=args.expert_success_min)
   result = {
-      'protocol': 'stick_pull_corrected_wrapper_smoke_v2',
+      'protocol': 'stick_pull_corrected_wrapper_smoke_v3',
       'passed': summary['classification']['passed'],
       'summary': summary,
   }

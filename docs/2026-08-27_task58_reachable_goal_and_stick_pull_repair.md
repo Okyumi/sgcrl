@@ -1,7 +1,9 @@
 # Reachable Task-5/Task-8 goals and cheap Stick-Pull repair
 
 Date: 2026-08-27
-Status: code implemented locally; real-simulator smoke results pending.
+Status: Task-5/Task-8 V3 and Stick-Pull V2 simulator audits passed; robust
+Stick-Pull goal integration implemented, with V3 post-integration smoke
+pending.
 
 ## What the Task-5/Task-8 V2 audit established
 
@@ -44,15 +46,15 @@ The output protocol must be `task58_corrected_wrapper_smoke_v3`, all gates must
 pass, and the conditioned goal printed for each task must match the captured
 reachable-success goal.
 
-Then run the six single-task DCC cells:
+Then run the twelve single-task DCC cells:
 
 ```bash
 sbatch DRAFT_task58_dcc_corrected.sh
 ```
 
-This runs Tasks 5 and 8 with seeds 5, 6, and 7 for one million steps each. The
-resulting W&B group is
-`TASK58-DCC-CORRECTED-REACHABLE-GOAL-1M`. The existing lightweight evaluation
+This runs Tasks 5 and 8 with seeds 5, 6, and 7 for one million steps each,
+once with the dynamics auxiliary and once without it. The resulting W&B group
+is `TASK58-DCC-CORRECTED-DYN-ABLATION-1M`. The existing lightweight evaluation
 metrics separate failure to approach, engage, or move the mechanism.
 
 ## Cheap Stick-Pull success repair
@@ -97,6 +99,32 @@ corrected Stick-Pull state/goal contract. The expensive ten-seed, nine-plus-one
 pipeline should start only after this goal patch and a short all-task runtime
 smoke pass. The native-info pipeline already uses MetaWorld's official Hammer
 success and therefore avoids the other known hand-written predicate mismatch.
+
+## 2026-08-31 results and launch decision
+
+Task-5/Task-8 V3 passed every gate. Both tasks succeeded in all 15 episodes,
+and each corrected full-state goal was revisited exactly. This promotes the
+single-task DCC validation.
+
+Stick-Pull V2 also passed every gate: 12 of 15 scripted episodes succeeded,
+and reward and info had zero disagreements with the independent official
+predicate. The robust selected state has success slack `0.007919`, compared
+with only `0.002561` for the first-success state selected by V1. Corrected and
+native-info fixed-goal runs now expose that robust 11-coordinate state and use
+`state[10]` for the signed insertion margin. Legacy mode retains its historical
+ten-coordinate state/goal plus zero padding.
+
+The Task-5/Task-8 DCC validation is expanded to a matched dynamics ablation:
+Tasks 5 and 8, dynamics auxiliary weights `1.0` and `0.0`, and seeds 5, 6, and
+7, for twelve one-million-step runs. The weight-zero cell is the registered
+"DCC without dynamics" ablation; it preserves the decomposed critic while
+disabling the dynamics auxiliary loss.
+
+The guarded full experiment is now an explicit 11-variant by 10-seed matrix:
+the nine `{reset, persistent, CKA}` actor/critic combinations plus DCC with
+the dynamics auxiliary on and off, all on matched seeds 5 through 14. This is
+110 runs, not a nine-plus-one grid. It remains locked until the twelve Task-5/8
+DCC runs and the short ten-task wrapper smoke pass.
 
 ## Local validation
 

@@ -1,42 +1,46 @@
 #!/usr/bin/env python3
-"""Clean single-task DCC baselines under the corrected Task-5/8 wrapper."""
+"""Guarded 11-variant, 10-seed, ten-task paper experiment."""
 from __future__ import annotations
 
 import argparse
+import itertools
+import os
 import shlex
 
 
-TASKS = ('sawyer_handle_press_side', 'sawyer_window_close')
-SEEDS = (5, 6, 7)
-DYN_AUX_WEIGHTS = (1.0, 0.0)
+SEEDS = tuple(range(5, 15))
+BASE_MODES = ('reset', 'persistent', 'cka')
+VARIANTS = tuple(
+    (f'{actor}-{critic}', actor, critic, None)
+    for actor, critic in itertools.product(BASE_MODES, BASE_MODES)
+) + (
+    ('dcc-dyn-on', 'reset', 'decomposed', 1.0),
+    ('dcc-dyn-off', 'reset', 'decomposed', 0.0),
+)
 
 
 def build_configs():
+  if os.environ.get('NATIVE_SUCCESS_11VARIANT_PROMOTED', '').lower() != 'true':
+    raise ValueError(
+        'Set NATIVE_SUCCESS_11VARIANT_PROMOTED=true only after the corrected '
+        'Task-5/8 DCC comparison and ten-task wrapper smoke pass.')
   configs = []
-  for env_name in TASKS:
-    for dyn_aux_weight in DYN_AUX_WEIGHTS:
-      for seed in SEEDS:
-        configs.append({
-          'actor_mode': 'reset',
-          'critic_mode': 'decomposed',
+  for variant, actor_mode, critic_mode, dyn_aux_weight in VARIANTS:
+    for seed in SEEDS:
+      config = {
+          'actor_mode': actor_mode,
+          'critic_mode': critic_mode,
           'seed': seed,
-          'single_task': env_name,
-          'num_tasks': 1,
-          'steps_per_task': 1_000_000,
-          'base_steps': 1_000_000,
-          'network_width': 1024,
-          'critic_depth': 4,
-          'actor_depth': 4,
-          'dyn_aux_weight': dyn_aux_weight,
-          'phi_task_width': 256,
-          'phi_task_depth': 4,
-          'in_trajectory_negative_repeats': 1,
-          'eval_every': 50_000,
+          'num_tasks': 10,
+          'steps_per_task': 8_000_000,
+          'base_steps': 8_000_000,
+          'eval_every': 200_000,
           'eval_episodes': 10,
-          'sawyer_success_mode': 'corrected',
+          'sawyer_success_mode': 'native_info',
           'goal_conditioning_mode': 'full_state',
           'use_task_id': False,
           'actor_auto_reset': False,
+          'in_trajectory_negative_repeats': 1,
           'counterfactual_rank_interval_steps': 0,
           'counterfactual_oracle_interval_steps': 0,
           'action_landscape_diagnostic_interval_steps': 0,
@@ -48,8 +52,11 @@ def build_configs():
           'profile_runtime': True,
           'intra_eval_previous': False,
           'post_task_eval_scope': 'current',
-          'wandb_group': 'TASK58-DCC-CORRECTED-DYN-ABLATION-1M',
-        })
+          'wandb_group': f'NATIVE-SUCCESS-11VARIANT-10SEED-{variant}',
+      }
+      if dyn_aux_weight is not None:
+        config['dyn_aux_weight'] = dyn_aux_weight
+      configs.append(config)
   return configs
 
 
@@ -69,14 +76,17 @@ def main():
   group.add_argument('--total', action='store_true')
   group.add_argument('--list', action='store_true')
   args = parser.parse_args()
-  configs = build_configs()
+  try:
+    configs = build_configs()
+  except ValueError as error:
+    raise SystemExit(f'ERROR: {error}') from error
   if args.total:
     print(len(configs))
     return
   if args.list:
     for index, config in enumerate(configs):
-      print(index, config['single_task'], config['dyn_aux_weight'],
-            config['seed'])
+      print(index, config['wandb_group'], config['seed'],
+            config.get('dyn_aux_weight', '-'))
     return
   if args.setting < 0 or args.setting >= len(configs):
     raise SystemExit(f'ERROR: setting {args.setting} out of range')

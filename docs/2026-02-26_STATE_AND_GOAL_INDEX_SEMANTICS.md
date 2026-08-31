@@ -205,14 +205,16 @@ The following ten tasks are the CKA-RL sequence (task names only; see *Metaworld
 | State  | 3                  | 1   | Gripper distance apart. |
 | State  | 4–6                | 3   | Stick position (x, y, z). |
 | State  | 7–9                | 3   | Handle/insertion position (x, y, z) — object being pulled. |
+| State  | 10                 | 1   | Corrected/native signed insertion margin; nonnegative iff inserted. Legacy mode pads zero. |
 | Goal   | 11–13              | 3   | Desired hand position (above target). |
 | Goal   | 14                 | 1   | Desired gripper state. |
 | Goal   | 15–17              | 3   | Desired stick position (at target when task done). |
 | Goal   | 18–20              | 3   | Desired handle position (handle target). |
+| Goal   | 21                 | 1   | Corrected/native desired signed insertion margin. Legacy mode pads zero. |
 
-- **State dim:** 10, **goal dim:** 10 (same semantics), **full obs (after padding):** 22  
+- **State/goal semantic dim:** 11 in corrected/native fixed-goal runs; 10 plus one zero-padding coordinate in legacy mode. **Full obs:** 22
 - **Success:** Handle within 0.12 of target and stick inserted.  
-- **Goal refers to:** Desired state at success: hand above target, gripper open, stick and handle at target.
+- **Goal refers to:** An audited state actually visited while all official success gates were true.
 
 ---
 
@@ -325,7 +327,7 @@ The following ten tasks are the CKA-RL sequence (task names only; see *Metaworld
 | sawyer_hammer        | 10            | 7            | 22                        |
 | sawyer_push_wall     | 7             | 7            | 22                        |
 | sawyer_faucet_close  | 7             | 7            | 22                        |
-| sawyer_stick_pull    | 10            | 7            | 22                        |
+| sawyer_stick_pull    | 11 corrected / 10 legacy | 11 corrected / 10 legacy | 22 |
 | sawyer_handle_press_side | 7         | 7            | 22                        |
 | sawyer_push          | 7             | 7            | 22                        |
 | sawyer_shelf_place   | 7             | 7            | 22                        |
@@ -335,7 +337,7 @@ The following ten tasks are the CKA-RL sequence (task names only; see *Metaworld
 ### Option A: Implemented in `env_utils.py`
 
 - **STATE_DIM_UNIFIED = 11**, **GOAL_DIM_UNIFIED = 11**, **FULL_OBS_DIM = 22** (defined in `env_utils.py`).
-- **Padding:** `_pad_to_len(arr, length)` appends zeros so that state and goal reach 11 each. Semantic indices 0–6 (and for stick_pull 0–9) are unchanged; padding occupies indices 7–10 (state) and 7–10 (goal) for 7-dim tasks, and state index 10 only for stick_pull.
+- **Padding:** `_pad_to_len(arr, length)` appends zeros so that state and goal reach 11 each. Semantic indices 0–6 are unchanged. For corrected/native fixed-goal Stick Pull, index 10 is the signed insertion margin rather than padding; legacy Stick Pull keeps zero padding there.
 - **Observation layout:** `observation[0:11]` = state (padded), `observation[11:22]` = goal (padded). So for 7-dim tasks: state semantics in 0–6, zeros in 7–10; goal semantics in 11–17, zeros in 18–21.
 - **`load(env_name)`** returns `obs_dim = STATE_DIM_UNIFIED` (11) for all `sawyer_*` envs so that a single policy/critic can be used across the 10 continual tasks.
 - **point_*** envs are unchanged (no padding); they are not part of the continual Sawyer 10-task set.

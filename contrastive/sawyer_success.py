@@ -93,18 +93,31 @@ def stick_pull_sparse_reward(
         'Stick-Pull success requires 3-D handle, target, and stick-end '
         'positions.')
   target_distance = math.dist(handle, target)
-  inserted = (
-      stick_end[0] >= handle[0]
-      and abs(stick_end[1] - handle[1]) <= 0.040
-      and abs(stick_end[2] - handle[2]) <= 0.060)
+  insertion_margin = stick_pull_insertion_margin(handle, stick_end)
+  inserted = insertion_margin >= 0.0
   success = float(target_distance <= float(threshold) and inserted)
   return success, {
       'success': success,
       'handle_target_distance': target_distance,
       'stick_is_inserted': float(inserted),
+      'stick_insertion_margin': insertion_margin,
       'success_threshold': float(threshold),
       'wrapper_success_mode': mode,
   }
+
+
+def stick_pull_insertion_margin(handle_position, stick_end_position):
+  """Signed margin for MetaWorld's three Stick-Pull insertion gates."""
+  handle = tuple(float(value) for value in handle_position)
+  stick_end = tuple(float(value) for value in stick_end_position)
+  if len(handle) != 3 or len(stick_end) != 3:
+    raise ValueError(
+        'Stick-Pull insertion margin requires 3-D handle and stick-end '
+        'positions.')
+  return min(
+      stick_end[0] - handle[0],
+      0.040 - abs(stick_end[1] - handle[1]),
+      0.060 - abs(stick_end[2] - handle[2]))
 
 
 def _metaworld_parent(environment):

@@ -70,6 +70,26 @@ TASK58_REACHABLE_SUCCESS_GOALS = {
     ], dtype=np.float32),
 }
 
+STICK_PULL_FIXED_TARGET = np.array(
+    [0.41, 0.54, 0.02], dtype=np.float32)
+
+# Most robust successful state from the V2 three-seed scripted-policy audit.
+# Layout: hand(3), gripper(1), stick COM(3), handle(3), signed insertion
+# margin(1). The minimum slack across all official success gates is 0.007919.
+STICK_PULL_REACHABLE_SUCCESS_GOAL = np.array([
+    0.38338690996170044,
+    0.5080276131629944,
+    0.1489725559949875,
+    0.404654324054718,
+    0.38802891969680786,
+    0.5199471712112427,
+    0.11333558708429337,
+    0.40918222069740295,
+    0.5441700220108032,
+    0.13199999928474426,
+    0.02185145765542984,
+], dtype=np.float32)
+
 
 def _task58_reachable_success_goal(
     env_name, fixed_start_end, sawyer_success_mode):
@@ -87,6 +107,21 @@ def _task58_reachable_success_goal(
         f'validated only with fixed mechanism target {expected_target.tolist()}; '
         f'got {supplied_target.tolist()}.')
   return TASK58_REACHABLE_SUCCESS_GOALS[env_name].copy()
+
+
+def _stick_pull_reachable_success_goal(
+    fixed_start_end, sawyer_success_mode):
+  """Return the audited full Stick-Pull goal for corrected fixed runs."""
+  if sawyer_success_mode == 'legacy_distance' or fixed_start_end is None:
+    return None
+  supplied_target = np.asarray(fixed_start_end, dtype=np.float32)
+  if supplied_target.shape != (3,) or not np.allclose(
+      supplied_target, STICK_PULL_FIXED_TARGET, rtol=0.0, atol=1e-6):
+    raise ValueError(
+        'The corrected reachable Stick-Pull goal was validated only with '
+        f'fixed target {STICK_PULL_FIXED_TARGET.tolist()}; got '
+        f'{supplied_target.tolist()}.')
+  return STICK_PULL_REACHABLE_SUCCESS_GOAL.copy()
 
 
 def _set_sawyer_success_mode(environment, success_mode):
@@ -227,6 +262,8 @@ def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
     CLASS = SawyerStickPull
     max_episode_steps = 150
     kwargs['fixed_start_end'] = fixed_start_end
+    kwargs['fixed_goal_state'] = _stick_pull_reachable_success_goal(
+        fixed_start_end, sawyer_success_mode)
   elif env_name == 'sawyer_handle_press_side':
     CLASS = SawyerHandlePressSide
     max_episode_steps = 150
@@ -795,16 +832,24 @@ class SawyerStickPull(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['stick-pull-v2']):
   """Wrapper for StickPull: pull object (handle/insertion) to target using stick.
 
-  State = hand (3), gripper (1), stick position (3), handle/insertion (3) = 10 dims.
-  _get_pos_objects() returns stick (3) + handle (3); both included so state is not truncated.
-  Goal = hand, gripper, desired stick and handle positions. Corrected success
+  Legacy state contains hand (3), gripper (1), stick COM (3), and handle (3),
+  with state[10] padded. Corrected/native fixed-goal runs use state[10] for the
+  signed stick-insertion margin and condition on an audited reachable
+  successful state with the same 11-coordinate semantics. Corrected success
   requires handle distance <= 0.12 and an inserted stick endpoint; the legacy
-  predicate retains handle distance only.
-  Padding: state 10->STATE_DIM_UNIFIED, goal 7->GOAL_DIM_UNIFIED for continual RL.
+  predicate and synthetic goal remain unchanged.
   """
 
-  def __init__(self, fixed_start_end=None):
+  def __init__(self, fixed_start_end=None, fixed_goal_state=None):
     self._goal = np.zeros(3)
+    self._fixed_goal_state = (
+        None if fixed_goal_state is None
+        else np.asarray(fixed_goal_state, dtype=np.float32).copy())
+    if (self._fixed_goal_state is not None
+        and self._fixed_goal_state.shape != (11,)):
+      raise ValueError(
+          'Stick-Pull fixed_goal_state must contain hand(3), gripper(1), '
+          'stick COM(3), handle(3), and insertion margin(1).')
     super(SawyerStickPull, self).__init__()
     self._partially_observable = False
     self._freeze_rand_vec = False
@@ -843,8 +888,9 @@ class SawyerStickPull(
 
   def _get_obs(self):
     # State and goal use the same index semantics (see 2026-02-26_STATE_AND_GOAL_INDEX_SEMANTICS.md).
-    # State [0:10]: hand(0-2), gripper(3), stick_pos(4-6), handle_pos(7-9).
-    # Goal [0:10]: desired_hand(0-2), desired_gripper(3), desired_stick_pos(4-6), desired_handle_pos(7-9); then padded to GOAL_DIM_UNIFIED.
+    # Corrected/native state and goal [0:11]: hand(0-2), gripper(3),
+    # stick COM(4-6), handle(7-9), signed insertion margin(10). Legacy mode
+    # retains the historical ten semantic coordinates plus zero padding.
     pos_hand = self.get_endeff_pos()
     finger_right, finger_left = (
         self._get_site_pos('rightEndEffector'),
@@ -855,10 +901,20 @@ class SawyerStickPull(
     pos_objects = self._get_pos_objects()  # stick (3) + handle/insertion (3)
     stick_pos = pos_objects[:3]
     handle_pos = pos_objects[3:6] if len(pos_objects) >= 6 else pos_objects[:3]
-    state = np.concatenate((pos_hand, [gripper_distance_apart], stick_pos, handle_pos))
-    # Goal mirrors state semantics: desired_hand, desired_gripper, desired_stick_pos, desired_handle_pos.
-    hand_above = self._goal + np.array([0.0, 0.0, 0.03])
-    goal = np.concatenate([hand_above, [0.4], self._goal, self._goal])  # 10 dims
+    if self._fixed_goal_state is not None:
+      insertion_margin = sawyer_success.stick_pull_insertion_margin(
+          handle_pos, self._get_site_pos('stick_end'))
+      state = np.concatenate((
+          pos_hand, [gripper_distance_apart], stick_pos, handle_pos,
+          [insertion_margin]))
+      goal = self._fixed_goal_state
+    else:
+      state = np.concatenate((
+          pos_hand, [gripper_distance_apart], stick_pos, handle_pos))
+      # Legacy goal mirrors historical state semantics and padding.
+      hand_above = self._goal + np.array([0.0, 0.0, 0.03])
+      goal = np.concatenate([
+          hand_above, [0.4], self._goal, self._goal])
     state_padded = _pad_to_len(state, STATE_DIM_UNIFIED)
     goal_padded = _pad_to_len(goal, GOAL_DIM_UNIFIED)
     return np.concatenate([state_padded, goal_padded]).astype(np.float32)

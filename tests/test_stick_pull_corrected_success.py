@@ -43,6 +43,14 @@ def test_target_and_inserted_stick_are_success():
   assert reward == 1.0
   assert info['success'] == 1.0
   assert info['stick_is_inserted'] == 1.0
+  assert info['stick_insertion_margin'] >= 0.0
+
+
+def test_signed_insertion_margin_changes_sign_at_official_boundary():
+  assert sawyer_success.stick_pull_insertion_margin(
+      [0.41, 0.54, 0.02], [0.45, 0.56, 0.07]) > 0.0
+  assert sawyer_success.stick_pull_insertion_margin(
+      [0.41, 0.54, 0.02], [0.45, 0.59, 0.07]) < 0.0
 
 
 def test_insertion_tolerances_are_inclusive():
