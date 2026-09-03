@@ -54,6 +54,7 @@ import contrastive
 from contrastive import config as contrastive_config
 from contrastive import networks as contrastive_networks
 from contrastive import utils as contrastive_utils
+from contrastive import eval_video as contrastive_eval_video
 from contrastive.continual_config import (
     ContinualConfig, CONTINUAL_TASK_SEQUENCE, CONTINUAL_TASK_SEQUENCE_20,
 )
@@ -144,6 +145,12 @@ flags.DEFINE_string('critic_mode', 'persistent',
                     '"action_dcc_sac" (AC-DCC plus gated Q correction).')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Episodes per task for cross-task evaluation (0 to disable).')
+flags.DEFINE_bool('eval_record_video', False,
+                  'Log one deterministic eval rollout video to W&B during training.')
+flags.DEFINE_integer('eval_video_every', 50_000,
+                     'Record an eval video every N env steps (requires eval_record_video).')
+flags.DEFINE_integer('eval_video_fps', 20,
+                     'FPS for W&B eval rollout videos.')
 flags.DEFINE_bool('intra_eval_previous_tasks', False,
                   'During training on the current task, periodically evaluate on '
                   'all previously learned tasks. Disabled by default because it '
@@ -2487,6 +2494,35 @@ def train_single_task(
             f"moved={task58_eval_metrics['mechanism_moved']:.1%} "
             f"progress={task58_eval_metrics['max_task_axis_progress']:.4f}",
             flush=True)
+      if (FLAGS.eval_record_video
+          and eval_every > 0
+          and env_steps_done % FLAGS.eval_video_every == 0):
+        video_started_at = time.perf_counter()
+        try:
+          frames, video_return, video_success = (
+              contrastive_eval_video.record_episode_frames(
+                  eval_env, eval_actor))
+          if FLAGS.use_wandb and wandb is not None:
+            wandb.log({
+                'evaluator/rollout_video': wandb.Video(
+                    frames,
+                    fps=FLAGS.eval_video_fps,
+                    format='mp4'),
+                'evaluator/video_episode_return': video_return,
+                'evaluator/video_episode_success': video_success,
+                'evaluator/env_steps': env_steps_done,
+            }, step=env_steps_done)
+          print(
+              f'  [eval video @ {env_steps_done}] success={video_success:.0f} '
+              f'return={video_return:.1f} frames={len(frames)}',
+              flush=True)
+        except Exception as video_error:  # pylint: disable=broad-except
+          print(
+              f'  [eval video @ {env_steps_done}] failed: {video_error}',
+              flush=True)
+        if FLAGS.profile_runtime:
+          runtime_totals['evaluation_seconds'] += (
+              time.perf_counter() - video_started_at)
       if FLAGS.profile_runtime:
         runtime_totals['evaluation_seconds'] += (
             time.perf_counter() - evaluation_started_at)

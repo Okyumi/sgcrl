@@ -67,6 +67,9 @@ WANDB_GROUP="${WANDB_GROUP:-C2: decomposed single-cell sanity}"
 ADD_UID="${ADD_UID:-true}"
 USE_TASK_ID="${USE_TASK_ID:-false}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
+EVAL_RECORD_VIDEO="${EVAL_RECORD_VIDEO:-false}"
+EVAL_VIDEO_EVERY="${EVAL_VIDEO_EVERY:-50000}"
+EVAL_VIDEO_FPS="${EVAL_VIDEO_FPS:-20}"
 INTRA_EVAL_PREVIOUS="${INTRA_EVAL_PREVIOUS:-false}"
 LOG_RL_METRICS="${LOG_RL_METRICS:-true}"
 K_SAMPLE_K="${K_SAMPLE_K:-0}"
@@ -280,6 +283,13 @@ build_flags() {
   fi
 
   _FLAGS="$_FLAGS --eval_episodes=$EVAL_EPISODES"
+  if [ "$EVAL_RECORD_VIDEO" = "true" ]; then
+    _FLAGS="$_FLAGS --eval_record_video"
+  else
+    _FLAGS="$_FLAGS --noeval_record_video"
+  fi
+  _FLAGS="$_FLAGS --eval_video_every=$EVAL_VIDEO_EVERY"
+  _FLAGS="$_FLAGS --eval_video_fps=$EVAL_VIDEO_FPS"
   if [ "$INTRA_EVAL_PREVIOUS" = "true" ]; then
     _FLAGS="$_FLAGS --intra_eval_previous_tasks"
   else

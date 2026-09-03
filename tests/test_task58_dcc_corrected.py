@@ -103,7 +103,9 @@ def test_twelve_matched_single_task_cells():
   assert all(config['actor_mode'] == 'reset' for config in configs)
   assert all(config['sawyer_success_mode'] == 'corrected'
              for config in configs)
-  assert all(config['base_steps'] == 1_000_000 for config in configs)
+  assert all(config['base_steps'] == 8_000_000 for config in configs)
+  assert all(config['steps_per_task'] == 8_000_000 for config in configs)
+  assert all(config['adapt_heads_only'] is False for config in configs)
   assert {config['dyn_aux_weight'] for config in configs} == {0.0, 1.0}
   assert all(config['network_width'] == 1024 for config in configs)
   assert all(config['counterfactual_rank_interval_steps'] == 0
@@ -112,9 +114,12 @@ def test_twelve_matched_single_task_cells():
              for config in configs)
   assert all(config['action_landscape_diagnostic_interval_steps'] == 0
              for config in configs)
-  assert all(config['log_rl_metrics'] is False for config in configs)
+  assert all(config['log_rl_metrics'] is True for config in configs)
+  assert all(config['log_pool_cosine'] is True for config in configs)
+  assert all(config['eval_record_video'] is True for config in configs)
+  assert all(config['eval_video_every'] == 50_000 for config in configs)
   assert all(config['wandb_group'] ==
-             'TASK58-DCC-CORRECTED-DYN-ABLATION-1M'
+             'TASK58-DCC-CORRECTED-FULLNET-8M-DYN-ABLATION'
              for config in configs)
 
 
@@ -123,6 +128,8 @@ def test_runner_logs_lightweight_task58_stage_metrics():
       encoding='utf-8')
   assert 'PairedTask58SuccessObserver' in source
   assert "f'evaluator/task58/{name}'" in source
+  assert 'eval_record_video' in source
+  assert 'evaluator/rollout_video' in source
   assert "'approach_success'" in source
   assert "'mechanism_moved'" in source
   assert "'max_task_axis_progress'" in source
@@ -133,12 +140,13 @@ def test_runner_logs_lightweight_task58_stage_metrics():
 def test_launcher_runs_twelve_cells_without_probe_preflights():
   launcher = (REPO_ROOT / 'DRAFT_task58_dcc_corrected.sh').read_text(
       encoding='utf-8')
-  assert '#SBATCH --array=0-5' in launcher
+  assert '#SBATCH --array=0-11' in launcher
   assert 'CONFIG_LIMIT=12' in launcher
-  assert 'TASKS_PER_GPU=2' in launcher
+  assert 'TASKS_PER_GPU=1' in launcher
   assert 'experiment_configs_task58_dcc_corrected.py' in launcher
   assert 'tests/test_task58_reachable_success_goals.py' in launcher
-  assert 'task58_dcc_dyn_ablation_v1' in launcher
+  assert 'task58_dcc_fullnet_8m_v1' in launcher
+  assert '48:00:00' in launcher
   assert 'conda activate contrastive_rl' in launcher
   assert 'set_up/torch_hpc_env.sh' in launcher
   assert launcher.index('conda activate contrastive_rl') < launcher.index(

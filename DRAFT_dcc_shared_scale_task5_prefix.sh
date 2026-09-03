@@ -31,7 +31,6 @@ mkdir -p "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
 
 export MKL_INTERFACE_LAYER=LP64,GNU
 module purge 2>/dev/null || true
-module load conda-gcc/11.2.0
 eval "$(conda shell.bash hook)"
 conda activate contrastive_rl
 export PATH="${CONDA_PREFIX}/bin:$PATH"
@@ -39,6 +38,7 @@ export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 source "$REPO_DIR/set_up/torch_hpc_env.sh"
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.30
 
+mkdir -p /scratch/yd2247/sgcrl/logs/dcc_shared_scale
 python tests/test_dcc_shared_scale.py
 mkdir -p "$PREFIX_ROOT/runs" "$PREFIX_ROOT/checkpoints"
 
