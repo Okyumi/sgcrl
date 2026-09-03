@@ -10,12 +10,11 @@
 #SBATCH --output=/scratch/yd2247/sgcrl/logs/task58_algorithm_ablation_%A_%a.out
 #SBATCH --error=/scratch/yd2247/sgcrl/logs/task58_algorithm_ablation_%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
-#SBATCH --array=0-11%6
+#SBATCH --array=0-7%4
 
 # Corrected-wrapper pilot, two seeds per task:
 #   0-3:  original one-step Advantage-DCC
-#   4-7:  raw H=25 Advantage-DCC without BC
-#   8-11: plain DCC + terminal-success BC, without an Advantage head
+#   4-7:  plain DCC + terminal-success BC, without an Advantage head
 #
 # Submit with:
 #   sbatch DRAFT_task58_algorithm_ablation.sh

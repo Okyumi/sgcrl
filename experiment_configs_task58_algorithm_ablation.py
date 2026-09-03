@@ -19,15 +19,6 @@ VARIANTS = (
         'success_bc_label_mode': 'raw_horizon',
     },
     {
-        'name': 'advantage_h25',
-        'wandb_group': 'TASK58-CORRECTED-ADVANTAGE-H25-1M',
-        'critic_mode': 'advantage_decomposed',
-        'action_effect_enabled': True,
-        'action_effect_target_mode': 'raw_horizon',
-        'success_bc_weight': 0.0,
-        'success_bc_label_mode': 'raw_horizon',
-    },
-    {
         'name': 'terminal_success_bc',
         'wandb_group': 'TASK58-CORRECTED-TERMINAL-SUCCESS-BC-1M',
         'critic_mode': 'decomposed',
