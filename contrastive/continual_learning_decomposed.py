@@ -229,6 +229,8 @@ class ContinualDecomposedLearner(acme.Learner):
         continual_config, 'outcome_progress_std_floor', 0.01))
     self._success_bc_weight = float(getattr(
         continual_config, 'success_bc_weight', 0.0))
+    self._success_bc_label_mode = getattr(
+        continual_config, 'success_bc_label_mode', 'raw_horizon')
     self._success_buffer_capacity = int(getattr(
         continual_config, 'success_buffer_capacity', 4096))
     self._success_bc_batch_size = int(getattr(
@@ -269,8 +271,14 @@ class ContinualDecomposedLearner(acme.Learner):
       if self._counterfactual_rank_min_gap < 0:
         raise ValueError('counterfactual rank minimum gap cannot be negative.')
     if self._success_bc_weight > 0:
-      if self._action_effect_target_mode != 'raw_horizon':
-        raise ValueError('success retention requires raw_horizon targets.')
+      if self._success_bc_label_mode not in (
+          'raw_horizon', 'terminal_episode'):
+        raise ValueError(
+            'success_bc_label_mode must be raw_horizon or terminal_episode.')
+      if (self._success_bc_label_mode == 'raw_horizon'
+          and self._action_effect_target_mode != 'raw_horizon'):
+        raise ValueError(
+            'raw_horizon success retention requires raw_horizon targets.')
       if self._success_buffer_capacity <= 0 or self._success_bc_batch_size <= 0:
         raise ValueError('Success-buffer capacity and batch size must be > 0.')
     if self._action_effect_enabled:
@@ -1093,14 +1101,18 @@ class ContinualDecomposedLearner(acme.Learner):
                 a_aux['action_effect_score_std'],
             'action_effect/head_to_dcc_ratio':
                 a_aux['action_effect_head_to_dcc_ratio'],
-            'retention/bc_loss': a_aux['success_bc_loss'],
-            'retention/bc_active': a_aux['success_bc_active'],
-            'retention/buffer_size': (
-                new_success_size if success_bc_weight > 0 else 0.0),
             'counterfactual_rank/active': (
                 (state.counterfactual_rank_updates > 0).astype(jnp.float32)
                 if action_effect_target_mode == 'counterfactual_rank'
                 else 0.0),
+        })
+      if success_bc_weight > 0:
+        metrics.update({
+            'retention/bc_loss': a_aux['success_bc_loss'],
+            'retention/bc_active': a_aux['success_bc_active'],
+            'retention/buffer_size': new_success_size,
+            'retention/source_success_fraction': jnp.mean(
+                transitions.extras['outcome_task_success']),
         })
       if iwr_enabled:
         sampled_distance = transitions.extras['iwr_interaction_distance']

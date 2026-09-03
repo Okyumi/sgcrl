@@ -351,6 +351,12 @@ flags.DEFINE_float('outcome_progress_std_floor', 0.01,
                    'Minimum target standard deviation for normalization.')
 flags.DEFINE_float('success_bc_weight', 0.0,
                    'Actor BC weight on retained task-goal successful actions.')
+flags.DEFINE_enum(
+    'success_bc_label_mode', 'raw_horizon',
+    ('raw_horizon', 'terminal_episode'),
+    'How SuccessBC selects examples. raw_horizon preserves the historical '
+    'H-step goal-distance proxy; terminal_episode uses only the final sparse '
+    'reward of the replay episode and requires no mechanism coordinates.')
 flags.DEFINE_integer('success_buffer_capacity', 4096,
                      'Task-local successful-transition ring-buffer capacity.')
 flags.DEFINE_integer('success_bc_batch_size', 64,
@@ -670,6 +676,7 @@ def _bridge_identity_config():
       'outcome_progress_ema_decay': FLAGS.outcome_progress_ema_decay,
       'outcome_progress_std_floor': FLAGS.outcome_progress_std_floor,
       'success_bc_weight': FLAGS.success_bc_weight,
+      'success_bc_label_mode': FLAGS.success_bc_label_mode,
       'success_buffer_capacity': FLAGS.success_buffer_capacity,
       'success_bc_batch_size': FLAGS.success_bc_batch_size,
       'counterfactual_rank_interval_steps':
@@ -1257,6 +1264,10 @@ def train_single_task(
       bool(getattr(continual_cfg, 'action_effect_enabled', False))
       and getattr(continual_cfg, 'action_effect_target_mode',
                   'psi_one_step') == 'raw_horizon')
+  success_bc_enabled = float(getattr(
+      continual_cfg, 'success_bc_weight', 0.0)) > 0.0
+  success_bc_label_mode = getattr(
+      continual_cfg, 'success_bc_label_mode', 'raw_horizon')
   counterfactual_rank_enabled = (
       bool(getattr(continual_cfg, 'action_effect_enabled', False))
       and getattr(continual_cfg, 'action_effect_target_mode',
@@ -1275,6 +1286,10 @@ def train_single_task(
         '  [outcome credit] raw mechanism progress/success labels; '
         f'H={outcome_horizon}, threshold={outcome_success_threshold:.3f}.',
         flush=True)
+  if success_bc_enabled and success_bc_label_mode == 'terminal_episode':
+    print(
+        '  [success BC] retaining actions only from episodes whose final '
+        'sparse reward is positive.', flush=True)
 
   def _finite_horizon_labels(all_state, anchor_index, goal):
     """Vectorized raw mechanism progress and reachability labels."""
@@ -1348,6 +1363,17 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
+    if success_bc_enabled and success_bc_label_mode == 'terminal_episode':
+      original_goal = sample.data.observation[:-1, config.obs_dim:]
+      terminal_reward = sample.data.reward[seq_len - 2]
+      terminal_success = tf.cast(
+          tf.reduce_max(terminal_reward) > 0.0, tf.float32)
+      extras.update({
+          'outcome_task_success': tf.fill(
+              [seq_len - 1], terminal_success),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
     if iwr_enabled:
       selected_future_state = tf.gather(all_state, goal_index[:-1])
       selected_distance = tf.linalg.norm(
@@ -1411,6 +1437,18 @@ def train_single_task(
           'outcome_progress': progress,
           'outcome_success': success,
           'outcome_task_success': task_success,
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
+    if success_bc_enabled and success_bc_label_mode == 'terminal_episode':
+      original_goal = tf.gather(
+          sample.data.observation[:, config.obs_dim:], anchor_index)
+      terminal_reward = sample.data.reward[seq_len - 2]
+      terminal_success = tf.cast(
+          tf.reduce_max(terminal_reward) > 0.0, tf.float32)
+      extras.update({
+          'outcome_task_success': tf.fill(
+              [in_trajectory_repeats], terminal_success),
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
@@ -3016,6 +3054,7 @@ def main(_):
       outcome_progress_ema_decay=FLAGS.outcome_progress_ema_decay,
       outcome_progress_std_floor=FLAGS.outcome_progress_std_floor,
       success_bc_weight=FLAGS.success_bc_weight,
+      success_bc_label_mode=FLAGS.success_bc_label_mode,
       success_buffer_capacity=FLAGS.success_buffer_capacity,
       success_bc_batch_size=FLAGS.success_bc_batch_size,
       counterfactual_rank_interval_steps=
@@ -3404,6 +3443,7 @@ def main(_):
                   'outcome_progress_std_floor':
                       FLAGS.outcome_progress_std_floor,
                   'success_bc_weight': FLAGS.success_bc_weight,
+                  'success_bc_label_mode': FLAGS.success_bc_label_mode,
                   'success_buffer_capacity':
                       FLAGS.success_buffer_capacity,
                   'success_bc_batch_size': FLAGS.success_bc_batch_size,
