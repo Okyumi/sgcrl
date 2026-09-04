@@ -271,11 +271,15 @@ flags.DEFINE_float(
     'DCC. 1.0 is the original DCC; 0.0 removes the shared branch from '
     'the contrastive score while leaving dynamics training on.')
 flags.DEFINE_enum(
-    'shared_repr_normalization', 'none', ('none', 'unit_mix'),
+    'shared_repr_normalization', 'none',
+    ('none', 'unit_mix', 'unit_distral'),
     'How plain DCC makes shared and task branch magnitudes comparable. '
     '"none" preserves the original alpha*shared+task equation. '
     '"unit_mix" L2-normalizes shared, task, and goal embeddings and uses '
-    '(alpha*unit(shared)+unit(task))/(alpha+1).')
+    '(alpha*unit(shared)+unit(task))/(alpha+1). '
+    '"unit_distral" uses alpha*unit(shared)+unit(task), preserving the '
+    'Distral-style pi_0**alpha policy factor while removing arbitrary '
+    'branch magnitudes.')
 flags.DEFINE_float('dyn_aux_after_task0', -1.0,
                    'If non-negative, override dyn_aux_weight to this value '
                    'starting at task 1 (the base task k=0 still uses '

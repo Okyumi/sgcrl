@@ -175,6 +175,10 @@ def make_decomposed_networks(
         sample and uses the bounded mixture
         (alpha * unit(shared) + unit(task)) / (alpha + 1). This makes alpha
         control the relative branch weights instead of their arbitrary norms.
+        'unit_distral' applies the same per-sample normalisation but keeps the
+        score alpha * unit(shared) + unit(task). It therefore preserves the
+        Distral-style pi_0**alpha factor while preventing raw branch norms
+        from absorbing alpha.
 
   Returns:
     A ``DecomposedCriticNetworks`` instance with all init / apply
@@ -198,18 +202,22 @@ def make_decomposed_networks(
         'shared_repr_scale must be finite and nonnegative, got '
         f'{shared_repr_scale!r}')
   shared_repr_scale = float(shared_repr_scale)
-  if shared_repr_normalization not in ('none', 'unit_mix'):
+  unit_normalization_modes = ('unit_mix', 'unit_distral')
+  if shared_repr_normalization not in ('none',) + unit_normalization_modes:
     raise ValueError(
-        'shared_repr_normalization must be none or unit_mix, got '
+        'shared_repr_normalization must be none, unit_mix, or unit_distral, got '
         f'{shared_repr_normalization!r}')
-  if shared_repr_normalization == 'unit_mix':
+  if shared_repr_normalization in unit_normalization_modes:
     if combine_mode != 'add':
-      raise ValueError('unit_mix requires combine_mode="add"')
+      raise ValueError(
+          f'{shared_repr_normalization} requires combine_mode="add"')
     if energy_fn != 'inner_product':
-      raise ValueError('unit_mix requires energy_fn="inner_product"')
+      raise ValueError(
+          f'{shared_repr_normalization} requires energy_fn="inner_product"')
     if repr_norm:
       raise ValueError(
-          'unit_mix already normalises branch and goal embeddings; '
+          f'{shared_repr_normalization} already normalises branch and goal '
+          'embeddings; '
           'set repr_norm=False')
   z_sa_dim = repr_dim if combine_mode == 'add' else 2 * repr_dim
   use_psi_proj = (combine_mode == 'concat') or (
@@ -369,11 +377,14 @@ def make_decomposed_networks(
           shared_repr_scale / denominator) * _unit_norm(sa_shared)
       effective_task = (1.0 / denominator) * _unit_norm(sa_task)
       return effective_shared, effective_task
+    if shared_repr_normalization == 'unit_distral':
+      return (shared_repr_scale * _unit_norm(sa_shared),
+              _unit_norm(sa_task))
     return shared_repr_scale * sa_shared, sa_task
 
   def apply_goal_for_score(goal_repr):
     """Apply goal-side normalisation required by the selected mixture."""
-    if shared_repr_normalization == 'unit_mix':
+    if shared_repr_normalization in unit_normalization_modes:
       return _unit_norm(goal_repr)
     return goal_repr
 

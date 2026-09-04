@@ -590,6 +590,10 @@ class ContinualDecomposedLearner(acme.Learner):
         shared_coefficient = shared_scale / (shared_scale + 1.0)
         task_coefficient = 1.0 / (shared_scale + 1.0)
         normalization_enabled = jnp.asarray(1.0, dtype=sa_shared.dtype)
+      elif decomp_nets.shared_repr_normalization == 'unit_distral':
+        shared_coefficient = shared_scale
+        task_coefficient = jnp.asarray(1.0, dtype=sa_shared.dtype)
+        normalization_enabled = jnp.asarray(1.0, dtype=sa_shared.dtype)
       else:
         shared_coefficient = shared_scale
         task_coefficient = jnp.asarray(1.0, dtype=sa_shared.dtype)
