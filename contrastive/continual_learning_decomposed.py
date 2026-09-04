@@ -564,22 +564,36 @@ class ContinualDecomposedLearner(acme.Learner):
       shared_scale = jnp.asarray(
           decomp_nets.shared_repr_scale, dtype=sa_shared.dtype)
       shared_norm = jnp.linalg.norm(sa_shared, axis=1)
-      scaled_shared_norm = shared_scale * shared_norm
       task_norm = jnp.linalg.norm(sa_task, axis=1)
+      effective_shared, effective_task = (
+          decomp_nets.apply_sa_mixture_components(sa_shared, sa_task))
+      scored_goal_repr = decomp_nets.apply_goal_for_score(goal_repr)
+      scaled_shared_norm = jnp.linalg.norm(effective_shared, axis=1)
+      effective_task_norm = jnp.linalg.norm(effective_task, axis=1)
       combined_norm = jnp.linalg.norm(
-          shared_scale * sa_shared + sa_task, axis=1)
+          effective_shared + effective_task, axis=1)
       branch_cosine = jnp.sum(sa_shared * sa_task, axis=1) / jnp.maximum(
           shared_norm * task_norm, 1e-8)
       if decomp_nets.combine_mode == 'add':
-        shared_goal_repr = goal_repr
-        task_goal_repr = goal_repr
+        shared_goal_repr = scored_goal_repr
+        task_goal_repr = scored_goal_repr
       else:
-        shared_goal_repr, task_goal_repr = jnp.split(goal_repr, 2, axis=1)
+        shared_goal_repr, task_goal_repr = jnp.split(
+            scored_goal_repr, 2, axis=1)
       shared_goal_score = jnp.sum(
-          shared_scale * sa_shared * shared_goal_repr, axis=1)
-      task_goal_score = jnp.sum(sa_task * task_goal_repr, axis=1)
+          effective_shared * shared_goal_repr, axis=1)
+      task_goal_score = jnp.sum(
+          effective_task * task_goal_repr, axis=1)
       shared_score_fraction = jnp.abs(shared_goal_score) / jnp.maximum(
           jnp.abs(shared_goal_score) + jnp.abs(task_goal_score), 1e-8)
+      if decomp_nets.shared_repr_normalization == 'unit_mix':
+        shared_coefficient = shared_scale / (shared_scale + 1.0)
+        task_coefficient = 1.0 / (shared_scale + 1.0)
+        normalization_enabled = jnp.asarray(1.0, dtype=sa_shared.dtype)
+      else:
+        shared_coefficient = shared_scale
+        task_coefficient = jnp.asarray(1.0, dtype=sa_shared.dtype)
+        normalization_enabled = jnp.asarray(0.0, dtype=sa_shared.dtype)
       aux = dict(
           critic_loss=total,
           infonce=total,
@@ -589,12 +603,17 @@ class ContinualDecomposedLearner(acme.Learner):
           logits_pos=logits_pos,
           logits_neg=logits_neg,
           shared_scale=shared_scale,
+          shared_coefficient=shared_coefficient,
+          task_coefficient=task_coefficient,
+          branch_normalization_enabled=normalization_enabled,
           shared_norm=jnp.mean(shared_norm),
           scaled_shared_norm=jnp.mean(scaled_shared_norm),
           task_norm=jnp.mean(task_norm),
+          effective_task_norm=jnp.mean(effective_task_norm),
           combined_norm=jnp.mean(combined_norm),
           scaled_shared_to_task_norm=jnp.mean(
-              scaled_shared_norm / jnp.maximum(task_norm, 1e-8)),
+              scaled_shared_norm /
+              jnp.maximum(effective_task_norm, 1e-8)),
           shared_task_cosine=jnp.mean(branch_cosine),
           shared_goal_score_abs=jnp.mean(jnp.abs(shared_goal_score)),
           task_goal_score_abs=jnp.mean(jnp.abs(task_goal_score)),
@@ -1073,9 +1092,14 @@ class ContinualDecomposedLearner(acme.Learner):
           'logits_neg': c_aux['logits_neg'],
           'decomp/L_dyn': d_aux['dyn_mse'],
           'decomp/shared_scale': c_aux['shared_scale'],
+          'decomp/shared_coefficient': c_aux['shared_coefficient'],
+          'decomp/task_coefficient': c_aux['task_coefficient'],
+          'decomp/branch_normalization_enabled':
+              c_aux['branch_normalization_enabled'],
           'decomp/shared_norm': c_aux['shared_norm'],
           'decomp/scaled_shared_norm': c_aux['scaled_shared_norm'],
           'decomp/task_norm': c_aux['task_norm'],
+          'decomp/effective_task_norm': c_aux['effective_task_norm'],
           'decomp/combined_norm': c_aux['combined_norm'],
           'decomp/scaled_shared_to_task_norm':
               c_aux['scaled_shared_to_task_norm'],

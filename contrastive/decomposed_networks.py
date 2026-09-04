@@ -120,6 +120,7 @@ def make_decomposed_networks(
     combine_mode: str = 'add',
     goal_encoder_mode: str = 'shared',
     shared_repr_scale: float = 1.0,
+    shared_repr_normalization: str = 'none',
     action_effect_hidden_dim: int = 256,
     action_effect_output_dim: Optional[int] = None,
     action_effect_include_goal: bool = False,
@@ -169,6 +170,11 @@ def make_decomposed_networks(
         additive case).
     shared_repr_scale: fixed nonnegative alpha multiplying the shared
         contrastive branch. The default 1.0 is the original DCC.
+    shared_repr_normalization: 'none' preserves the original DCC equation.
+        'unit_mix' L2-normalises the shared, task, and goal embeddings per
+        sample and uses the bounded mixture
+        (alpha * unit(shared) + unit(task)) / (alpha + 1). This makes alpha
+        control the relative branch weights instead of their arbitrary norms.
 
   Returns:
     A ``DecomposedCriticNetworks`` instance with all init / apply
@@ -192,6 +198,19 @@ def make_decomposed_networks(
         'shared_repr_scale must be finite and nonnegative, got '
         f'{shared_repr_scale!r}')
   shared_repr_scale = float(shared_repr_scale)
+  if shared_repr_normalization not in ('none', 'unit_mix'):
+    raise ValueError(
+        'shared_repr_normalization must be none or unit_mix, got '
+        f'{shared_repr_normalization!r}')
+  if shared_repr_normalization == 'unit_mix':
+    if combine_mode != 'add':
+      raise ValueError('unit_mix requires combine_mode="add"')
+    if energy_fn != 'inner_product':
+      raise ValueError('unit_mix requires energy_fn="inner_product"')
+    if repr_norm:
+      raise ValueError(
+          'unit_mix already normalises branch and goal embeddings; '
+          'set repr_norm=False')
   z_sa_dim = repr_dim if combine_mode == 'add' else 2 * repr_dim
   use_psi_proj = (combine_mode == 'concat') or (
       goal_encoder_mode == 'projected')
@@ -339,13 +358,36 @@ def make_decomposed_networks(
     sa_task = phi_task.apply(params_phi_task, obs, action)
     return sa_shared, sa_task
 
+  def _unit_norm(x):
+    return x / jnp.maximum(jnp.linalg.norm(x, axis=1, keepdims=True), 1e-8)
+
+  def apply_sa_mixture_components(sa_shared, sa_task):
+    """Return the effective shared and task terms used by the score."""
+    if shared_repr_normalization == 'unit_mix':
+      denominator = shared_repr_scale + 1.0
+      effective_shared = (
+          shared_repr_scale / denominator) * _unit_norm(sa_shared)
+      effective_task = (1.0 / denominator) * _unit_norm(sa_task)
+      return effective_shared, effective_task
+    return shared_repr_scale * sa_shared, sa_task
+
+  def apply_goal_for_score(goal_repr):
+    """Apply goal-side normalisation required by the selected mixture."""
+    if shared_repr_normalization == 'unit_mix':
+      return _unit_norm(goal_repr)
+    return goal_repr
+
   def apply_sa_repr(params_b_shared, params_h_phi, params_phi_task,
                     obs, action):
     """Composed contrastive embedding (additive or concatenated)."""
     sa_shared, sa_task = apply_sa_components(
         params_b_shared, params_h_phi, params_phi_task, obs, action)
     if combine_mode == 'add':
-      return shared_repr_scale * sa_shared + sa_task
+      if shared_repr_normalization == 'none':
+        return shared_repr_scale * sa_shared + sa_task
+      effective_shared, effective_task = apply_sa_mixture_components(
+          sa_shared, sa_task)
+      return effective_shared + effective_task
     # 'concat': dim becomes 2*repr_dim, which is z_sa_dim.
     return jnp.concatenate([shared_repr_scale * sa_shared, sa_task], axis=-1)
 
@@ -388,7 +430,8 @@ def make_decomposed_networks(
     """
     sa = apply_sa_repr(params_b_shared, params_h_phi, params_phi_task,
                        obs, action)
-    g = apply_psi(params_psi, obs, params_psi_proj)
+    raw_g = apply_psi(params_psi, obs, params_psi_proj)
+    g = apply_goal_for_score(raw_g)
     if repr_norm:
       sa = sa / jnp.linalg.norm(sa, axis=1, keepdims=True)
       g = g / jnp.linalg.norm(g, axis=1, keepdims=True)
@@ -405,11 +448,14 @@ def make_decomposed_networks(
     sa_shared, sa_task = apply_sa_components(
         params_b_shared, params_h_phi, params_phi_task, obs, action)
     if combine_mode == 'add':
-      sa = shared_repr_scale * sa_shared + sa_task
+      effective_shared, effective_task = apply_sa_mixture_components(
+          sa_shared, sa_task)
+      sa = effective_shared + effective_task
     else:
       sa = jnp.concatenate(
           [shared_repr_scale * sa_shared, sa_task], axis=-1)
-    g = apply_psi(params_psi, obs, params_psi_proj)
+    raw_g = apply_psi(params_psi, obs, params_psi_proj)
+    g = apply_goal_for_score(raw_g)
     scored_sa, scored_g = sa, g
     if repr_norm:
       scored_sa = scored_sa / jnp.maximum(
@@ -422,7 +468,7 @@ def make_decomposed_networks(
           axis=-1) + 1e-6)
     else:
       logits = jnp.einsum('ik,jk->ij', scored_sa, scored_g)
-    return logits, sa_shared, sa_task, g
+    return logits, sa_shared, sa_task, raw_g
 
   def apply_paired_score(
       params_b_shared, params_h_phi, params_phi_task, params_psi,
@@ -435,7 +481,8 @@ def make_decomposed_networks(
     """
     sa = apply_sa_repr(
         params_b_shared, params_h_phi, params_phi_task, obs, action)
-    g = apply_psi(params_psi, obs, params_psi_proj)
+    g = apply_goal_for_score(apply_psi(
+        params_psi, obs, params_psi_proj))
     if repr_norm:
       sa = sa / jnp.maximum(
           jnp.linalg.norm(sa, axis=1, keepdims=True), 1e-8)
@@ -470,4 +517,7 @@ def make_decomposed_networks(
   bundle.apply_psi_proj = (psi_proj.apply if psi_proj is not None else None)
   bundle.use_psi_proj = use_psi_proj
   bundle.shared_repr_scale = shared_repr_scale
+  bundle.shared_repr_normalization = shared_repr_normalization
+  bundle.apply_sa_mixture_components = apply_sa_mixture_components
+  bundle.apply_goal_for_score = apply_goal_for_score
   return bundle
