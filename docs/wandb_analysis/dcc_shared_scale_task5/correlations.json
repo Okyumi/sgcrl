@@ -1,0 +1,205 @@
+{
+  "alpha_vs_decomp_scaled_shared_to_task_norm_tail": {
+    "n": 18,
+    "pearson_p": 0.0037378504381813255,
+    "pearson_r": 0.6465456430175414,
+    "spearman_p": 0.037534189891068874,
+    "spearman_r": 0.49322075788923364
+  },
+  "alpha_vs_decomp_shared_score_fraction_tail": {
+    "n": 18,
+    "pearson_p": 0.008454915242230092,
+    "pearson_r": 0.6001781086009256,
+    "spearman_p": 0.10097894159485622,
+    "spearman_r": 0.3989747531970233
+  },
+  "alpha_vs_decomp_shared_task_cosine_tail": {
+    "n": 18,
+    "pearson_p": 0.00023228483766819205,
+    "pearson_r": -0.7627387136860172,
+    "spearman_p": 8.122127444713517e-06,
+    "spearman_r": -0.8495965747170806
+  },
+  "alpha_vs_success_1m": {
+    "n": 18,
+    "pearson_p": 0.07738290998639255,
+    "pearson_r": 0.4267315641981038,
+    "spearman_p": 0.0357389553249118,
+    "spearman_r": 0.49731743260843136
+  },
+  "alpha_vs_success_250k": {
+    "n": 18,
+    "pearson_p": 0.3789124344467223,
+    "pearson_r": 0.22066298492838582,
+    "spearman_p": 0.35792344491157574,
+    "spearman_r": 0.23028804018800905
+  },
+  "alpha_vs_success_500k": {
+    "n": 18,
+    "pearson_p": 0.04183293635647823,
+    "pearson_r": 0.4839888298676704,
+    "spearman_p": 0.012727713106369856,
+    "spearman_r": 0.5740541859196757
+  },
+  "alpha_vs_success_750k": {
+    "n": 18,
+    "pearson_p": 0.06761060029829014,
+    "pearson_r": 0.4400722605096191,
+    "spearman_p": 0.08794827042362303,
+    "spearman_r": 0.41363559164239
+  },
+  "alpha_vs_success_auc": {
+    "n": 18,
+    "pearson_p": 0.15384799995910606,
+    "pearson_r": 0.35051662754351387,
+    "spearman_p": 0.08499416688491149,
+    "spearman_r": 0.41717599723878684
+  },
+  "alpha_vs_success_best": {
+    "n": 18,
+    "pearson_p": 0.13045545570309272,
+    "pearson_r": 0.37022594492883404,
+    "spearman_p": 0.08996471939257483,
+    "spearman_r": 0.4112683277918839
+  },
+  "alpha_vs_success_final3": {
+    "n": 18,
+    "pearson_p": 0.09353247030568397,
+    "pearson_r": 0.4071725355229777,
+    "spearman_p": 0.08826815833003954,
+    "spearman_r": 0.4132574363671429
+  },
+  "decomp_scaled_shared_to_task_norm_tail_vs_success_auc": {
+    "n": 18,
+    "pearson_p": 0.33526975243572466,
+    "pearson_r": 0.24104375932804545,
+    "spearman_p": 0.902688811983284,
+    "spearman_r": 0.031039871836771732
+  },
+  "decomp_scaled_shared_to_task_norm_tail_vs_success_best": {
+    "n": 18,
+    "pearson_p": 0.3175803004836856,
+    "pearson_r": 0.24973952004867433,
+    "spearman_p": 0.8912624453287752,
+    "spearman_r": 0.03470407616062807
+  },
+  "decomp_scaled_shared_to_task_norm_tail_vs_success_final3": {
+    "n": 18,
+    "pearson_p": 0.24711933893548055,
+    "pearson_r": 0.287631656716019,
+    "spearman_p": 0.9542478013791303,
+    "spearman_r": 0.014568284366873878
+  },
+  "decomp_shared_score_fraction_tail_vs_success_auc": {
+    "n": 18,
+    "pearson_p": 0.048278287311481136,
+    "pearson_r": 0.47141798242740285,
+    "spearman_p": 0.2579138975651616,
+    "spearman_r": 0.28142817132006376
+  },
+  "decomp_shared_score_fraction_tail_vs_success_best": {
+    "n": 18,
+    "pearson_p": 0.06629720149211983,
+    "pearson_r": 0.4419721099885929,
+    "spearman_p": 0.37156161785063474,
+    "spearman_r": 0.22399903703678117
+  },
+  "decomp_shared_score_fraction_tail_vs_success_final3": {
+    "n": 18,
+    "pearson_p": 0.03426117225591658,
+    "pearson_r": 0.5008101385978242,
+    "spearman_p": 0.3497272075272454,
+    "spearman_r": 0.23413314161047302
+  },
+  "decomp_shared_task_cosine_tail_vs_success_auc": {
+    "n": 18,
+    "pearson_p": 0.022939661565575913,
+    "pearson_r": -0.5323791628395921,
+    "spearman_p": 0.01121841387705847,
+    "spearman_r": -0.5823439082710902
+  },
+  "decomp_shared_task_cosine_tail_vs_success_best": {
+    "n": 18,
+    "pearson_p": 0.03153187640168821,
+    "pearson_r": -0.5075783759161927,
+    "spearman_p": 0.0246799921432744,
+    "spearman_r": -0.5268318627442563
+  },
+  "decomp_shared_task_cosine_tail_vs_success_final3": {
+    "n": 18,
+    "pearson_p": 0.009315821147639795,
+    "pearson_r": -0.5941749064296133,
+    "spearman_p": 0.0017724749912457656,
+    "spearman_r": -0.6832946749605764
+  },
+  "within_seed_alpha_vs_decomp_scaled_shared_to_task_norm_tail": {
+    "n": 18,
+    "pearson_p": 0.0021378324437383105,
+    "pearson_r": 0.6745137496799055,
+    "spearman_p": 0.005659083613402087,
+    "spearman_r": 0.6238734995154946
+  },
+  "within_seed_alpha_vs_decomp_shared_score_fraction_tail": {
+    "n": 18,
+    "pearson_p": 0.008449110012020877,
+    "pearson_r": 0.6002202274705282,
+    "spearman_p": 0.10175060125248064,
+    "spearman_r": 0.3981504243139087
+  },
+  "within_seed_alpha_vs_decomp_shared_task_cosine_tail": {
+    "n": 18,
+    "pearson_p": 0.0001481670193978038,
+    "pearson_r": -0.777081160937197,
+    "spearman_p": 1.6998990718459384e-09,
+    "spearman_r": -0.9499179414733411
+  },
+  "within_seed_alpha_vs_success_1m": {
+    "n": 18,
+    "pearson_p": 0.031253027007089276,
+    "pearson_r": 0.5082950505010435,
+    "spearman_p": 0.010085412020873137,
+    "spearman_r": 0.5891749623537278
+  },
+  "within_seed_alpha_vs_success_250k": {
+    "n": 18,
+    "pearson_p": 0.3552966648194047,
+    "pearson_r": 0.23151482471805201,
+    "spearman_p": 0.3242094154644513,
+    "spearman_r": 0.24644826542136658
+  },
+  "within_seed_alpha_vs_success_500k": {
+    "n": 18,
+    "pearson_p": 0.02008484515692444,
+    "pearson_r": 0.542238776790753,
+    "spearman_p": 0.007212846538232556,
+    "spearman_r": 0.6097735237340064
+  },
+  "within_seed_alpha_vs_success_750k": {
+    "n": 18,
+    "pearson_p": 0.06360524288695588,
+    "pearson_r": 0.4459552356100303,
+    "spearman_p": 0.09504704571438136,
+    "spearman_r": 0.4054679616581795
+  },
+  "within_seed_alpha_vs_success_auc": {
+    "n": 18,
+    "pearson_p": 0.10353484830147225,
+    "pearson_r": 0.3962614358371105,
+    "spearman_p": 0.06624992018079885,
+    "spearman_r": 0.4420410222697726
+  },
+  "within_seed_alpha_vs_success_best": {
+    "n": 18,
+    "pearson_p": 0.10720804102470802,
+    "pearson_r": 0.3924448581508273,
+    "spearman_p": 0.0833959230235102,
+    "spearman_r": 0.41912897747196026
+  },
+  "within_seed_alpha_vs_success_final3": {
+    "n": 18,
+    "pearson_p": 0.05009094345633969,
+    "pearson_r": 0.4681136985632964,
+    "spearman_p": 0.08724732424946617,
+    "spearman_r": 0.4144677261344946
+  }
+}
