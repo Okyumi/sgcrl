@@ -122,8 +122,9 @@ class ContinualConfig:
   outcome_progress_std_floor: float = 0.01
   success_bc_weight: float = 0.0
   # raw_horizon preserves the historical H-step distance proxy.
-  # terminal_episode uses only the final sparse reward of the replay episode.
-  success_bc_label_mode: str = 'raw_horizon'  # raw_horizon | terminal_episode
+  # terminal_episode preserves the completed pilot's final-step semantics.
+  # episode_sparse_reward matches evaluation: any observed sparse reward.
+  success_bc_label_mode: str = 'raw_horizon'
   success_buffer_capacity: int = 4096
   success_bc_batch_size: int = 64
 

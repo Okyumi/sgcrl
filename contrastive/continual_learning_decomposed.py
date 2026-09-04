@@ -272,9 +272,10 @@ class ContinualDecomposedLearner(acme.Learner):
         raise ValueError('counterfactual rank minimum gap cannot be negative.')
     if self._success_bc_weight > 0:
       if self._success_bc_label_mode not in (
-          'raw_horizon', 'terminal_episode'):
+          'raw_horizon', 'terminal_episode', 'episode_sparse_reward'):
         raise ValueError(
-            'success_bc_label_mode must be raw_horizon or terminal_episode.')
+            'success_bc_label_mode must be raw_horizon, terminal_episode, '
+            'or episode_sparse_reward.')
       if (self._success_bc_label_mode == 'raw_horizon'
           and self._action_effect_target_mode != 'raw_horizon'):
         raise ValueError(
@@ -810,7 +811,24 @@ class ContinualDecomposedLearner(acme.Learner):
           new_goal = jnp.roll(goal, 1, axis=0)
         new_obs = jnp.concatenate([new_state, new_goal], axis=1)
       key, action_key, bc_key = jax.random.split(key, 3)
-      dist_params = policy_network.apply(policy_params, new_obs)
+      if success_bc_weight > 0:
+        safe_size = jnp.maximum(success_buffer_size, 1)
+        bc_index = jax.random.randint(
+            bc_key, (success_bc_batch_size,), 0, safe_size)
+        bc_observation = success_buffer_observation[bc_index]
+        bc_action = success_buffer_action[bc_index]
+        # Fuse the DCC and BC actor forwards into one larger GPU operation.
+        all_dist_params = policy_network.apply(
+            policy_params, jnp.concatenate([new_obs, bc_observation], axis=0))
+        main_batch_size = new_obs.shape[0]
+        dist_params = jax.tree_util.tree_map(
+            lambda value: value[:main_batch_size], all_dist_params)
+        bc_dist_params = jax.tree_util.tree_map(
+            lambda value: value[main_batch_size:], all_dist_params)
+      else:
+        dist_params = policy_network.apply(policy_params, new_obs)
+        bc_action = None
+        bc_dist_params = None
       action = sample_fn(dist_params, action_key)
       log_prob = log_prob_fn(dist_params, action)
 
@@ -863,18 +881,16 @@ class ContinualDecomposedLearner(acme.Learner):
         actor_loss -= alpha * (-log_prob)
 
       if success_bc_weight > 0:
-        safe_size = jnp.maximum(success_buffer_size, 1)
-        bc_index = jax.random.randint(
-            bc_key, (success_bc_batch_size,), 0, safe_size)
-        bc_observation = success_buffer_observation[bc_index]
-        bc_action = success_buffer_action[bc_index]
-        bc_dist_params = policy_network.apply(policy_params, bc_observation)
         bc_loss = -jnp.mean(log_prob_fn(bc_dist_params, bc_action))
         bc_active = (success_buffer_size > 0).astype(jnp.float32)
-        actor_loss = actor_loss + success_bc_weight * bc_active * bc_loss
+        weighted_bc_loss = success_bc_weight * bc_active * bc_loss
+        actor_loss = actor_loss + weighted_bc_loss
       else:
         bc_loss = jnp.asarray(0.0)
         bc_active = jnp.asarray(0.0)
+        weighted_bc_loss = jnp.asarray(0.0)
+
+      dcc_actor_loss = jnp.mean(-control_score)
 
       ent_aux = dict(
           entropy_mean=jnp.mean(-log_prob),
@@ -889,7 +905,11 @@ class ContinualDecomposedLearner(acme.Learner):
               / jnp.maximum(jnp.mean(jnp.abs(q_action / q_scale)), 1e-8)),
           control_score=jnp.mean(control_score),
           success_bc_loss=bc_loss,
-          success_bc_active=bc_active)
+          success_bc_active=bc_active,
+          success_bc_weighted_loss=weighted_bc_loss,
+          success_bc_to_dcc_ratio=(
+              jnp.abs(weighted_bc_loss)
+              / jnp.maximum(jnp.abs(dcc_actor_loss), 1e-8)))
       return jnp.mean(actor_loss), ent_aux
 
     def alpha_loss_fn(log_alpha, policy_params, transitions, key):
@@ -907,28 +927,22 @@ class ContinualDecomposedLearner(acme.Learner):
       retention_action = transitions.action
       success = transitions.extras['outcome_task_success'] > 0.5
 
-      def insert_one(carry, values):
-        obs_buffer, act_buffer, current_size, current_index = carry
-        obs, action, keep = values
-
-        def do_insert(bufs):
-          o_buf, a_buf, n, cursor = bufs
-          o_buf = o_buf.at[cursor].set(obs)
-          a_buf = a_buf.at[cursor].set(action)
-          return (o_buf, a_buf,
-                  jnp.minimum(n + 1, success_buffer_capacity),
-                  (cursor + 1) % success_buffer_capacity)
-
-        new_carry = jax.lax.cond(
-            keep, do_insert, lambda bufs: bufs,
-            (obs_buffer, act_buffer, current_size, current_index))
-        return new_carry, jnp.asarray(0, dtype=jnp.int32)
-
-      final, _ = jax.lax.scan(
-          insert_one,
-          (observation_buffer, action_buffer, size, index),
-          (retention_observation, retention_action, success))
-      return final
+      keep = success.astype(jnp.int32)
+      inserted = jnp.sum(keep)
+      offsets = jnp.cumsum(keep) - 1
+      destinations = (index + offsets) % success_buffer_capacity
+      destinations = jnp.where(
+          success, destinations, success_buffer_capacity)
+      observation_buffer = observation_buffer.at[destinations].set(
+          retention_observation, mode='drop')
+      action_buffer = action_buffer.at[destinations].set(
+          retention_action, mode='drop')
+      return (
+          observation_buffer,
+          action_buffer,
+          jnp.minimum(size + inserted, success_buffer_capacity),
+          (index + inserted) % success_buffer_capacity,
+      )
 
     def update_step(state: DecomposedTrainingState,
                     transitions: types.Transition) -> Tuple[DecomposedTrainingState, Dict[str, jnp.ndarray]]:
@@ -1137,6 +1151,11 @@ class ContinualDecomposedLearner(acme.Learner):
       if success_bc_weight > 0:
         metrics.update({
             'retention/bc_loss': a_aux['success_bc_loss'],
+            'retention/weighted_bc_loss':
+                a_aux['success_bc_weighted_loss'],
+            'retention/bc_to_dcc_loss_ratio':
+                a_aux['success_bc_to_dcc_ratio'],
+            'retention/bc_weight': success_bc_weight,
             'retention/bc_active': a_aux['success_bc_active'],
             'retention/buffer_size': new_success_size,
             'retention/source_success_fraction': jnp.mean(

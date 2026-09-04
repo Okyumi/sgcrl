@@ -370,10 +370,12 @@ flags.DEFINE_float('success_bc_weight', 0.0,
                    'Actor BC weight on retained task-goal successful actions.')
 flags.DEFINE_enum(
     'success_bc_label_mode', 'raw_horizon',
-    ('raw_horizon', 'terminal_episode'),
+    ('raw_horizon', 'terminal_episode', 'episode_sparse_reward'),
     'How SuccessBC selects examples. raw_horizon preserves the historical '
     'H-step goal-distance proxy; terminal_episode uses only the final sparse '
-    'reward of the replay episode and requires no mechanism coordinates.')
+    'reward of the replay episode; episode_sparse_reward uses whether any '
+    'observed sparse reward in the episode is positive. Neither sparse-reward '
+    'mode requires mechanism coordinates or a success threshold.')
 flags.DEFINE_integer('success_buffer_capacity', 4096,
                      'Task-local successful-transition ring-buffer capacity.')
 flags.DEFINE_integer('success_bc_batch_size', 64,
@@ -819,7 +821,8 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
   if critic_mode in _HYBRID_CRITIC_MODES:
     config_key += (
         f"_hybrid_{rbc_checkpointing.fingerprint_payload(_dcc_sac_identity_config())}")
-  if critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES):
+  if (critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES)
+      or FLAGS.success_bc_weight > 0):
     config_key += (
         f"_bridge_{rbc_checkpointing.fingerprint_payload(_bridge_identity_config())}")
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
@@ -1309,6 +1312,11 @@ def train_single_task(
     print(
         '  [success BC] retaining actions only from episodes whose final '
         'sparse reward is positive.', flush=True)
+  if (success_bc_enabled
+      and success_bc_label_mode == 'episode_sparse_reward'):
+    print(
+        '  [success BC] retaining actions only from replay episodes with an '
+        'observed positive sparse reward.', flush=True)
 
   def _finite_horizon_labels(all_state, anchor_index, goal):
     """Vectorized raw mechanism progress and reachability labels."""
@@ -1393,6 +1401,16 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
+    if success_bc_enabled and success_bc_label_mode == 'episode_sparse_reward':
+      original_goal = sample.data.observation[:-1, config.obs_dim:]
+      episode_success = tf.cast(
+          tf.reduce_max(sample.data.reward[:-1]) > 0.0, tf.float32)
+      extras.update({
+          'outcome_task_success': tf.fill(
+              [seq_len - 1], episode_success),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
     if iwr_enabled:
       selected_future_state = tf.gather(all_state, goal_index[:-1])
       selected_distance = tf.linalg.norm(
@@ -1468,6 +1486,17 @@ def train_single_task(
       extras.update({
           'outcome_task_success': tf.fill(
               [in_trajectory_repeats], terminal_success),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
+    if success_bc_enabled and success_bc_label_mode == 'episode_sparse_reward':
+      original_goal = tf.gather(
+          sample.data.observation[:, config.obs_dim:], anchor_index)
+      episode_success = tf.cast(
+          tf.reduce_max(sample.data.reward[:-1]) > 0.0, tf.float32)
+      extras.update({
+          'outcome_task_success': tf.fill(
+              [in_trajectory_repeats], episode_success),
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
@@ -1558,7 +1587,8 @@ def train_single_task(
   elif critic_mode in _HYBRID_CRITIC_MODES:
     config_tag += (
         f"_hybrid_{rbc_checkpointing.fingerprint_payload(_dcc_sac_identity_config())}")
-  if critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES):
+  if (critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES)
+      or success_bc_enabled):
     config_tag += (
         f"_bridge_{rbc_checkpointing.fingerprint_payload(_bridge_identity_config())}")
   log_dir = os.path.join(
@@ -1568,7 +1598,8 @@ def train_single_task(
   if (
       critic_mode == 'rbc_decomposed'
       or critic_mode in _HYBRID_CRITIC_MODES
-      or critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES)):
+      or critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES)
+      or success_bc_enabled):
     identity = (
         _rbc_identity_config()
         if critic_mode == 'rbc_decomposed'
