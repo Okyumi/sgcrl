@@ -817,18 +817,15 @@ class ContinualDecomposedLearner(acme.Learner):
             bc_key, (success_bc_batch_size,), 0, safe_size)
         bc_observation = success_buffer_observation[bc_index]
         bc_action = success_buffer_action[bc_index]
-        # Fuse the DCC and BC actor forwards into one larger GPU operation.
-        all_dist_params = policy_network.apply(
-            policy_params, jnp.concatenate([new_obs, bc_observation], axis=0))
-        main_batch_size = new_obs.shape[0]
-        dist_params = jax.tree_util.tree_map(
-            lambda value: value[:main_batch_size], all_dist_params)
-        bc_dist_params = jax.tree_util.tree_map(
-            lambda value: value[main_batch_size:], all_dist_params)
       else:
-        dist_params = policy_network.apply(policy_params, new_obs)
         bc_action = None
-        bc_dist_params = None
+        bc_observation = None
+      # policy_network.apply returns a TensorFlow Probability distribution,
+      # not an array pytree. Trying to split a fused DCC+BC call with
+      # jax.tree_util.tree_map reconstructs NormalTanhDistribution with its
+      # internal `bijector` parameter and crashes. Keep the proven two-call
+      # path used by the successful 1M Terminal-Success-BC experiment.
+      dist_params = policy_network.apply(policy_params, new_obs)
       action = sample_fn(dist_params, action_key)
       log_prob = log_prob_fn(dist_params, action)
 
@@ -881,6 +878,7 @@ class ContinualDecomposedLearner(acme.Learner):
         actor_loss -= alpha * (-log_prob)
 
       if success_bc_weight > 0:
+        bc_dist_params = policy_network.apply(policy_params, bc_observation)
         bc_loss = -jnp.mean(log_prob_fn(bc_dist_params, bc_action))
         bc_active = (success_buffer_size > 0).astype(jnp.float32)
         weighted_bc_loss = success_bc_weight * bc_active * bc_loss

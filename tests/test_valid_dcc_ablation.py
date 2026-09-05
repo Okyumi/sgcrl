@@ -67,7 +67,16 @@ def main():
   assert 'or success_bc_enabled' in runner
   assert "'retention/bc_weight': success_bc_weight" in learner
   assert "'retention/bc_to_dcc_loss_ratio':" in learner
-  assert "jnp.concatenate([new_obs, bc_observation], axis=0)" in learner
+  actor_loss = learner.split('def actor_loss_fn', 1)[1].split(
+      'def alpha_loss_fn', 1)[0]
+  # policy_network.apply returns a TensorFlow Probability distribution.
+  # It must not be split with tree_map: doing so reconstructs the distribution
+  # with an unsupported `bijector` keyword and killed every 4M BC launch.
+  assert 'all_dist_params' not in actor_loss
+  assert 'lambda value: value[:main_batch_size]' not in actor_loss
+  assert 'lambda value: value[main_batch_size:]' not in actor_loss
+  assert 'policy_network.apply(policy_params, new_obs)' in actor_loss
+  assert 'policy_network.apply(policy_params, bc_observation)' in actor_loss
   success_update = learner.split('def update_success_buffer', 1)[1].split(
       'def update_step', 1)[0]
   assert 'jnp.cumsum(keep)' in success_update
@@ -80,6 +89,14 @@ def main():
   assert '--shortcut_diagnostic_interval=0' in launcher
   assert '--nolog_rl_metrics' in launcher
   assert 'exec bash "$REPO_DIR/DRAFT.sh"' not in launcher
+
+  fixed_launcher = (ROOT / 'DRAFT_task58_terminal_bc_4m_fixed.sh').read_text()
+  assert '#SBATCH --array=0-1%2' in fixed_launcher
+  assert 'FIRST_CONFIG=$(( 4 +' in fixed_launcher
+  assert 'TASK58-CORRECTED-4M-TERMINAL-SUCCESS-BC-L0.1-FIXED-DIST-V1' in fixed_launcher
+  assert 'VARIANT" != "terminal_success_bc_l0p1' in fixed_launcher
+  assert '--success_bc_weight="$SUCCESS_BC_WEIGHT"' in fixed_launcher
+  assert '--noaction_effect_enabled' in fixed_launcher
 
   print('Valid DCC ablation checks passed (14 configs).')
 
