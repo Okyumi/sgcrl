@@ -127,6 +127,10 @@ class ContinualConfig:
   success_bc_label_mode: str = 'raw_horizon'
   success_buffer_capacity: int = 4096
   success_bc_batch_size: int = 64
+  # Actor train-eval goal alignment and critic-guided success retention.
+  # Defaults preserve legacy HER-conditioned actor training.
+  actor_goal_mode: str = 'her'  # her | task | mix
+  actor_success_score_weight: float = 0.0
 
   # -- Task-goal same-state counterfactual action ranking ------------------
   # This mode trains u_task only from exact simulator-state interventions.
@@ -251,6 +255,21 @@ class ContinualConfig:
   # `probe_data_task{k}_seed{s}.npz` next to the checkpoint. Consumed by
   # eval_linear_probe.py. See docs/2026-05-08_d6_linear_probe.md.
   log_probe_data: bool = False
+
+  # -- Task-5/8 retention diagnostics (HER / freeze / phase probe) ----------
+  # Separates HER *future-goal sampling* from ContrastiveConfig.discount,
+  # which also weights the InfoNCE loss.  Defaults preserve legacy behaviour.
+  her_future_sampling_mode: str = 'discounted'  # discounted|uniform|final_state|success_oversample
+  her_future_discount: float = -1.0  # <0 => use ContrastiveConfig.discount
+  her_success_oversample_boost: float = 9.0
+  her_success_distance_threshold: float = 0.05
+  freeze_critic_after_success_rate: float = -1.0  # <0 disables
+  freeze_critic_min_env_steps: int = 50_000
+  critic_phase_probe_enabled: bool = False
+  critic_phase_probe_episodes: int = 10
+  critic_phase_probe_interaction_threshold: float = 0.09
+  critic_phase_probe_mid_reach_threshold: float = 0.15
+  mid_task_checkpoint_every: int = 0  # 0 disables; else save every N env steps
 
   # -- Misc -------------------------------------------------------------------
   clear_replay_per_task: bool = True    # clear replay buffer when switching task

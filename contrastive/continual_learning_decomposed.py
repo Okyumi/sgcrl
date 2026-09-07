@@ -191,6 +191,7 @@ class ContinualDecomposedLearner(acme.Learner):
     self._actor_mode = actor_mode
     self._timestamp: Optional[float] = None
     self._last_metrics: Dict[str, float] = {}
+    self._critic_updates_enabled = True
 
     # SGCRL convention: adaptive entropy is on iff entropy_coefficient is
     # None, mirroring continual_learning.py:170.
@@ -235,6 +236,13 @@ class ContinualDecomposedLearner(acme.Learner):
         continual_config, 'success_buffer_capacity', 4096))
     self._success_bc_batch_size = int(getattr(
         continual_config, 'success_bc_batch_size', 64))
+    self._actor_goal_mode = str(getattr(
+        continual_config, 'actor_goal_mode', 'her'))
+    self._actor_success_score_weight = float(getattr(
+        continual_config, 'actor_success_score_weight', 0.0))
+    self._success_buffer_enabled = (
+        self._success_bc_weight > 0.0
+        or self._actor_success_score_weight > 0.0)
     self._counterfactual_rank_temperature = float(getattr(
         continual_config, 'counterfactual_rank_pairwise_temperature', 1.0))
     self._counterfactual_rank_min_gap = float(getattr(
@@ -243,6 +251,12 @@ class ContinualDecomposedLearner(acme.Learner):
         continual_config, 'counterfactual_rank_l2_weight', 1e-4))
     self._counterfactual_rank_actor_enabled = bool(getattr(
         continual_config, 'counterfactual_rank_actor_enabled', True))
+    if self._actor_goal_mode not in ('her', 'task', 'mix'):
+      raise ValueError(
+          "actor_goal_mode must be 'her', 'task', or 'mix'; got "
+          f'{self._actor_goal_mode!r}')
+    if self._actor_success_score_weight < 0.0:
+      raise ValueError('actor_success_score_weight must be >= 0.')
     if self._action_effect_actor_mode not in ('combined', 'effect_only'):
       raise ValueError(
           'action_effect_actor_mode must be combined or effect_only.')
@@ -270,7 +284,7 @@ class ContinualDecomposedLearner(acme.Learner):
         raise ValueError('counterfactual rank temperature must be positive.')
       if self._counterfactual_rank_min_gap < 0:
         raise ValueError('counterfactual rank minimum gap cannot be negative.')
-    if self._success_bc_weight > 0:
+    if self._success_buffer_enabled:
       if self._success_bc_label_mode not in (
           'raw_horizon', 'terminal_episode', 'episode_sparse_reward'):
         raise ValueError(
@@ -391,7 +405,7 @@ class ContinualDecomposedLearner(acme.Learner):
     else:
       outcome_progress_mean_ema = None
       outcome_progress_var_ema = None
-    if self._success_bc_weight > 0:
+    if self._success_buffer_enabled:
       success_buffer_observation = jnp.zeros(
           (self._success_buffer_capacity, 2 * config.obs_dim),
           dtype=jnp.float32)
@@ -502,6 +516,9 @@ class ContinualDecomposedLearner(acme.Learner):
     success_bc_weight = self._success_bc_weight
     success_buffer_capacity = self._success_buffer_capacity
     success_bc_batch_size = self._success_bc_batch_size
+    actor_goal_mode = self._actor_goal_mode
+    actor_success_score_weight = self._actor_success_score_weight
+    success_buffer_enabled = self._success_buffer_enabled
     iwr_enabled = bool(getattr(
         self._continual_cfg, 'interaction_weighted_relabeling', False))
     interaction_threshold = float(getattr(
@@ -799,6 +816,26 @@ class ContinualDecomposedLearner(acme.Learner):
         # The ranker is supervised on the environment's original task goal,
         # never on HER future-state goals. Keep the actor on that same domain.
         new_obs = transitions.extras['counterfactual_task_observation']
+      elif actor_goal_mode == 'task':
+        # Force the actor onto the env desired goal (train≈eval conditioning).
+        new_obs = transitions.extras['actor_task_observation']
+      elif actor_goal_mode == 'mix':
+        task_obs = transitions.extras['actor_task_observation']
+        if random_goals == 0.0:
+          her_obs = obs
+        elif random_goals == 0.5:
+          her_state = jnp.concatenate([state, state], axis=0)
+          her_goal = jnp.concatenate(
+              [goal, jnp.roll(goal, 1, axis=0)], axis=0)
+          her_obs = jnp.concatenate([her_state, her_goal], axis=1)
+          task_obs = jnp.concatenate([task_obs, task_obs], axis=0)
+        else:
+          her_obs = jnp.concatenate(
+              [state, jnp.roll(goal, 1, axis=0)], axis=1)
+        key, mix_key, action_key, bc_key = jax.random.split(key, 4)
+        mix_mask = jax.random.bernoulli(
+            mix_key, 0.5, (her_obs.shape[0], 1)).astype(her_obs.dtype)
+        new_obs = mix_mask * task_obs + (1.0 - mix_mask) * her_obs
       else:
         if random_goals == 0.0:
           new_state, new_goal = state, goal
@@ -810,8 +847,9 @@ class ContinualDecomposedLearner(acme.Learner):
           new_state = state
           new_goal = jnp.roll(goal, 1, axis=0)
         new_obs = jnp.concatenate([new_state, new_goal], axis=1)
-      key, action_key, bc_key = jax.random.split(key, 3)
-      if success_bc_weight > 0:
+      if actor_goal_mode != 'mix':
+        key, action_key, bc_key = jax.random.split(key, 3)
+      if success_buffer_enabled:
         safe_size = jnp.maximum(success_buffer_size, 1)
         bc_index = jax.random.randint(
             bc_key, (success_bc_batch_size,), 0, safe_size)
@@ -888,6 +926,23 @@ class ContinualDecomposedLearner(acme.Learner):
         bc_active = jnp.asarray(0.0)
         weighted_bc_loss = jnp.asarray(0.0)
 
+      # Critic-guided retention on success states (no action cloning).
+      if actor_success_score_weight > 0:
+        key, succ_key = jax.random.split(key)
+        succ_dist = policy_network.apply(policy_params, bc_observation)
+        succ_action = sample_fn(succ_dist, succ_key)
+        succ_score = decomp_nets.apply_score(
+            b_shared_params, h_phi_params, phi_task_params, psi_params,
+            bc_observation, succ_action)
+        succ_q = jnp.diag(succ_score)
+        succ_active = (success_buffer_size > 0).astype(jnp.float32)
+        weighted_succ_score_loss = (
+            -actor_success_score_weight * succ_active * jnp.mean(succ_q))
+        actor_loss = actor_loss + weighted_succ_score_loss
+      else:
+        weighted_succ_score_loss = jnp.asarray(0.0)
+        succ_active = jnp.asarray(0.0)
+
       dcc_actor_loss = jnp.mean(-control_score)
 
       ent_aux = dict(
@@ -907,6 +962,11 @@ class ContinualDecomposedLearner(acme.Learner):
           success_bc_weighted_loss=weighted_bc_loss,
           success_bc_to_dcc_ratio=(
               jnp.abs(weighted_bc_loss)
+              / jnp.maximum(jnp.abs(dcc_actor_loss), 1e-8)),
+          actor_success_score_loss=weighted_succ_score_loss,
+          actor_success_score_active=succ_active,
+          actor_success_score_to_dcc_ratio=(
+              jnp.abs(weighted_succ_score_loss)
               / jnp.maximum(jnp.abs(dcc_actor_loss), 1e-8)))
       return jnp.mean(actor_loss), ent_aux
 
@@ -1033,7 +1093,7 @@ class ContinualDecomposedLearner(acme.Learner):
         new_progress_mean = state.outcome_progress_mean_ema
         new_progress_var = state.outcome_progress_var_ema
 
-      if success_bc_weight > 0:
+      if success_buffer_enabled:
         (new_success_observation, new_success_action,
          new_success_size, new_success_index) = update_success_buffer(
              state.success_buffer_observation, state.success_buffer_action,
@@ -1146,6 +1206,12 @@ class ContinualDecomposedLearner(acme.Learner):
                 if action_effect_target_mode == 'counterfactual_rank'
                 else 0.0),
         })
+      if success_buffer_enabled:
+        metrics.update({
+            'retention/buffer_size': new_success_size,
+            'retention/source_success_fraction': jnp.mean(
+                transitions.extras['outcome_task_success']),
+        })
       if success_bc_weight > 0:
         metrics.update({
             'retention/bc_loss': a_aux['success_bc_loss'],
@@ -1155,9 +1221,17 @@ class ContinualDecomposedLearner(acme.Learner):
                 a_aux['success_bc_to_dcc_ratio'],
             'retention/bc_weight': success_bc_weight,
             'retention/bc_active': a_aux['success_bc_active'],
-            'retention/buffer_size': new_success_size,
-            'retention/source_success_fraction': jnp.mean(
-                transitions.extras['outcome_task_success']),
+        })
+      if actor_success_score_weight > 0:
+        metrics.update({
+            'retention/actor_success_score_loss':
+                a_aux['actor_success_score_loss'],
+            'retention/actor_success_score_active':
+                a_aux['actor_success_score_active'],
+            'retention/actor_success_score_to_dcc_ratio':
+                a_aux['actor_success_score_to_dcc_ratio'],
+            'retention/actor_success_score_weight':
+                actor_success_score_weight,
         })
       if iwr_enabled:
         sampled_distance = transitions.extras['iwr_interaction_distance']
@@ -1345,7 +1419,28 @@ class ContinualDecomposedLearner(acme.Learner):
     # in ContinualContrastiveLearner.step().
     self._last_transitions = transitions
 
+    prev_state = self._state
     self._state, metrics = self._update_step(self._state, transitions)
+
+    # Freeze critic writes without recompiling the update. Actor / entropy /
+    # success-buffer fields from the new state are retained.
+    if not getattr(self, '_critic_updates_enabled', True):
+      self._state = prev_state._replace(
+          policy_params=self._state.policy_params,
+          policy_opt_state=self._state.policy_opt_state,
+          alpha_params=self._state.alpha_params,
+          alpha_optimizer_state=self._state.alpha_optimizer_state,
+          key=self._state.key,
+          control_q_scale_ema=self._state.control_q_scale_ema,
+          success_buffer_observation=self._state.success_buffer_observation,
+          success_buffer_action=self._state.success_buffer_action,
+          success_buffer_size=self._state.success_buffer_size,
+          success_buffer_index=self._state.success_buffer_index,
+          counterfactual_rank_updates=self._state.counterfactual_rank_updates,
+      )
+      metrics = {**metrics, 'critic_frozen': jnp.asarray(1.0)}
+    else:
+      metrics = {**metrics, 'critic_frozen': jnp.asarray(0.0)}
 
     self._last_diagnostic_metrics = {}
     self._diagnostic_counter += 1
@@ -1395,6 +1490,35 @@ class ContinualDecomposedLearner(acme.Learner):
       critic_bundle['u_task'] = self._state.u_task_params
     available = {'policy': actor_params, 'critic': critic_bundle}
     return [available[n] for n in names]
+
+  def set_critic_updates_enabled(self, enabled: bool):
+    """Enable/disable critic+dyn(+u_task) parameter writes after each step.
+
+    Used by the Task-5/8 retention diagnostic that freezes the critic after
+    the first eval success spike, while continuing to train the actor against
+    the frozen contrastive landscape.
+    """
+    self._critic_updates_enabled = bool(enabled)
+
+  @property
+  def critic_updates_enabled(self) -> bool:
+    return bool(getattr(self, '_critic_updates_enabled', True))
+
+  def score_contrastive_actions(self, observation, actions):
+    """Score candidates with pure DCC φ(s,a)ᵀψ(g), ignoring action-effect."""
+    actions = jnp.asarray(actions)
+    obs = jnp.repeat(
+        jnp.asarray(observation)[None, :], actions.shape[0], axis=0)
+    return self._decomp_nets.apply_paired_score(
+        self._state.b_shared_params, self._state.h_phi_params,
+        self._state.phi_task_params, self._state.psi_params, obs, actions)
+
+  def encode_goal_embedding(self, observation):
+    """Return ψ(g) for a single ``state || goal`` observation."""
+    obs = jnp.asarray(observation)
+    if obs.ndim == 1:
+      obs = obs[None, :]
+    return self._decomp_nets.apply_psi(self._state.psi_params, obs)[0]
 
   def score_actions(self, observation, actions):
     """Score same-state candidates with the actor's actual objective."""

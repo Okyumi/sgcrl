@@ -76,6 +76,7 @@ from contrastive import goal_semantics
 from contrastive import phase_gated_control
 from contrastive import outcome_credit
 from contrastive import task58_reevaluation
+from contrastive import critic_phase_probe
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
     cosine_matrix_from_vectors,
@@ -573,6 +574,64 @@ flags.DEFINE_bool('log_probe_data', False,
                   'probe_data_task{k}_seed{s}.npz file next to the '
                   'checkpoint. Consumed by eval_linear_probe.py. Plan '
                   'section 3.4 / D6.')
+flags.DEFINE_enum(
+    'her_future_sampling_mode', 'discounted',
+    ['discounted', 'uniform', 'final_state', 'success_oversample'],
+    'HER future-goal sampling. Separated from ContrastiveConfig.discount '
+    '(which also weights InfoNCE). discounted=legacy gamma^Δt; '
+    'uniform=equal weight on futures; final_state=always last state; '
+    'success_oversample=boost futures near the reachable success goal.')
+flags.DEFINE_float(
+    'her_future_discount', -1.0,
+    'Discount used only for HER future sampling. <0 means use '
+    'ContrastiveConfig.discount. Set to 1.0 with mode=uniform for an '
+    'explicit uniform future sampler without changing InfoNCE weights.')
+flags.DEFINE_float(
+    'her_success_oversample_boost', 9.0,
+    'Additive boost for futures within her_success_distance_threshold of '
+    'the reachable Task-5/8 success goal (mode=success_oversample).')
+flags.DEFINE_float(
+    'her_success_distance_threshold', 0.05,
+    'L2 threshold on the first 7 state dims for success_oversample.')
+flags.DEFINE_float(
+    'freeze_critic_after_success_rate', -1.0,
+    'If >=0, freeze critic/dyn updates once eval success reaches this '
+    'rate (after freeze_critic_min_env_steps). Actor keeps training.')
+flags.DEFINE_integer(
+    'freeze_critic_min_env_steps', 50_000,
+    'Minimum env steps before freeze_critic_after_success_rate can fire.')
+flags.DEFINE_bool(
+    'critic_phase_probe_enabled', False,
+    'After each eval, score success/hover/mid-reach transitions against '
+    'the fixed task goal (Task-5/8 retention diagnostic).')
+flags.DEFINE_integer(
+    'critic_phase_probe_episodes', 10,
+    'Deterministic episodes collected for the critic phase probe.')
+flags.DEFINE_float(
+    'critic_phase_probe_interaction_threshold', 0.09,
+    'Hand-mechanism distance for success/hover classification.')
+flags.DEFINE_float(
+    'critic_phase_probe_mid_reach_threshold', 0.15,
+    'Hand-mechanism distance for mid-reach classification.')
+flags.DEFINE_integer(
+    'mid_task_checkpoint_every', 0,
+    'If >0, save mid-task checkpoints every N env steps for offline '
+    'critic probes (task_{id}_step_{N}.pkl).')
+flags.DEFINE_bool(
+    'use_action_entropy', True,
+    'If false, drop the entropy bonus from the actor loss (alpha may still '
+    'be learned but does not affect the policy objective). Used by the '
+    'Task-5 retention entropy-off ablation.')
+flags.DEFINE_enum(
+    'actor_goal_mode', 'her',
+    ('her', 'task', 'mix'),
+    'Actor conditioning goals: her=HER futures (default); task=env desired '
+    'goal; mix=50/50 HER and task goal.')
+flags.DEFINE_float(
+    'actor_success_score_weight', 0.0,
+    'If >0, add a critic-score maximisation term on the success buffer '
+    '(policy actions, task-goal observations). Tests whether critic signal '
+    'on success states retains press without action cloning (Success-BC).')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -698,6 +757,8 @@ def _bridge_identity_config():
       'success_bc_label_mode': FLAGS.success_bc_label_mode,
       'success_buffer_capacity': FLAGS.success_buffer_capacity,
       'success_bc_batch_size': FLAGS.success_bc_batch_size,
+      'actor_goal_mode': FLAGS.actor_goal_mode,
+      'actor_success_score_weight': FLAGS.actor_success_score_weight,
       'counterfactual_rank_interval_steps':
           FLAGS.counterfactual_rank_interval_steps,
       'counterfactual_rank_num_anchors':
@@ -762,6 +823,40 @@ def _bridge_identity_config():
           FLAGS.action_landscape_success_mode,
   }
 
+def _retention_identity_config():
+  """HER / freeze / entropy / actor-goal settings that isolate ckpt paths."""
+  return {
+      'her_future_sampling_mode': FLAGS.her_future_sampling_mode,
+      'her_future_discount': float(FLAGS.her_future_discount),
+      'her_success_oversample_boost': float(
+          FLAGS.her_success_oversample_boost),
+      'her_success_distance_threshold': float(
+          FLAGS.her_success_distance_threshold),
+      'freeze_critic_after_success_rate': float(
+          FLAGS.freeze_critic_after_success_rate),
+      'freeze_critic_min_env_steps': int(
+          FLAGS.freeze_critic_min_env_steps),
+      'use_action_entropy': bool(FLAGS.use_action_entropy),
+      'actor_goal_mode': str(FLAGS.actor_goal_mode),
+      'actor_success_score_weight': float(FLAGS.actor_success_score_weight),
+      'success_bc_weight': float(FLAGS.success_bc_weight),
+      'success_bc_label_mode': str(FLAGS.success_bc_label_mode),
+  }
+
+
+def _retention_ckpt_suffix_needed():
+  """True when retention diagnostics differ from legacy discounted DCC."""
+  return (
+      FLAGS.her_future_sampling_mode != 'discounted'
+      or float(FLAGS.her_future_discount) >= 0.0
+      or float(FLAGS.freeze_critic_after_success_rate) >= 0.0
+      or (not bool(FLAGS.use_action_entropy))
+      or str(FLAGS.actor_goal_mode) != 'her'
+      or float(FLAGS.actor_success_score_weight) > 0.0
+      or float(FLAGS.success_bc_weight) > 0.0
+  )
+
+
 def _git_commit_sha():
   """Best-effort source revision for run manifests."""
   try:
@@ -822,9 +917,15 @@ def _ckpt_path(ckpt_dir, task_id, seed, critic_mode='persistent',
     config_key += (
         f"_hybrid_{rbc_checkpointing.fingerprint_payload(_dcc_sac_identity_config())}")
   if (critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES)
-      or FLAGS.success_bc_weight > 0):
+      or FLAGS.success_bc_weight > 0
+      or FLAGS.actor_success_score_weight > 0):
     config_key += (
         f"_bridge_{rbc_checkpointing.fingerprint_payload(_bridge_identity_config())}")
+  # Isolate HER / freeze / entropy-off retention cells so they cannot
+  # auto-resume each other's task_0.pkl (2026-09-06 collision).
+  if critic_mode in _PLAIN_DCC_MODES and _retention_ckpt_suffix_needed():
+    config_key += (
+        f"_ret_{rbc_checkpointing.fingerprint_payload(_retention_identity_config())}")
   return os.path.join(ckpt_dir, config_key, f'seed_{seed}',
                       f'task_{task_id}.pkl')
 
@@ -854,6 +955,36 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
   with open(path, 'wb') as f:
     pickle.dump(data_np, f)
   print(f'  [ckpt] Saved → {path}', flush=True)
+
+
+def save_mid_task_ckpt(ckpt_dir, task_id, seed, env_steps, data,
+                       critic_mode='persistent', use_task_id=True,
+                       adapt_heads_only=True, actor_mode='cka',
+                       dyn_aux_weight=None, phi_task_width=None,
+                       phi_task_depth=None, rbc_config=None,
+                       in_trajectory_negative_repeats=1, single_task='',
+                       goal_conditioning_mode='full_state',
+                       sawyer_success_mode='legacy_distance'):
+  """Save a mid-task snapshot next to the ordinary task_{id}.pkl."""
+  final_path = _ckpt_path(
+      ckpt_dir, task_id, seed, critic_mode, use_task_id, adapt_heads_only,
+      actor_mode, dyn_aux_weight=dyn_aux_weight,
+      phi_task_width=phi_task_width, phi_task_depth=phi_task_depth,
+      rbc_config=rbc_config,
+      in_trajectory_negative_repeats=in_trajectory_negative_repeats,
+      single_task=single_task,
+      goal_conditioning_mode=goal_conditioning_mode,
+      sawyer_success_mode=sawyer_success_mode)
+  path = final_path.replace(
+      f'task_{task_id}.pkl', f'task_{task_id}_step_{int(env_steps)}.pkl')
+  os.makedirs(os.path.dirname(path), exist_ok=True)
+  data_np = jax.tree_util.tree_map(
+      lambda x: np.array(x) if isinstance(x, jnp.ndarray) else x,
+      data)
+  with open(path, 'wb') as f:
+    pickle.dump(data_np, f)
+  print(f'  [mid-ckpt @ {env_steps}] Saved → {path}', flush=True)
+  return path
 
 
 def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
@@ -1288,8 +1419,13 @@ def train_single_task(
                   'psi_one_step') == 'raw_horizon')
   success_bc_enabled = float(getattr(
       continual_cfg, 'success_bc_weight', 0.0)) > 0.0
+  actor_success_score_enabled = float(getattr(
+      continual_cfg, 'actor_success_score_weight', 0.0)) > 0.0
+  success_retention_enabled = (
+      success_bc_enabled or actor_success_score_enabled)
   success_bc_label_mode = getattr(
       continual_cfg, 'success_bc_label_mode', 'raw_horizon')
+  actor_goal_mode = str(getattr(continual_cfg, 'actor_goal_mode', 'her'))
   counterfactual_rank_enabled = (
       bool(getattr(continual_cfg, 'action_effect_enabled', False))
       and getattr(continual_cfg, 'action_effect_target_mode',
@@ -1317,6 +1453,17 @@ def train_single_task(
     print(
         '  [success BC] retaining actions only from replay episodes with an '
         'observed positive sparse reward.', flush=True)
+  if actor_success_score_enabled:
+    print(
+        '  [actor success score] maximising critic score on success-buffer '
+        f"states (weight={float(getattr(continual_cfg, 'actor_success_score_weight', 0.0))}); "
+        f'labels={success_bc_label_mode}.',
+        flush=True)
+  if actor_goal_mode != 'her':
+    print(
+        f'  [actor goal mode] {actor_goal_mode} '
+        '(actor conditions on env desired goal instead of / mixed with HER).',
+        flush=True)
 
   def _finite_horizon_labels(all_state, anchor_index, goal):
     """Vectorized raw mechanism progress and reachability labels."""
@@ -1334,17 +1481,56 @@ def train_single_task(
         (distance - interaction_threshold) / interaction_bandwidth)
     return interaction_weight_floor + tf.exp(-0.5 * standardized ** 2)
 
+  her_future_sampling_mode = str(getattr(
+      continual_cfg, 'her_future_sampling_mode', 'discounted'))
+  her_future_discount = float(getattr(
+      continual_cfg, 'her_future_discount', -1.0))
+  if her_future_discount < 0:
+    her_future_discount = float(config.discount)
+  her_success_boost = float(getattr(
+      continual_cfg, 'her_success_oversample_boost', 9.0))
+  her_success_thr = float(getattr(
+      continual_cfg, 'her_success_distance_threshold', 0.05))
+  her_success_reference = None
+  if env_name in env_utils.TASK58_REACHABLE_SUCCESS_GOALS:
+    her_success_reference = np.asarray(
+        env_utils.TASK58_REACHABLE_SUCCESS_GOALS[env_name],
+        dtype=np.float32)
+  print(
+      f'  [HER futures] mode={her_future_sampling_mode} '
+      f'discount={her_future_discount:.4f} '
+      f'(InfoNCE discount remains {config.discount:.4f}); '
+      f'use_action_entropy={bool(getattr(config, "use_action_entropy", True))}',
+      flush=True)
+
   @tf.function
   def flatten_fn(sample):
     seq_len = tf.shape(sample.data.observation)[0]
     arange = tf.range(seq_len)
     is_future = tf.cast(arange[:, None] < arange[None], tf.float32)
-    discount = config.discount ** tf.cast(arange[None] - arange[:, None], tf.float32)
+    delta = tf.cast(arange[None] - arange[:, None], tf.float32)
     all_state = sample.data.observation[:, :config.obs_dim]
-    probs = is_future * discount * _interaction_candidate_weights(
-        all_state)[None, :]
-    goal_index = tf.random.categorical(
-        logits=tf.math.log(probs), num_samples=1)[:, 0]
+    iwr_w = _interaction_candidate_weights(all_state)
+
+    if her_future_sampling_mode == 'final_state':
+      goal_index = tf.ones([seq_len], dtype=tf.int32) * (seq_len - 1)
+    else:
+      if her_future_sampling_mode == 'uniform':
+        discount = tf.ones_like(delta)
+      else:
+        discount = tf.cast(her_future_discount, tf.float32) ** delta
+      probs = is_future * discount * iwr_w[None, :]
+      if (her_future_sampling_mode == 'success_oversample'
+          and her_success_reference is not None):
+        ref = tf.constant(her_success_reference[:7], dtype=tf.float32)
+        dist = tf.linalg.norm(all_state[:, :7] - ref[None, :], axis=1)
+        success_w = 1.0 + her_success_boost * tf.cast(
+            dist <= her_success_thr, tf.float32)
+        probs = probs * success_w[None, :]
+      probs = tf.maximum(probs, is_future * 1e-12)
+      goal_index = tf.random.categorical(
+          logits=tf.math.log(probs), num_samples=1)[:, 0]
+
     state = sample.data.observation[:-1, :config.obs_dim]
     next_state = sample.data.observation[1:, :config.obs_dim]
     goal = sample.data.observation[:, :config.obs_dim]
@@ -1390,7 +1576,7 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
-    if success_bc_enabled and success_bc_label_mode == 'terminal_episode':
+    if success_retention_enabled and success_bc_label_mode == 'terminal_episode':
       original_goal = sample.data.observation[:-1, config.obs_dim:]
       terminal_reward = sample.data.reward[seq_len - 2]
       terminal_success = tf.cast(
@@ -1401,7 +1587,8 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
-    if success_bc_enabled and success_bc_label_mode == 'episode_sparse_reward':
+    if (success_retention_enabled
+        and success_bc_label_mode == 'episode_sparse_reward'):
       original_goal = sample.data.observation[:-1, config.obs_dim:]
       episode_success = tf.cast(
           tf.reduce_max(sample.data.reward[:-1]) > 0.0, tf.float32)
@@ -1411,6 +1598,10 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
+    if actor_goal_mode in ('task', 'mix'):
+      original_goal = sample.data.observation[:-1, config.obs_dim:]
+      extras['actor_task_observation'] = tf.concat(
+          [state, original_goal], axis=1)
     if iwr_enabled:
       selected_future_state = tf.gather(all_state, goal_index[:-1])
       selected_distance = tf.linalg.norm(
@@ -1477,7 +1668,7 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
-    if success_bc_enabled and success_bc_label_mode == 'terminal_episode':
+    if success_retention_enabled and success_bc_label_mode == 'terminal_episode':
       original_goal = tf.gather(
           sample.data.observation[:, config.obs_dim:], anchor_index)
       terminal_reward = sample.data.reward[seq_len - 2]
@@ -1489,7 +1680,8 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
-    if success_bc_enabled and success_bc_label_mode == 'episode_sparse_reward':
+    if (success_retention_enabled
+        and success_bc_label_mode == 'episode_sparse_reward'):
       original_goal = tf.gather(
           sample.data.observation[:, config.obs_dim:], anchor_index)
       episode_success = tf.cast(
@@ -1500,6 +1692,11 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
+    if actor_goal_mode in ('task', 'mix'):
+      original_goal = tf.gather(
+          sample.data.observation[:, config.obs_dim:], anchor_index)
+      extras['actor_task_observation'] = tf.concat(
+          [state, original_goal], axis=1)
     if iwr_enabled:
       selected_future_state = tf.gather(all_state, goal_index)
       selected_distance = tf.linalg.norm(
@@ -1588,7 +1785,7 @@ def train_single_task(
     config_tag += (
         f"_hybrid_{rbc_checkpointing.fingerprint_payload(_dcc_sac_identity_config())}")
   if (critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES)
-      or success_bc_enabled):
+      or success_retention_enabled):
     config_tag += (
         f"_bridge_{rbc_checkpointing.fingerprint_payload(_bridge_identity_config())}")
   log_dir = os.path.join(
@@ -1599,7 +1796,7 @@ def train_single_task(
       critic_mode == 'rbc_decomposed'
       or critic_mode in _HYBRID_CRITIC_MODES
       or critic_mode in (_IWR_MODES + _ACTION_EFFECT_MODES)
-      or success_bc_enabled):
+      or success_retention_enabled):
     identity = (
         _rbc_identity_config()
         if critic_mode == 'rbc_decomposed'
@@ -1966,6 +2163,8 @@ def train_single_task(
   eval_every = FLAGS.eval_every
   next_eval_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   next_evaluator_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
+  mid_every = int(getattr(continual_cfg, 'mid_task_checkpoint_every', 0))
+  next_mid_ckpt_at = mid_every if mid_every > 0 else float('inf')
   episodes_done = 0
   # Metric logging schedule: frequent (1x), occasional (5x)
   metrics_every = eval_every if eval_every > 0 else 50000
@@ -2537,6 +2736,76 @@ def train_single_task(
             f"moved={task58_eval_metrics['mechanism_moved']:.1%} "
             f"progress={task58_eval_metrics['max_task_axis_progress']:.4f}",
             flush=True)
+
+      # Retention diagnostic: freeze critic after the first success spike.
+      freeze_thr = float(getattr(
+          continual_cfg, 'freeze_critic_after_success_rate', -1.0))
+      freeze_min = int(getattr(
+          continual_cfg, 'freeze_critic_min_env_steps', 50_000))
+      if (
+          freeze_thr >= 0.0
+          and env_steps_done >= freeze_min
+          and eval_success_rate >= freeze_thr
+          and critic_mode in _DECOMPOSED_CRITIC_MODES
+          and hasattr(learner, 'set_critic_updates_enabled')
+          and learner.critic_updates_enabled):
+        learner.set_critic_updates_enabled(False)
+        print(
+            f'  [freeze critic @ {env_steps_done}] '
+            f'success={eval_success_rate:.1%} >= {freeze_thr:.1%}; '
+            'actor continues, critic/dyn writes disabled.',
+            flush=True)
+        if FLAGS.use_wandb and wandb is not None:
+          wandb.log({
+              'learner/critic_frozen': 1.0,
+              'learner/critic_freeze_env_steps': env_steps_done,
+              'learner/critic_freeze_success_rate': eval_success_rate,
+          }, step=env_steps_done)
+
+      # Retention diagnostic: score success/hover/mid-reach vs fixed goal.
+      if (
+          bool(getattr(continual_cfg, 'critic_phase_probe_enabled', False))
+          and critic_mode in _DECOMPOSED_CRITIC_MODES
+          and env_name in env_utils.TASK58_REACHABLE_SUCCESS_GOALS
+          and hasattr(learner, 'score_contrastive_actions')):
+        try:
+          probe_metrics = critic_phase_probe.run_critic_phase_probe(
+              environment=eval_env,
+              actor=eval_actor,
+              score_fn=learner.score_contrastive_actions,
+              task_goal=env_utils.TASK58_REACHABLE_SUCCESS_GOALS[env_name],
+              env_name=env_name,
+              obs_dim=config.obs_dim,
+              num_episodes=int(getattr(
+                  continual_cfg, 'critic_phase_probe_episodes', 10)),
+              interaction_threshold=float(getattr(
+                  continual_cfg,
+                  'critic_phase_probe_interaction_threshold', 0.09)),
+              mid_reach_threshold=float(getattr(
+                  continual_cfg,
+                  'critic_phase_probe_mid_reach_threshold', 0.15)),
+              embed_fn=(
+                  learner.encode_goal_embedding
+                  if hasattr(learner, 'encode_goal_embedding') else None),
+          )
+          print(
+              '  [critic phase probe] '
+              f"n_success={probe_metrics.get('probe/n_success', 0):.0f} "
+              f"n_hover={probe_metrics.get('probe/n_hover', 0):.0f} "
+              f"n_mid={probe_metrics.get('probe/n_mid_reach', 0):.0f} "
+              f"gap_s-h={probe_metrics.get('probe/gap_success_minus_hover', float('nan')):.3f} "
+              f"gap_s-m={probe_metrics.get('probe/gap_success_minus_mid_reach', float('nan')):.3f} "
+              f"psi_cos={probe_metrics.get('probe/psi_cosine_task_vs_hover', float('nan')):.3f} "
+              f"psi_l2={probe_metrics.get('probe/psi_l2_task_vs_hover', float('nan')):.3f}",
+              flush=True)
+          if FLAGS.use_wandb and wandb is not None:
+            wandb.log({
+                **probe_metrics,
+                'probe/env_steps': env_steps_done,
+            }, step=env_steps_done)
+        except Exception as probe_error:  # pylint: disable=broad-except
+          print(f'  [critic phase probe] failed: {probe_error}', flush=True)
+
       if (FLAGS.eval_record_video
           and eval_every > 0
           and env_steps_done % FLAGS.eval_video_every == 0):
@@ -2570,6 +2839,44 @@ def train_single_task(
         runtime_totals['evaluation_seconds'] += (
             time.perf_counter() - evaluation_started_at)
       next_evaluator_at = env_steps_done + eval_every
+
+    # Mid-task checkpoints for offline critic phase probes.
+    if (
+        env_steps_done >= next_mid_ckpt_at
+        and critic_mode in _DECOMPOSED_CRITIC_MODES):
+      mid_data = {
+          'env_steps': int(env_steps_done),
+          'task_id': task_id,
+          'env_name': env_name,
+          'composed_policy': learner.get_variables(['policy'])[0],
+          'goal_conditioning_mode': FLAGS.goal_conditioning_mode,
+          'sawyer_success_mode': FLAGS.sawyer_success_mode,
+          'goal_start_index': config.start_index,
+          'goal_end_index': config.end_index,
+          'obs_dim': config.obs_dim,
+      }
+      if isinstance(learner, ContinualDecomposedLearner):
+        mid_data['decomposed_training_state'] = learner.save()
+        mid_data['decomposed_b_shared_params'] = learner.b_shared_params
+        mid_data['decomposed_h_phi_params'] = learner.h_phi_params
+        mid_data['decomposed_h_dyn_params'] = learner.h_dyn_params
+        mid_data['decomposed_psi_params'] = learner.psi_params
+        mid_data['decomposed_policy_params'] = learner.get_variables(
+            ['policy'])[0]
+      save_mid_task_ckpt(
+          FLAGS.checkpoint_dir, task_id, seed, env_steps_done, mid_data,
+          critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
+          adapt_heads_only=FLAGS.adapt_heads_only,
+          actor_mode=FLAGS.actor_mode,
+          dyn_aux_weight=FLAGS.dyn_aux_weight,
+          phi_task_width=FLAGS.phi_task_width,
+          phi_task_depth=FLAGS.phi_task_depth,
+          in_trajectory_negative_repeats=
+              FLAGS.in_trajectory_negative_repeats,
+          single_task=FLAGS.single_task,
+          goal_conditioning_mode=FLAGS.goal_conditioning_mode,
+          sawyer_success_mode=FLAGS.sawyer_success_mode)
+      next_mid_ckpt_at = env_steps_done + mid_every
 
     # ---- RL representation metrics ----------------------------------------
     if env_steps_done >= next_metrics_frequent:
@@ -3137,6 +3444,8 @@ def main(_):
       success_bc_label_mode=FLAGS.success_bc_label_mode,
       success_buffer_capacity=FLAGS.success_buffer_capacity,
       success_bc_batch_size=FLAGS.success_bc_batch_size,
+      actor_goal_mode=FLAGS.actor_goal_mode,
+      actor_success_score_weight=FLAGS.actor_success_score_weight,
       counterfactual_rank_interval_steps=
           FLAGS.counterfactual_rank_interval_steps,
       counterfactual_rank_num_anchors=
@@ -3245,6 +3554,19 @@ def main(_):
       log_pool_cosine=FLAGS.log_pool_cosine,
       log_mixture_norm=FLAGS.log_mixture_norm,
       log_probe_data=FLAGS.log_probe_data,
+      her_future_sampling_mode=FLAGS.her_future_sampling_mode,
+      her_future_discount=FLAGS.her_future_discount,
+      her_success_oversample_boost=FLAGS.her_success_oversample_boost,
+      her_success_distance_threshold=FLAGS.her_success_distance_threshold,
+      freeze_critic_after_success_rate=FLAGS.freeze_critic_after_success_rate,
+      freeze_critic_min_env_steps=FLAGS.freeze_critic_min_env_steps,
+      critic_phase_probe_enabled=FLAGS.critic_phase_probe_enabled,
+      critic_phase_probe_episodes=FLAGS.critic_phase_probe_episodes,
+      critic_phase_probe_interaction_threshold=
+          FLAGS.critic_phase_probe_interaction_threshold,
+      critic_phase_probe_mid_reach_threshold=
+          FLAGS.critic_phase_probe_mid_reach_threshold,
+      mid_task_checkpoint_every=FLAGS.mid_task_checkpoint_every,
   )
 
   # Shared config
@@ -3263,6 +3585,7 @@ def main(_):
       # SAC heuristic is -action_dim = -4; the 0.5 factor is less aggressive
       # and works well with contrastive critics.
       'target_entropy': -2.0,
+      'use_action_entropy': FLAGS.use_action_entropy,
       'env_name': '',
       'max_number_of_steps': 0,
       'alg_name': alg,
@@ -3529,6 +3852,9 @@ def main(_):
                   'success_buffer_capacity':
                       FLAGS.success_buffer_capacity,
                   'success_bc_batch_size': FLAGS.success_bc_batch_size,
+                  'actor_goal_mode': FLAGS.actor_goal_mode,
+                  'actor_success_score_weight':
+                      FLAGS.actor_success_score_weight,
                   'counterfactual_rank_interval_steps':
                       FLAGS.counterfactual_rank_interval_steps,
                   'counterfactual_rank_num_anchors':
