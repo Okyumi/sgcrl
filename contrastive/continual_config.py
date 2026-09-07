@@ -270,6 +270,9 @@ class ContinualConfig:
   critic_phase_probe_interaction_threshold: float = 0.09
   critic_phase_probe_mid_reach_threshold: float = 0.15
   mid_task_checkpoint_every: int = 0  # 0 disables; else save every N env steps
+  her_phase_log_enabled: bool = False
+  her_phase_log_ema_decay: float = 0.99
+  her_phase_log_every_episodes: int = 10
 
   # -- Misc -------------------------------------------------------------------
   clear_replay_per_task: bool = True    # clear replay buffer when switching task

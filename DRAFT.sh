@@ -218,6 +218,9 @@ CRITIC_PHASE_PROBE_INTERACTION_THRESHOLD="${CRITIC_PHASE_PROBE_INTERACTION_THRES
 CRITIC_PHASE_PROBE_MID_REACH_THRESHOLD="${CRITIC_PHASE_PROBE_MID_REACH_THRESHOLD:-0.15}"
 MID_TASK_CHECKPOINT_EVERY="${MID_TASK_CHECKPOINT_EVERY:-0}"
 USE_ACTION_ENTROPY="${USE_ACTION_ENTROPY:-true}"
+HER_PHASE_LOG_ENABLED="${HER_PHASE_LOG_ENABLED:-false}"
+HER_PHASE_LOG_EMA_DECAY="${HER_PHASE_LOG_EMA_DECAY:-0.99}"
+HER_PHASE_LOG_EVERY_EPISODES="${HER_PHASE_LOG_EVERY_EPISODES:-10}"
 
 # Directories
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
@@ -536,6 +539,13 @@ _FLAGS="$_FLAGS --post_task_eval_scope=$POST_TASK_EVAL_SCOPE"
   else
     _FLAGS="$_FLAGS --nouse_action_entropy"
   fi
+  if [ "$HER_PHASE_LOG_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --her_phase_log_enabled"
+  else
+    _FLAGS="$_FLAGS --noher_phase_log_enabled"
+  fi
+  _FLAGS="$_FLAGS --her_phase_log_ema_decay=$HER_PHASE_LOG_EMA_DECAY"
+  _FLAGS="$_FLAGS --her_phase_log_every_episodes=$HER_PHASE_LOG_EVERY_EPISODES"
 
   echo "$_FLAGS"
 }

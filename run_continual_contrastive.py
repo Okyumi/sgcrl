@@ -77,6 +77,7 @@ from contrastive import phase_gated_control
 from contrastive import outcome_credit
 from contrastive import task58_reevaluation
 from contrastive import critic_phase_probe
+from contrastive import her_future_phase
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
     cosine_matrix_from_vectors,
@@ -632,6 +633,16 @@ flags.DEFINE_float(
     'If >0, add a critic-score maximisation term on the success buffer '
     '(policy actions, task-goal observations). Tests whether critic signal '
     'on success states retains press without action cloning (Success-BC).')
+flags.DEFINE_bool(
+    'her_phase_log_enabled', False,
+    'Log HER future-goal phase fractions (success/hover/progress/far) from '
+    'learner batches to test the lucky-spike buffer-composition story.')
+flags.DEFINE_float(
+    'her_phase_log_ema_decay', 0.99,
+    'EMA decay for her_phase/* metrics when her_phase_log_enabled.')
+flags.DEFINE_integer(
+    'her_phase_log_every_episodes', 10,
+    'Print HER phase EMA every N episodes when her_phase_log_enabled.')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -2263,6 +2274,47 @@ def train_single_task(
     if episodes_done == 1:
       print(f'  JIT compilation done.', flush=True)
 
+    # Lucky-spike / buffer-composition probe: classify HER goals in the
+    # batch the learner just consumed (goal half = future state).
+    if (
+        bool(getattr(continual_cfg, 'her_phase_log_enabled', False))
+        and env_name in her_future_phase.TASK_GEOMETRY
+        and getattr(learner, 'last_transitions', None) is not None):
+      try:
+        tr = learner.last_transitions
+        obs_np = np.asarray(tr.observation)
+        goals_np = obs_np[:, config.obs_dim:]
+        # Use only the first SGD mini-batch row-block to keep CPU cost low.
+        goals_np = goals_np[: config.batch_size]
+        batch_phase = her_future_phase.summarize_her_goal_batch(
+            goals_np, env_name)
+        if not hasattr(learner, '_her_phase_ema'):
+          learner._her_phase_ema = dict(batch_phase)
+        else:
+          learner._her_phase_ema = her_future_phase.ema_update(
+              learner._her_phase_ema, batch_phase,
+              decay=float(getattr(
+                  continual_cfg, 'her_phase_log_ema_decay', 0.99)))
+        every = int(getattr(
+            continual_cfg, 'her_phase_log_every_episodes', 10))
+        if every > 0 and episodes_done % every == 0:
+          ema = learner._her_phase_ema
+          print(
+              f'  [her phase @ {env_steps_done}] '
+              f"succ={ema.get('her_phase/frac_success', float('nan')):.2f} "
+              f"hover={ema.get('her_phase/frac_hover_unsolved', float('nan')):.2f} "
+              f"prog={ema.get('her_phase/frac_object_progress', float('nan')):.2f} "
+              f"far={ema.get('her_phase/frac_far_reach', float('nan')):.2f} "
+              f"succ|prog={ema.get('her_phase/frac_success_or_progress', float('nan')):.2f}",
+              flush=True)
+          if FLAGS.use_wandb and wandb is not None:
+            wandb.log({
+                **{f'learner/{k}': float(v) for k, v in ema.items()},
+                'learner/her_phase_env_steps': env_steps_done,
+            }, step=env_steps_done)
+      except Exception as her_phase_error:  # pylint: disable=broad-except
+        print(f'  [her phase] failed: {her_phase_error}', flush=True)
+
     # Diagnostic events use a learner-call cadence, whereas ordinary learner
     # logging uses an environment-step cadence.  Log these values immediately
     # so a valid event cannot be silently dropped between W&B rows.
@@ -3567,6 +3619,9 @@ def main(_):
       critic_phase_probe_mid_reach_threshold=
           FLAGS.critic_phase_probe_mid_reach_threshold,
       mid_task_checkpoint_every=FLAGS.mid_task_checkpoint_every,
+      her_phase_log_enabled=FLAGS.her_phase_log_enabled,
+      her_phase_log_ema_decay=FLAGS.her_phase_log_ema_decay,
+      her_phase_log_every_episodes=FLAGS.her_phase_log_every_episodes,
   )
 
   # Shared config
