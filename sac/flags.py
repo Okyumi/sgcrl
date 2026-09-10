@@ -14,6 +14,7 @@ from absl import flags
 from absl import logging as _logging  # Defines --log_dir, read below.
 
 from contrastive.continual_config import ContinualConfig
+from contrastive import goal_semantics
 from sac import tasks
 
 FLAGS = flags.FLAGS
@@ -81,6 +82,16 @@ flags.DEFINE_bool('step_penalty_reward', True,
                   '0 otherwise. Either way the discount is zeroed on '
                   'goal-reaching transitions (terminal bootstrap). This flag '
                   'is part of the checkpoint path key.')
+flags.DEFINE_enum(
+    'goal_conditioning_mode', 'full_state',
+    list(goal_semantics.GOAL_CONDITIONING_MODES),
+    'Goal contract seen by the policy and critic. full_state is the paper '
+    'SAC baseline (state and goal share the 11-D Sawyer layout).')
+flags.DEFINE_enum(
+    'sawyer_success_mode', 'corrected',
+    ('corrected', 'legacy_distance', 'task_axis', 'native_info'),
+    'Sparse success semantics for custom Sawyer wrappers. Paper reruns '
+    'use native_info so MetaWorld info[success] is the reward predicate.')
 
 # -- Network architecture ---------------------------------------------------
 flags.DEFINE_bool('use_residual', True,
@@ -114,6 +125,10 @@ flags.DEFINE_bool('log_rl_metrics', True,
                   'Log representation-level metrics (entropy, gini, rank, '
                   'NRC1/NRC2, dormant ratio) for the actor trunk and both Q '
                   'heads.')
+flags.DEFINE_integer(
+    'rl_metrics_occasional_multiplier', 5,
+    'Log SVD-based representation metrics every N evaluator intervals. '
+    '1 logs them at every eval; 5 is the historical diagnostic cadence.')
 
 # -- Actor auto-reset (task 0 only) -----------------------------------------
 flags.DEFINE_bool('actor_auto_reset', False,
@@ -230,7 +245,8 @@ def wandb_run_config(params: Dict[str, Any], task_id: int, env_name: str,
       'actor_auto_reset',
       'actor_reset_dormant_threshold', 'actor_reset_warmup',
       'actor_reset_max', 'her_reward_threshold', 'step_penalty_reward',
-      'task_sequence',
+      'task_sequence', 'sawyer_success_mode', 'goal_conditioning_mode',
+      'log_rl_metrics', 'rl_metrics_occasional_multiplier',
   )
   config = {**params, 'task_id': task_id, 'env_name': env_name,
             'num_tasks': num_tasks, 'k_max': k_max}

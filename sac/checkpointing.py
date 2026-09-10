@@ -58,12 +58,19 @@ def config_key(
     actor_mode: str = 'cka',
     step_penalty_reward: bool = True,
     her_reward_threshold: float = 0.05,
+    sawyer_success_mode: str = 'corrected',
 ) -> str:
   """Directory name uniquely identifying an ablation cell."""
-  return (_legacy_config_key(
+  key = (_legacy_config_key(
       critic_mode, use_task_id, adapt_heads_only, actor_mode,
       step_penalty_reward)
           + f'_tau_{threshold_tag(her_reward_threshold)}')
+  # Historical SAC checkpoints predate this flag and used the wrapper
+  # default (``corrected``). Only non-default success modes get a suffix,
+  # so those older paths stay loadable.
+  if sawyer_success_mode != 'corrected':
+    key += f'_success_{sawyer_success_mode}'
+  return key
 
 
 def ckpt_path(
@@ -76,12 +83,14 @@ def ckpt_path(
     actor_mode: str = 'cka',
     step_penalty_reward: bool = True,
     her_reward_threshold: float = 0.05,
+    sawyer_success_mode: str = 'corrected',
 ) -> str:
   """Checkpoint path keyed by ablation-relevant config (``alg=sac_her`` implicit)."""
   return os.path.join(
       ckpt_dir,
       config_key(critic_mode, use_task_id, adapt_heads_only, actor_mode,
-                 step_penalty_reward, her_reward_threshold),
+                 step_penalty_reward, her_reward_threshold,
+                 sawyer_success_mode),
       f'seed_{seed}',
       f'task_{task_id}.pkl')
 
@@ -90,11 +99,12 @@ def save_ckpt(ckpt_dir: str, task_id: int, seed: int, data: Dict[str, Any],
               critic_mode: str = 'persistent', use_task_id: bool = True,
               adapt_heads_only: bool = True, actor_mode: str = 'cka',
               step_penalty_reward: bool = True,
-              her_reward_threshold: float = 0.05) -> str:
+              her_reward_threshold: float = 0.05,
+              sawyer_success_mode: str = 'corrected') -> str:
   """Pickle ``data`` (JAX arrays converted to numpy) and return the path."""
   path = ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                    adapt_heads_only, actor_mode, step_penalty_reward,
-                   her_reward_threshold)
+                   her_reward_threshold, sawyer_success_mode)
   os.makedirs(os.path.dirname(path), exist_ok=True)
   data_np = jax.tree_util.tree_map(
       lambda x: np.array(x) if isinstance(x, jnp.ndarray) else x, data)
@@ -108,11 +118,12 @@ def load_ckpt(ckpt_dir: str, task_id: int, seed: int,
               critic_mode: str = 'persistent', use_task_id: bool = True,
               adapt_heads_only: bool = True, actor_mode: str = 'cka',
               step_penalty_reward: bool = True,
-              her_reward_threshold: float = 0.05) -> Dict[str, Any]:
+              her_reward_threshold: float = 0.05,
+              sawyer_success_mode: str = 'corrected') -> Dict[str, Any]:
   """Load a checkpoint, converting numpy arrays back to JAX arrays."""
   path = ckpt_path(ckpt_dir, task_id, seed, critic_mode, use_task_id,
                    adapt_heads_only, actor_mode, step_penalty_reward,
-                   her_reward_threshold)
+                   her_reward_threshold, sawyer_success_mode)
   if not os.path.exists(path):
     legacy_path = os.path.join(
         ckpt_dir,
@@ -134,7 +145,8 @@ def load_ckpt(ckpt_dir: str, task_id: int, seed: int,
         f'critic_mode={critic_mode}, use_task_id={use_task_id}, '
         f'adapt_heads_only={adapt_heads_only}, '
         f'step_penalty_reward={step_penalty_reward}, '
-        f'her_reward_threshold={her_reward_threshold}).')
+        f'her_reward_threshold={her_reward_threshold}, '
+        f'sawyer_success_mode={sawyer_success_mode}).')
   with open(path, 'rb') as f:
     data = pickle.load(f)
   data_jax = jax.tree_util.tree_map(
@@ -153,6 +165,7 @@ def find_resume_task(
     actor_mode: str = 'cka',
     step_penalty_reward: bool = True,
     her_reward_threshold: float = 0.05,
+    sawyer_success_mode: str = 'corrected',
 ) -> Optional[int]:
   """Probe backwards for the newest checkpoint; return the task to resume at.
 
@@ -164,7 +177,7 @@ def find_resume_task(
   for probe_tid in range(num_tasks - 1, -1, -1):
     probe = ckpt_path(ckpt_dir, probe_tid, seed, critic_mode, use_task_id,
                       adapt_heads_only, actor_mode, step_penalty_reward,
-                      her_reward_threshold)
+                      her_reward_threshold, sawyer_success_mode)
     if os.path.exists(probe):
       return probe_tid + 1
   return None

@@ -273,6 +273,22 @@ class ContinualConfig:
   her_phase_log_enabled: bool = False
   her_phase_log_ema_decay: float = 0.99
   her_phase_log_every_episodes: int = 10
+  # Success-propagation diagnostics (Task5 vs push; SGCRL / Demystifying).
+  success_trace_log_enabled: bool = False  # D2
+  actor_follow_probe_enabled: bool = False  # D3
+  actor_follow_num_candidates: int = 32
+  actor_follow_max_anchors: int = 16
+  success_inject_enabled: bool = False  # D4
+  success_inject_n: int = 256
+  success_inject_success_rate: float = 0.2
+  success_inject_min_env_steps: int = 50_000
+  success_inject_max_attempts: int = 40
+  # If >0, inject/clone until this fraction of current buffer size
+  # (e.g. 0.1 or 0.2). Overrides success_inject_n as a lower bound.
+  success_inject_target_frac: float = 0.0
+  success_inject_clone: bool = False
+  stage_dwell_log_enabled: bool = False
+  press_vs_pi_probe_enabled: bool = False
 
   # -- Misc -------------------------------------------------------------------
   clear_replay_per_task: bool = True    # clear replay buffer when switching task

@@ -30,6 +30,7 @@ import tensorflow as tf
 import tree
 
 from contrastive import config as contrastive_config
+from contrastive import goal_semantics
 from contrastive import rl_metrics
 from contrastive import utils as contrastive_utils
 from contrastive.continual_config import ContinualConfig
@@ -91,9 +92,13 @@ class _FixedVarSource:
     return [self._params for _ in names]
 
 
+def _sawyer_success_mode(flag_values):
+  return getattr(flag_values, 'sawyer_success_mode', 'corrected')
+
+
 def evaluate_on_task(eval_env_name, eval_task_id, policy_params, q_params,
                      config, continual_cfg, seed, num_episodes, k_sample_k=0,
-                     use_task_id=False):
+                     use_task_id=False, sawyer_success_mode='corrected'):
   """Success rate of ``policy_params`` on one task over ``num_episodes``."""
   _tid, _ntasks = tasks.task_id_args(
       use_task_id, eval_task_id, continual_cfg.num_tasks)
@@ -101,7 +106,8 @@ def evaluate_on_task(eval_env_name, eval_task_id, policy_params, q_params,
       eval_env_name, config.start_index, config.end_index,
       seed + eval_task_id + 9999,
       fixed_start_end=tasks.fixed_goal(eval_env_name),
-      task_id=_tid, num_tasks=_ntasks)
+      task_id=_tid, num_tasks=_ntasks,
+      sawyer_success_mode=sawyer_success_mode)
 
   networks = _networks_for(
       specs.make_environment_spec(eval_env), eval_obs_dim, config)
@@ -274,7 +280,8 @@ def train_single_task(
   env, obs_dim = contrastive_utils.make_environment(
       env_name, config.start_index, config.end_index,
       seed + task_id, fixed_start_end=fixed_goal,
-      task_id=_tid, num_tasks=_ntasks)
+      task_id=_tid, num_tasks=_ntasks,
+      sawyer_success_mode=_sawyer_success_mode(f))
 
   config.obs_dim = obs_dim
   config.max_episode_steps = getattr(env, '_step_limit') + 1
@@ -388,7 +395,8 @@ def train_single_task(
   eval_env, _ = contrastive_utils.make_environment(
       env_name, config.start_index, config.end_index,
       seed + task_id + 300, fixed_start_end=fixed_goal,
-      task_id=_tid, num_tasks=_ntasks)
+      task_id=_tid, num_tasks=_ntasks,
+      sawyer_success_mode=_sawyer_success_mode(f))
   eval_loop = environment_loop.EnvironmentLoop(
       eval_env, eval_actor, counter=counting.Counter(),
       logger=make_default_logger('evaluator', steps_key='actor_steps',
@@ -421,9 +429,11 @@ def train_single_task(
   # rl_metrics cadence mirrors the CRL driver: cheap metrics every
   # `metrics_every` env steps, expensive ones (SVD, NRC) every 5x that.
   metrics_every = eval_every if eval_every > 0 else 50000
+  occasional_mult = max(1, int(getattr(
+      f, 'rl_metrics_occasional_multiplier', 5)))
   next_metrics_frequent = metrics_every if f.log_rl_metrics else float('inf')
   next_metrics_occasional = (
-      5 * metrics_every if f.log_rl_metrics else float('inf'))
+      occasional_mult * metrics_every if f.log_rl_metrics else float('inf'))
   episodes_done = 0
   auto_reset_active = (task_id == 0 and f.actor_auto_reset)
   actor_reset_count = 0
@@ -487,7 +497,7 @@ def train_single_task(
     if env_steps_done >= next_metrics_frequent:
       if env_steps_done >= next_metrics_occasional:
         level = 'occasional'
-        next_metrics_occasional = env_steps_done + 5 * metrics_every
+        next_metrics_occasional = env_steps_done + occasional_mult * metrics_every
       else:
         level = 'frequent'
       next_metrics_frequent = env_steps_done + metrics_every
@@ -544,7 +554,8 @@ def train_single_task(
               task_sequence[eval_tid], eval_tid, current_policy,
               learner.q_params, config, continual_cfg, seed,
               num_episodes=f.eval_episodes, k_sample_k=f.k_sample_k,
-              use_task_id=f.use_task_id)
+              use_task_id=f.use_task_id,
+              sawyer_success_mode=_sawyer_success_mode(f))
           for eval_tid in range(task_id + 1)
       }
       intra_mean = float(np.mean(list(intra_results.values())))
@@ -648,7 +659,8 @@ def run(flag_values):
                      adapt_heads_only=f.adapt_heads_only,
                      actor_mode=f.actor_mode,
                      step_penalty_reward=f.step_penalty_reward,
-                     her_reward_threshold=f.her_reward_threshold)
+                     her_reward_threshold=f.her_reward_threshold,
+                     sawyer_success_mode=_sawyer_success_mode(f))
 
   # ---- resume ------------------------------------------------------------
   start_task = f.start_task
@@ -686,6 +698,10 @@ def run(flag_values):
   for task_id in range(start_task, num_tasks):
     env_name = task_sequence[task_id]
     params['env_name'] = env_name
+    goal_start, goal_end = goal_semantics.resolve_goal_slice(
+        getattr(f, 'goal_conditioning_mode', 'full_state'), env_name)
+    params['start_index'] = goal_start
+    params['end_index'] = goal_end
 
     print(f'\n{"=" * 60}', flush=True)
     print(f'Task {task_id}/{num_tasks - 1}: {env_name}', flush=True)
@@ -698,7 +714,8 @@ def run(flag_values):
     print(f'Actor mode: {f.actor_mode} | Eval: {f.eval_episodes}ep, '
           f'K={f.k_sample_k} | Reward: '
           f'{"step-penalty" if f.step_penalty_reward else "sparse01"} '
-          f'(tau={f.her_reward_threshold})', flush=True)
+          f'(tau={f.her_reward_threshold}) | '
+          f'success={_sawyer_success_mode(f)}', flush=True)
     print(f'{"=" * 60}\n', flush=True)
 
     config = contrastive_config.ContrastiveConfig(**params)
@@ -762,7 +779,8 @@ def run(flag_values):
         sr = evaluate_on_task(
             eval_env_name, eval_tid, composed_policy, prev_q, config,
             continual_cfg, seed, num_episodes=f.eval_episodes,
-            k_sample_k=f.k_sample_k, use_task_id=f.use_task_id)
+            k_sample_k=f.k_sample_k, use_task_id=f.use_task_id,
+            sawyer_success_mode=_sawyer_success_mode(f))
         eval_results[eval_env_name] = sr
         print(
             f'    Task {eval_tid} [{eval_env_name}]: {sr:.1%}',

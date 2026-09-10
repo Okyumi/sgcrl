@@ -57,6 +57,7 @@ def test_ckpt_path_layout_is_config_then_seed_then_task():
     {'adapt_heads_only': False},
     {'step_penalty_reward': False},
     {'her_reward_threshold': 0.12},
+    {'sawyer_success_mode': 'native_info'},
 ])
 def test_every_ablation_axis_changes_the_path(kwargs):
   """No two cells may share a checkpoint file."""
@@ -66,6 +67,13 @@ def test_every_ablation_axis_changes_the_path(kwargs):
 
 def test_seed_separates_checkpoints():
   assert ckpt.ckpt_path('/root', 0, 1) != ckpt.ckpt_path('/root', 0, 2)
+
+
+def test_corrected_success_mode_keeps_historical_path():
+  assert ckpt.ckpt_path('/root', 0, SEED) == ckpt.ckpt_path(
+      '/root', 0, SEED, sawyer_success_mode='corrected')
+  assert '_success_native_info' in ckpt.ckpt_path(
+      '/root', 0, SEED, sawyer_success_mode='native_info')
 
 
 # ---- save / load round trip ---------------------------------------------

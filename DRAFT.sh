@@ -72,6 +72,7 @@ EVAL_VIDEO_EVERY="${EVAL_VIDEO_EVERY:-50000}"
 EVAL_VIDEO_FPS="${EVAL_VIDEO_FPS:-20}"
 INTRA_EVAL_PREVIOUS="${INTRA_EVAL_PREVIOUS:-false}"
 LOG_RL_METRICS="${LOG_RL_METRICS:-true}"
+RL_METRICS_OCCASIONAL_MULTIPLIER="${RL_METRICS_OCCASIONAL_MULTIPLIER:-5}"
 K_SAMPLE_K="${K_SAMPLE_K:-0}"
 ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
 ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
@@ -221,6 +222,19 @@ USE_ACTION_ENTROPY="${USE_ACTION_ENTROPY:-true}"
 HER_PHASE_LOG_ENABLED="${HER_PHASE_LOG_ENABLED:-false}"
 HER_PHASE_LOG_EMA_DECAY="${HER_PHASE_LOG_EMA_DECAY:-0.99}"
 HER_PHASE_LOG_EVERY_EPISODES="${HER_PHASE_LOG_EVERY_EPISODES:-10}"
+SUCCESS_TRACE_LOG_ENABLED="${SUCCESS_TRACE_LOG_ENABLED:-false}"
+ACTOR_FOLLOW_PROBE_ENABLED="${ACTOR_FOLLOW_PROBE_ENABLED:-false}"
+ACTOR_FOLLOW_NUM_CANDIDATES="${ACTOR_FOLLOW_NUM_CANDIDATES:-32}"
+ACTOR_FOLLOW_MAX_ANCHORS="${ACTOR_FOLLOW_MAX_ANCHORS:-16}"
+SUCCESS_INJECT_ENABLED="${SUCCESS_INJECT_ENABLED:-false}"
+SUCCESS_INJECT_N="${SUCCESS_INJECT_N:-256}"
+SUCCESS_INJECT_SUCCESS_RATE="${SUCCESS_INJECT_SUCCESS_RATE:-0.2}"
+SUCCESS_INJECT_MIN_ENV_STEPS="${SUCCESS_INJECT_MIN_ENV_STEPS:-50000}"
+SUCCESS_INJECT_MAX_ATTEMPTS="${SUCCESS_INJECT_MAX_ATTEMPTS:-40}"
+SUCCESS_INJECT_TARGET_FRAC="${SUCCESS_INJECT_TARGET_FRAC:-0.0}"
+SUCCESS_INJECT_CLONE="${SUCCESS_INJECT_CLONE:-false}"
+STAGE_DWELL_LOG_ENABLED="${STAGE_DWELL_LOG_ENABLED:-false}"
+PRESS_VS_PI_PROBE_ENABLED="${PRESS_VS_PI_PROBE_ENABLED:-false}"
 
 # Directories
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
@@ -318,6 +332,7 @@ build_flags() {
   else
     _FLAGS="$_FLAGS --nolog_rl_metrics"
   fi
+  _FLAGS="$_FLAGS --rl_metrics_occasional_multiplier=$RL_METRICS_OCCASIONAL_MULTIPLIER"
   _FLAGS="$_FLAGS --k_sample_k=$K_SAMPLE_K"
 
   if [ "$ADAPT_HEADS_ONLY" = "true" ]; then
@@ -546,6 +561,43 @@ _FLAGS="$_FLAGS --post_task_eval_scope=$POST_TASK_EVAL_SCOPE"
   fi
   _FLAGS="$_FLAGS --her_phase_log_ema_decay=$HER_PHASE_LOG_EMA_DECAY"
   _FLAGS="$_FLAGS --her_phase_log_every_episodes=$HER_PHASE_LOG_EVERY_EPISODES"
+  if [ "$SUCCESS_TRACE_LOG_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --success_trace_log_enabled"
+  else
+    _FLAGS="$_FLAGS --nosuccess_trace_log_enabled"
+  fi
+  if [ "$ACTOR_FOLLOW_PROBE_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --actor_follow_probe_enabled"
+  else
+    _FLAGS="$_FLAGS --noactor_follow_probe_enabled"
+  fi
+  _FLAGS="$_FLAGS --actor_follow_num_candidates=$ACTOR_FOLLOW_NUM_CANDIDATES"
+  _FLAGS="$_FLAGS --actor_follow_max_anchors=$ACTOR_FOLLOW_MAX_ANCHORS"
+  if [ "$SUCCESS_INJECT_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --success_inject_enabled"
+  else
+    _FLAGS="$_FLAGS --nosuccess_inject_enabled"
+  fi
+  _FLAGS="$_FLAGS --success_inject_n=$SUCCESS_INJECT_N"
+  _FLAGS="$_FLAGS --success_inject_success_rate=$SUCCESS_INJECT_SUCCESS_RATE"
+  _FLAGS="$_FLAGS --success_inject_min_env_steps=$SUCCESS_INJECT_MIN_ENV_STEPS"
+  _FLAGS="$_FLAGS --success_inject_max_attempts=$SUCCESS_INJECT_MAX_ATTEMPTS"
+  _FLAGS="$_FLAGS --success_inject_target_frac=$SUCCESS_INJECT_TARGET_FRAC"
+  if [ "$SUCCESS_INJECT_CLONE" = "true" ]; then
+    _FLAGS="$_FLAGS --success_inject_clone"
+  else
+    _FLAGS="$_FLAGS --nosuccess_inject_clone"
+  fi
+  if [ "$STAGE_DWELL_LOG_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --stage_dwell_log_enabled"
+  else
+    _FLAGS="$_FLAGS --nostage_dwell_log_enabled"
+  fi
+  if [ "$PRESS_VS_PI_PROBE_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --press_vs_pi_probe_enabled"
+  else
+    _FLAGS="$_FLAGS --nopress_vs_pi_probe_enabled"
+  fi
 
   echo "$_FLAGS"
 }
@@ -627,7 +679,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "Use task ID     : $USE_TASK_ID"
     echo "Eval episodes   : $EVAL_EPISODES"
     echo "Intra-eval prev : $INTRA_EVAL_PREVIOUS"
-    echo "RL metrics      : $LOG_RL_METRICS"
+    echo "RL metrics      : $LOG_RL_METRICS (occasional x$RL_METRICS_OCCASIONAL_MULTIPLIER)"
     echo "K-sample K      : $K_SAMPLE_K"
     echo "Heads only      : $ADAPT_HEADS_ONLY"
     echo "Encoder base    : $ENCODER_FROM_BASE"

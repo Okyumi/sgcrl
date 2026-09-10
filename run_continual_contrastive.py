@@ -77,6 +77,7 @@ from contrastive import phase_gated_control
 from contrastive import outcome_credit
 from contrastive import task58_reevaluation
 from contrastive import critic_phase_probe
+from contrastive import success_propagation_probe
 from contrastive import her_future_phase
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
@@ -164,6 +165,11 @@ flags.DEFINE_enum(
 flags.DEFINE_bool('log_rl_metrics', True,
                   'Log representation metrics (weight norms, feature rank, '
                   'NRC, dormant ratio, intrinsic dimension). Enabled by default.')
+flags.DEFINE_integer(
+    'rl_metrics_occasional_multiplier', 5,
+    'Log SVD-based representation metrics (feature rank, NRC, dormant '
+    'ratio) every N evaluator intervals. 1 logs them at every eval; the '
+    'historical default of 5 matches the cheaper diagnostic cadence.')
 flags.DEFINE_integer('k_sample_k', 0,
                      'K for K-sample-argmax evaluation (0 = deterministic mean).')
 flags.DEFINE_bool('adapt_heads_only', True,
@@ -643,6 +649,51 @@ flags.DEFINE_float(
 flags.DEFINE_integer(
     'her_phase_log_every_episodes', 10,
     'Print HER phase EMA every N episodes when her_phase_log_enabled.')
+flags.DEFINE_bool(
+    'success_trace_log_enabled', False,
+    'D2: after each eval, log φ(s,π)ᵀψ(g_task) on successful vs failed '
+    'episodes (success-trace / Demystifying probe).')
+flags.DEFINE_bool(
+    'actor_follow_probe_enabled', False,
+    'D3: at near-object unsolved states, compare critic argmax action under '
+    'g_task to the policy action.')
+flags.DEFINE_integer(
+    'actor_follow_num_candidates', 32,
+    'Candidate actions per hover anchor for the actor-follow probe.')
+flags.DEFINE_integer(
+    'actor_follow_max_anchors', 16,
+    'Max near-object unsolved anchors scored by the actor-follow probe.')
+flags.DEFINE_bool(
+    'success_inject_enabled', False,
+    'D4: once, after first eval success spike, inject successful episodes '
+    'into Reverb (no Success-BC) to test HER propagation scarcity.')
+flags.DEFINE_integer(
+    'success_inject_n', 256,
+    'Target number of successful transitions to inject (D4).')
+flags.DEFINE_float(
+    'success_inject_success_rate', 0.2,
+    'Eval success rate threshold that triggers one-shot success injection.')
+flags.DEFINE_integer(
+    'success_inject_min_env_steps', 50_000,
+    'Minimum env steps before success injection can fire.')
+flags.DEFINE_integer(
+    'success_inject_max_attempts', 40,
+    'Max rollout attempts while collecting successful episodes for injection.')
+flags.DEFINE_float(
+    'success_inject_target_frac', 0.0,
+    'If >0, inject/clone successful episodes until about this fraction of '
+    'the current replay size (e.g. 0.1 or 0.2). Mass-matched counterfactual.')
+flags.DEFINE_bool(
+    'success_inject_clone', False,
+    'Clone collected successful episodes to reach success_inject_n / '
+    'success_inject_target_frac (needed for 10-20% mass).')
+flags.DEFINE_bool(
+    'stage_dwell_log_enabled', False,
+    'After each eval, count how many of 150 steps successful episodes spend '
+    'in far/near/hover/progress/success.')
+flags.DEFINE_bool(
+    'press_vs_pi_probe_enabled', False,
+    'At hover states, log score(press_bias)-score(pi) under g_task.')
 
 # Fixed goals for all continual tasks
 FIXED_GOALS = {
@@ -852,6 +903,11 @@ def _retention_identity_config():
       'actor_success_score_weight': float(FLAGS.actor_success_score_weight),
       'success_bc_weight': float(FLAGS.success_bc_weight),
       'success_bc_label_mode': str(FLAGS.success_bc_label_mode),
+      'success_inject_enabled': bool(FLAGS.success_inject_enabled),
+      'success_inject_n': int(FLAGS.success_inject_n),
+      'success_inject_success_rate': float(FLAGS.success_inject_success_rate),
+      'success_inject_target_frac': float(FLAGS.success_inject_target_frac),
+      'success_inject_clone': bool(FLAGS.success_inject_clone),
   }
 
 
@@ -865,6 +921,7 @@ def _retention_ckpt_suffix_needed():
       or str(FLAGS.actor_goal_mode) != 'her'
       or float(FLAGS.actor_success_score_weight) > 0.0
       or float(FLAGS.success_bc_weight) > 0.0
+      or bool(FLAGS.success_inject_enabled)
   )
 
 
@@ -2168,6 +2225,7 @@ def train_single_task(
 
   # Training
   env_steps_done = 0
+  success_inject_done = False
   train_steps = max_steps - config.min_replay_size
   log_every_steps = 10000  # print progress every N env steps
   next_log_at = log_every_steps
@@ -2177,10 +2235,12 @@ def train_single_task(
   mid_every = int(getattr(continual_cfg, 'mid_task_checkpoint_every', 0))
   next_mid_ckpt_at = mid_every if mid_every > 0 else float('inf')
   episodes_done = 0
-  # Metric logging schedule: frequent (1x), occasional (5x)
+  # Metric logging schedule: frequent (1x eval), occasional (Nx eval).
   metrics_every = eval_every if eval_every > 0 else 50000
+  occasional_mult = max(1, int(FLAGS.rl_metrics_occasional_multiplier))
   next_metrics_frequent = metrics_every if FLAGS.log_rl_metrics else float('inf')
-  next_metrics_occasional = 5 * metrics_every if FLAGS.log_rl_metrics else float('inf')
+  next_metrics_occasional = (
+      occasional_mult * metrics_every if FLAGS.log_rl_metrics else float('inf'))
   next_action_landscape_at = (
       action_landscape_interval if action_landscape_interval > 0
       else float('inf'))
@@ -2840,12 +2900,20 @@ def train_single_task(
                   learner.encode_goal_embedding
                   if hasattr(learner, 'encode_goal_embedding') else None),
           )
+          # 4-cell score matrix (same (s,a) buckets × two goals):
+          #   A=φ(s_succ,a)·ψ(g_task)  B=φ(s_succ,a)·ψ(g_hover)
+          #   C=φ(s_hov ,a)·ψ(g_task)  D=φ(s_hov ,a)·ψ(g_hover)
           print(
               '  [critic phase probe] '
               f"n_success={probe_metrics.get('probe/n_success', 0):.0f} "
               f"n_hover={probe_metrics.get('probe/n_hover', 0):.0f} "
               f"n_mid={probe_metrics.get('probe/n_mid_reach', 0):.0f} "
-              f"gap_s-h={probe_metrics.get('probe/gap_success_minus_hover', float('nan')):.3f} "
+              f"A_succ@task={probe_metrics.get('probe/score_success_vs_task_goal_mean', float('nan')):.3f} "
+              f"C_hov@task={probe_metrics.get('probe/score_hover_vs_task_goal_mean', float('nan')):.3f} "
+              f"B_succ@hovg={probe_metrics.get('probe/score_success_vs_hover_goal_mean', float('nan')):.3f} "
+              f"D_hov@hovg={probe_metrics.get('probe/score_hover_vs_hover_goal_mean', float('nan')):.3f} "
+              f"gap_s-h@task={probe_metrics.get('probe/gap_success_minus_hover', float('nan')):.3f} "
+              f"gap_s-h@hovg={probe_metrics.get('probe/gap_success_minus_hover_under_hover_goal', float('nan')):.3f} "
               f"gap_s-m={probe_metrics.get('probe/gap_success_minus_mid_reach', float('nan')):.3f} "
               f"psi_cos={probe_metrics.get('probe/psi_cosine_task_vs_hover', float('nan')):.3f} "
               f"psi_l2={probe_metrics.get('probe/psi_l2_task_vs_hover', float('nan')):.3f}",
@@ -2857,6 +2925,216 @@ def train_single_task(
             }, step=env_steps_done)
         except Exception as probe_error:  # pylint: disable=broad-except
           print(f'  [critic phase probe] failed: {probe_error}', flush=True)
+
+      # D2/D3: success-propagation diagnostics (Task5 vs push).
+      _prop_needs_score = (
+          bool(getattr(continual_cfg, 'success_trace_log_enabled', False))
+          or bool(getattr(continual_cfg, 'actor_follow_probe_enabled', False)))
+      if (
+          _prop_needs_score
+          and critic_mode in _DECOMPOSED_CRITIC_MODES
+          and hasattr(learner, 'score_contrastive_actions')):
+        try:
+          eval_actor.update(wait=True)
+          # Prefer reachable full-state goals when available; else goal half
+          # from a fresh eval reset (works for push under full_state).
+          _reset_ts = eval_env.reset()
+          _task_goal = success_propagation_probe.resolve_task_goal(
+              env_name,
+              config.obs_dim,
+              observation=np.asarray(
+                  _reset_ts.observation, dtype=np.float32),
+              reachable_goals=env_utils.TASK58_REACHABLE_SUCCESS_GOALS,
+          )
+        except Exception as goal_error:  # pylint: disable=broad-except
+          _task_goal = None
+          print(
+              f'  [success-prop] task-goal resolve failed: {goal_error}',
+              flush=True)
+
+        if _task_goal is not None and bool(
+            getattr(continual_cfg, 'success_trace_log_enabled', False)):
+          try:
+            trace_metrics = success_propagation_probe.run_success_trace_probe(
+                environment=eval_env,
+                actor=eval_actor,
+                score_fn=learner.score_contrastive_actions,
+                task_goal=_task_goal,
+                env_name=env_name,
+                obs_dim=config.obs_dim,
+                num_episodes=int(getattr(
+                    continual_cfg, 'critic_phase_probe_episodes', 10)),
+            )
+            print(
+                '  [success trace] '
+                f"succ={trace_metrics.get('trace/score_success_ep_mean', float('nan')):.3f} "
+                f"fail={trace_metrics.get('trace/score_fail_ep_mean', float('nan')):.3f} "
+                f"gap={trace_metrics.get('trace/gap_success_minus_fail', float('nan')):.3f} "
+                f"fail_hov={trace_metrics.get('trace/score_fail_hover_mean', float('nan')):.3f} "
+                f"n_s={trace_metrics.get('trace/n_success_ep_transitions', 0):.0f} "
+                f"n_f={trace_metrics.get('trace/n_fail_ep_transitions', 0):.0f}",
+                flush=True)
+            if FLAGS.use_wandb and wandb is not None:
+              wandb.log({
+                  **trace_metrics,
+                  'trace/env_steps': env_steps_done,
+              }, step=env_steps_done)
+          except Exception as trace_error:  # pylint: disable=broad-except
+            print(f'  [success trace] failed: {trace_error}', flush=True)
+
+        if _task_goal is not None and bool(
+            getattr(continual_cfg, 'actor_follow_probe_enabled', False)):
+          try:
+            follow_metrics = success_propagation_probe.run_actor_follow_probe(
+                environment=eval_env,
+                actor=eval_actor,
+                score_fn=learner.score_contrastive_actions,
+                task_goal=_task_goal,
+                env_name=env_name,
+                obs_dim=config.obs_dim,
+                num_episodes=int(getattr(
+                    continual_cfg, 'critic_phase_probe_episodes', 10)),
+                max_anchors=int(getattr(
+                    continual_cfg, 'actor_follow_max_anchors', 16)),
+                num_candidates=int(getattr(
+                    continual_cfg, 'actor_follow_num_candidates', 32)),
+                rng=np.random.default_rng(seed + task_id + env_steps_done),
+            )
+            print(
+                '  [actor follow] '
+                f"n={follow_metrics.get('follow/n_anchors', 0):.0f} "
+                f"pi_rank={follow_metrics.get('follow/pi_rank_mean', float('nan')):.2f} "
+                f"pi_argmax={follow_metrics.get('follow/pi_is_argmax_frac', float('nan')):.2f} "
+                f"gap={follow_metrics.get('follow/score_gap_argmax_minus_pi_mean', float('nan')):.3f} "
+                f"l2={follow_metrics.get('follow/action_l2_pi_vs_argmax_mean', float('nan')):.3f}",
+                flush=True)
+            if FLAGS.use_wandb and wandb is not None:
+              wandb.log({
+                  **follow_metrics,
+                  'follow/env_steps': env_steps_done,
+              }, step=env_steps_done)
+          except Exception as follow_error:  # pylint: disable=broad-except
+            print(f'  [actor follow] failed: {follow_error}', flush=True)
+
+      # D4: one-shot inject successful episodes into Reverb (no BC).
+      inject_thr = float(getattr(
+          continual_cfg, 'success_inject_success_rate', 0.2))
+      inject_min = int(getattr(
+          continual_cfg, 'success_inject_min_env_steps', 50_000))
+      if (
+          bool(getattr(continual_cfg, 'success_inject_enabled', False))
+          and (not success_inject_done)
+          and env_steps_done >= inject_min
+          and eval_success_rate >= inject_thr):
+        try:
+          eval_actor.update(wait=True)
+          target_frac = float(getattr(
+              continual_cfg, 'success_inject_target_frac', 0.0))
+          # Buffer ≈ env steps so far (fresh per task, not yet at 1M cap).
+          buffer_est = max(int(env_steps_done), 1)
+          n_target = int(getattr(continual_cfg, 'success_inject_n', 256))
+          if target_frac > 0.0:
+            n_target = max(n_target, int(target_frac * buffer_est))
+          inject_metrics = success_propagation_probe.inject_successful_episodes(
+              environment=eval_env,
+              actor=eval_actor,
+              adder=adder,
+              n_transitions=n_target,
+              max_attempts=int(getattr(
+                  continual_cfg, 'success_inject_max_attempts', 40)),
+              clone=bool(getattr(continual_cfg, 'success_inject_clone', False))
+              or target_frac > 0.0,
+          )
+          success_inject_done = True
+          print(
+              f'  [success inject @ {env_steps_done}] '
+              f"n={inject_metrics.get('inject/n_transitions', 0):.0f} "
+              f"target={inject_metrics.get('inject/target_n_transitions', 0):.0f} "
+              f"eps={inject_metrics.get('inject/n_success_episodes', 0):.0f} "
+              f"clones={inject_metrics.get('inject/n_clones', 0):.0f} "
+              f"attempts={inject_metrics.get('inject/n_attempts', 0):.0f} "
+              f'buf≈{buffer_est} frac_target={target_frac:.2f} '
+              f'(success={eval_success_rate:.1%}; no BC)',
+              flush=True)
+          if FLAGS.use_wandb and wandb is not None:
+            wandb.log({
+                **inject_metrics,
+                'inject/env_steps': float(env_steps_done),
+                'inject/trigger_success_rate': float(eval_success_rate),
+                'inject/buffer_est': float(buffer_est),
+                'inject/target_frac': float(target_frac),
+            }, step=env_steps_done)
+        except Exception as inject_error:  # pylint: disable=broad-except
+          success_inject_done = True  # avoid retrying a broken adder state
+          print(f'  [success inject] failed: {inject_error}', flush=True)
+
+      # Stage dwell on successful episodes + press-vs-pi at hover.
+      if (
+          (bool(getattr(continual_cfg, 'stage_dwell_log_enabled', False))
+           or bool(getattr(continual_cfg, 'press_vs_pi_probe_enabled', False)))
+          and critic_mode in _DECOMPOSED_CRITIC_MODES
+          and hasattr(learner, 'score_contrastive_actions')):
+        try:
+          eval_actor.update(wait=True)
+          _reset_ts = eval_env.reset()
+          _task_goal = success_propagation_probe.resolve_task_goal(
+              env_name, config.obs_dim,
+              observation=np.asarray(_reset_ts.observation, dtype=np.float32),
+              reachable_goals=env_utils.TASK58_REACHABLE_SUCCESS_GOALS)
+        except Exception as _e:  # pylint: disable=broad-except
+          _task_goal = None
+          print(f'  [dwell/presspi] goal resolve failed: {_e}', flush=True)
+
+        if bool(getattr(continual_cfg, 'stage_dwell_log_enabled', False)):
+          try:
+            dwell = success_propagation_probe.aggregate_successful_episode_dwell(
+                environment=eval_env,
+                actor=eval_actor,
+                env_name=env_name,
+                obs_dim=config.obs_dim,
+                num_episodes=int(getattr(
+                    continual_cfg, 'critic_phase_probe_episodes', 10)),
+            )
+            print(
+                '  [stage dwell] '
+                f"n_succ={dwell.get('dwell/n_success_episodes', 0):.0f} "
+                f"far={dwell.get('dwell/steps_far', float('nan')):.1f} "
+                f"near={dwell.get('dwell/steps_near_approach', float('nan')):.1f} "
+                f"hover={dwell.get('dwell/steps_hover_contact', float('nan')):.1f} "
+                f"prog={dwell.get('dwell/steps_object_progress', float('nan')):.1f} "
+                f"succ={dwell.get('dwell/steps_success', float('nan')):.1f} "
+                f"(mean steps / 150 on successful eps)",
+                flush=True)
+            if FLAGS.use_wandb and wandb is not None:
+              wandb.log({**dwell, 'dwell/env_steps': env_steps_done},
+                        step=env_steps_done)
+          except Exception as dwell_error:  # pylint: disable=broad-except
+            print(f'  [stage dwell] failed: {dwell_error}', flush=True)
+
+        if (_task_goal is not None and bool(
+            getattr(continual_cfg, 'press_vs_pi_probe_enabled', False))):
+          try:
+            presspi = success_propagation_probe.run_press_vs_pi_probe(
+                environment=eval_env,
+                actor=eval_actor,
+                score_fn=learner.score_contrastive_actions,
+                task_goal=_task_goal,
+                env_name=env_name,
+                obs_dim=config.obs_dim,
+                num_episodes=int(getattr(
+                    continual_cfg, 'critic_phase_probe_episodes', 10)),
+            )
+            print(
+                '  [press vs pi] '
+                f"n={presspi.get('presspi/n_hover_anchors', 0):.0f} "
+                f"gap={presspi.get('presspi/gap_press_minus_pi_mean', float('nan')):.3f} "
+                f"press_better={presspi.get('presspi/press_better_frac', float('nan')):.2f}",
+                flush=True)
+            if FLAGS.use_wandb and wandb is not None:
+              wandb.log({**presspi, 'presspi/env_steps': env_steps_done},
+                        step=env_steps_done)
+          except Exception as press_error:  # pylint: disable=broad-except
+            print(f'  [press vs pi] failed: {press_error}', flush=True)
 
       if (FLAGS.eval_record_video
           and eval_every > 0
@@ -2935,7 +3213,7 @@ def train_single_task(
       rl_metrics_started_at = time.perf_counter()
       if env_steps_done >= next_metrics_occasional:
         level = 'occasional'
-        next_metrics_occasional = env_steps_done + 5 * metrics_every
+        next_metrics_occasional = env_steps_done + occasional_mult * metrics_every
         next_metrics_frequent = env_steps_done + metrics_every
       else:
         level = 'frequent'
@@ -3622,6 +3900,19 @@ def main(_):
       her_phase_log_enabled=FLAGS.her_phase_log_enabled,
       her_phase_log_ema_decay=FLAGS.her_phase_log_ema_decay,
       her_phase_log_every_episodes=FLAGS.her_phase_log_every_episodes,
+      success_trace_log_enabled=FLAGS.success_trace_log_enabled,
+      actor_follow_probe_enabled=FLAGS.actor_follow_probe_enabled,
+      actor_follow_num_candidates=FLAGS.actor_follow_num_candidates,
+      actor_follow_max_anchors=FLAGS.actor_follow_max_anchors,
+      success_inject_enabled=FLAGS.success_inject_enabled,
+      success_inject_n=FLAGS.success_inject_n,
+      success_inject_success_rate=FLAGS.success_inject_success_rate,
+      success_inject_min_env_steps=FLAGS.success_inject_min_env_steps,
+      success_inject_max_attempts=FLAGS.success_inject_max_attempts,
+      success_inject_target_frac=FLAGS.success_inject_target_frac,
+      success_inject_clone=FLAGS.success_inject_clone,
+      stage_dwell_log_enabled=FLAGS.stage_dwell_log_enabled,
+      press_vs_pi_probe_enabled=FLAGS.press_vs_pi_probe_enabled,
   )
 
   # Shared config
@@ -3843,6 +4134,8 @@ def main(_):
                   'eval_episodes': FLAGS.eval_episodes,
                   'intra_eval_previous_tasks': FLAGS.intra_eval_previous_tasks,
                   'log_rl_metrics': FLAGS.log_rl_metrics,
+                  'rl_metrics_occasional_multiplier':
+                      FLAGS.rl_metrics_occasional_multiplier,
                   'k_sample_k': FLAGS.k_sample_k,
                   'actor_auto_reset': FLAGS.actor_auto_reset,
                   'actor_reset_dormant_threshold': FLAGS.actor_reset_dormant_threshold,

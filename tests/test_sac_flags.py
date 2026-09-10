@@ -58,6 +58,9 @@ def _flag_values(**overrides):
     ('wandb_entity', ''),
     ('wandb_group', 'sac_baseline'),
     ('wandb_mode', 'online'),
+    ('sawyer_success_mode', 'corrected'),
+    ('goal_conditioning_mode', 'full_state'),
+    ('rl_metrics_occasional_multiplier', 5),
 ])
 def test_flag_default(name, expected):
   assert FLAGS[name].default == expected
@@ -211,6 +214,7 @@ def test_wandb_config_records_the_task_identity():
     'intra_eval_previous_tasks', 'post_task_eval_scope', 'k_sample_k',
     'actor_auto_reset',
     'her_reward_threshold', 'step_penalty_reward', 'task_sequence',
+    'sawyer_success_mode', 'goal_conditioning_mode',
 ])
 def test_wandb_config_records_every_ablation_axis(key):
   assert key in _wandb_config()
