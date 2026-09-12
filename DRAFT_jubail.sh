@@ -1,0 +1,714 @@
+#!/bin/bash
+#SBATCH --verbose
+#SBATCH --job-name=continual_crl
+#SBATCH --partition=nvidia
+#SBATCH --time=48:00:00
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64GB
+#SBATCH --output=/scratch/yd2247/sgcrl/logs/continual/%A_%a.out
+#SBATCH --error=/scratch/yd2247/sgcrl/logs/continual/%A_%a.err
+#SBATCH --mail-user=yd2247@nyu.edu
+#SBATCH --array=0-3
+#
+# ==========================================================================
+# Continual Goal-Conditioned Contrastive RL – Jubail Batch SLURM Launcher
+#
+# Same flag builder as DRAFT.sh (Torch), but the runtime environment is
+# NYUAD Jubail: partition=nvidia, module cuda/11.8.0 + conda-gcc/11.2.0,
+# and set_up/jubail_hpc_env.sh. Thin experiment wrappers should set
+# CONFIG_SCRIPT / LOG_DIR / CHECKPOINT_DIR then `bash DRAFT_jubail.sh`.
+#
+# Do not exec this file via sbatch on Torch; use DRAFT.sh there instead.
+# ==========================================================================
+
+set -euo pipefail
+
+# ---- number of parallel tasks per GPU ------------------------------------
+TASKS_PER_GPU="${TASKS_PER_GPU:-1}"
+
+# Optional contiguous config window. Defaults preserve the historical
+# behaviour (start at config 0 and run through experiment_configs.py --total).
+# Experiment wrappers can select a subset without duplicating this file.
+CONFIG_INDEX_OFFSET="${CONFIG_INDEX_OFFSET:-0}"
+CONFIG_LIMIT="${CONFIG_LIMIT:-0}"
+# Optional alternate configuration enumerator.  The default preserves the
+# historical experiment matrix; narrow resume wrappers can supply a separate
+# file without editing or reordering experiment_configs.py.
+CONFIG_SCRIPT="${CONFIG_SCRIPT:-experiment_configs.py}"
+
+# ---- shared defaults ------------------------------------------------------
+ALG="${ALG:-contrastive_cpc}"
+NUM_TASKS="${NUM_TASKS:-10}"
+STEPS_PER_TASK="${STEPS_PER_TASK:-8000000}"
+BASE_STEPS="${BASE_STEPS:-8000000}"
+K_MAX="${K_MAX:-10}"
+START_TASK="${START_TASK:-0}"
+EVAL_EVERY="${EVAL_EVERY:-50000}"
+USE_WANDB="${USE_WANDB:-true}"
+WANDB_PROJECT="${WANDB_PROJECT:-continual_gcrl_paper}"
+WANDB_GROUP="${WANDB_GROUP:-C2: decomposed single-cell sanity}"
+ADD_UID="${ADD_UID:-true}"
+USE_TASK_ID="${USE_TASK_ID:-false}"
+EVAL_EPISODES="${EVAL_EPISODES:-10}"
+EVAL_RECORD_VIDEO="${EVAL_RECORD_VIDEO:-false}"
+EVAL_VIDEO_EVERY="${EVAL_VIDEO_EVERY:-50000}"
+EVAL_VIDEO_FPS="${EVAL_VIDEO_FPS:-20}"
+INTRA_EVAL_PREVIOUS="${INTRA_EVAL_PREVIOUS:-false}"
+LOG_RL_METRICS="${LOG_RL_METRICS:-true}"
+RL_METRICS_OCCASIONAL_MULTIPLIER="${RL_METRICS_OCCASIONAL_MULTIPLIER:-5}"
+K_SAMPLE_K="${K_SAMPLE_K:-0}"
+ADAPT_HEADS_ONLY="${ADAPT_HEADS_ONLY:-true}"
+ENCODER_FROM_BASE="${ENCODER_FROM_BASE:-false}"
+USE_20_TASKS="${USE_20_TASKS:-false}"
+
+# Scaling architecture
+USE_RESIDUAL="${USE_RESIDUAL:-true}"
+NETWORK_WIDTH="${NETWORK_WIDTH:-256}"
+CRITIC_DEPTH="${CRITIC_DEPTH:-4}"
+ACTOR_DEPTH="${ACTOR_DEPTH:-4}"
+ENERGY_FN="${ENERGY_FN:-inner_product}"
+LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
+SINGLE_TASK="${SINGLE_TASK:-}"
+GOAL_CONDITIONING_MODE="${GOAL_CONDITIONING_MODE:-full_state}"
+SAWYER_SUCCESS_MODE="${SAWYER_SUCCESS_MODE:-corrected}"
+PROFILE_RUNTIME="${PROFILE_RUNTIME:-false}"
+ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-false}"
+ACTOR_RESET_DORMANT_THRESHOLD="${ACTOR_RESET_DORMANT_THRESHOLD:-0.1}"
+ACTOR_RESET_WARMUP="${ACTOR_RESET_WARMUP:-200000}"
+ACTOR_RESET_MAX="${ACTOR_RESET_MAX:-3}"
+
+# Decomposed-critic + diagnostic flags (defaults preserve prior behaviour).
+# Per-cell overrides come from experiment_configs.py via the eval line
+# below; cells that don't set these get the dataclass / flag defaults.
+DYN_AUX_WEIGHT="${DYN_AUX_WEIGHT:-1.0}"
+DYN_AUX_AFTER_TASK0="${DYN_AUX_AFTER_TASK0:--1.0}"
+PHI_TASK_WIDTH="${PHI_TASK_WIDTH:-256}"
+PHI_TASK_DEPTH="${PHI_TASK_DEPTH:-4}"
+COMBINE_MODE="${COMBINE_MODE:-add}"
+GOAL_ENCODER_MODE="${GOAL_ENCODER_MODE:-shared}"
+IN_TRAJECTORY_NEGATIVE_REPEATS="${IN_TRAJECTORY_NEGATIVE_REPEATS:-1}"
+INTERACTION_WEIGHTED_RELABELING="${INTERACTION_WEIGHTED_RELABELING:-false}"
+INTERACTION_THRESHOLD="${INTERACTION_THRESHOLD:-0.09}"
+INTERACTION_BANDWIDTH="${INTERACTION_BANDWIDTH:-0.03}"
+INTERACTION_WEIGHT_FLOOR="${INTERACTION_WEIGHT_FLOOR:-0.05}"
+ACTION_EFFECT_ENABLED="${ACTION_EFFECT_ENABLED:-false}"
+ACTION_EFFECT_LOSS_WEIGHT="${ACTION_EFFECT_LOSS_WEIGHT:-1.0}"
+ACTION_EFFECT_DISCOUNT="${ACTION_EFFECT_DISCOUNT:-0.99}"
+ACTION_EFFECT_TEMPERATURE="${ACTION_EFFECT_TEMPERATURE:-1.0}"
+ACTION_EFFECT_ACTOR_WEIGHT="${ACTION_EFFECT_ACTOR_WEIGHT:-1.0}"
+ACTION_EFFECT_NORMALIZATION_EPS="${ACTION_EFFECT_NORMALIZATION_EPS:-0.001}"
+ACTION_EFFECT_Q_SCALE_EMA_DECAY="${ACTION_EFFECT_Q_SCALE_EMA_DECAY:-0.99}"
+ACTION_EFFECT_HIDDEN_DIM="${ACTION_EFFECT_HIDDEN_DIM:-256}"
+ACTION_EFFECT_ACTOR_MODE="${ACTION_EFFECT_ACTOR_MODE:-combined}"
+ACTION_EFFECT_TARGET_MODE="${ACTION_EFFECT_TARGET_MODE:-psi_one_step}"
+OUTCOME_HORIZON="${OUTCOME_HORIZON:-25}"
+OUTCOME_SUCCESS_THRESHOLD="${OUTCOME_SUCCESS_THRESHOLD:-0.05}"
+OUTCOME_PROGRESS_LOSS_WEIGHT="${OUTCOME_PROGRESS_LOSS_WEIGHT:-1.0}"
+OUTCOME_SUCCESS_LOSS_WEIGHT="${OUTCOME_SUCCESS_LOSS_WEIGHT:-1.0}"
+OUTCOME_SUCCESS_ACTOR_WEIGHT="${OUTCOME_SUCCESS_ACTOR_WEIGHT:-1.0}"
+OUTCOME_PROGRESS_EMA_DECAY="${OUTCOME_PROGRESS_EMA_DECAY:-0.99}"
+OUTCOME_PROGRESS_STD_FLOOR="${OUTCOME_PROGRESS_STD_FLOOR:-0.01}"
+SUCCESS_BC_WEIGHT="${SUCCESS_BC_WEIGHT:-0.0}"
+SUCCESS_BC_LABEL_MODE="${SUCCESS_BC_LABEL_MODE:-raw_horizon}"
+SUCCESS_BUFFER_CAPACITY="${SUCCESS_BUFFER_CAPACITY:-4096}"
+SUCCESS_BC_BATCH_SIZE="${SUCCESS_BC_BATCH_SIZE:-64}"
+ACTOR_GOAL_MODE="${ACTOR_GOAL_MODE:-her}"
+ACTOR_SUCCESS_SCORE_WEIGHT="${ACTOR_SUCCESS_SCORE_WEIGHT:-0.0}"
+COUNTERFACTUAL_RANK_INTERVAL_STEPS="${COUNTERFACTUAL_RANK_INTERVAL_STEPS:-0}"
+COUNTERFACTUAL_RANK_NUM_ANCHORS="${COUNTERFACTUAL_RANK_NUM_ANCHORS:-4}"
+COUNTERFACTUAL_RANK_CANDIDATES_PER_FAMILY="${COUNTERFACTUAL_RANK_CANDIDATES_PER_FAMILY:-4}"
+COUNTERFACTUAL_RANK_ROLLOUT_HORIZON="${COUNTERFACTUAL_RANK_ROLLOUT_HORIZON:-100}"
+COUNTERFACTUAL_RANK_ACTION_REPEAT="${COUNTERFACTUAL_RANK_ACTION_REPEAT:-5}"
+COUNTERFACTUAL_RANK_LOCAL_NOISE_STD="${COUNTERFACTUAL_RANK_LOCAL_NOISE_STD:-0.10}"
+COUNTERFACTUAL_RANK_ANCHOR_MODE="${COUNTERFACTUAL_RANK_ANCHOR_MODE:-scripted_contact}"
+COUNTERFACTUAL_RANK_ANCHOR_SEARCH_STEPS="${COUNTERFACTUAL_RANK_ANCHOR_SEARCH_STEPS:-150}"
+COUNTERFACTUAL_RANK_INTERACTION_THRESHOLD="${COUNTERFACTUAL_RANK_INTERACTION_THRESHOLD:-0.09}"
+COUNTERFACTUAL_RANK_CONTACT_GAIN="${COUNTERFACTUAL_RANK_CONTACT_GAIN:-5.0}"
+COUNTERFACTUAL_RANK_SUCCESS_THRESHOLD="${COUNTERFACTUAL_RANK_SUCCESS_THRESHOLD:-0.05}"
+COUNTERFACTUAL_RANK_SUCCESS_BONUS="${COUNTERFACTUAL_RANK_SUCCESS_BONUS:-1.0}"
+COUNTERFACTUAL_RANK_MIN_OUTCOME_GAP="${COUNTERFACTUAL_RANK_MIN_OUTCOME_GAP:-0.002}"
+COUNTERFACTUAL_RANK_BUFFER_CAPACITY="${COUNTERFACTUAL_RANK_BUFFER_CAPACITY:-128}"
+COUNTERFACTUAL_RANK_BATCH_ANCHORS="${COUNTERFACTUAL_RANK_BATCH_ANCHORS:-16}"
+COUNTERFACTUAL_RANK_UPDATES_PER_EVENT="${COUNTERFACTUAL_RANK_UPDATES_PER_EVENT:-25}"
+COUNTERFACTUAL_RANK_PAIRWISE_TEMPERATURE="${COUNTERFACTUAL_RANK_PAIRWISE_TEMPERATURE:-1.0}"
+COUNTERFACTUAL_RANK_L2_WEIGHT="${COUNTERFACTUAL_RANK_L2_WEIGHT:-0.0001}"
+COUNTERFACTUAL_RANK_VALIDATION_ANCHORS="${COUNTERFACTUAL_RANK_VALIDATION_ANCHORS:-0}"
+COUNTERFACTUAL_RANK_SUCCESS_MODE="${COUNTERFACTUAL_RANK_SUCCESS_MODE:-goal_distance}"
+COUNTERFACTUAL_RANK_ACTOR_ENABLED="${COUNTERFACTUAL_RANK_ACTOR_ENABLED:-true}"
+COUNTERFACTUAL_ORACLE_INTERVAL_STEPS="${COUNTERFACTUAL_ORACLE_INTERVAL_STEPS:-0}"
+COUNTERFACTUAL_ORACLE_NUM_ANCHORS="${COUNTERFACTUAL_ORACLE_NUM_ANCHORS:-4}"
+COUNTERFACTUAL_ORACLE_CONDITION_SET="${COUNTERFACTUAL_ORACLE_CONDITION_SET:-all}"
+COUNTERFACTUAL_ORACLE_MAX_EVENTS="${COUNTERFACTUAL_ORACLE_MAX_EVENTS:-0}"
+PHASE_GATED_CONTROL="${PHASE_GATED_CONTROL:-false}"
+PHASE_GATE_REACH_MODE="${PHASE_GATE_REACH_MODE:-policy}"
+PHASE_GATE_INTERACTION_THRESHOLD="${PHASE_GATE_INTERACTION_THRESHOLD:-0.09}"
+PHASE_GATE_CHUNK_LENGTH="${PHASE_GATE_CHUNK_LENGTH:-5}"
+PHASE_GATE_NUM_CANDIDATES="${PHASE_GATE_NUM_CANDIDATES:-16}"
+PHASE_GATE_LOCAL_NOISE_STD="${PHASE_GATE_LOCAL_NOISE_STD:-0.10}"
+PHASE_GATE_CONTACT_GAIN="${PHASE_GATE_CONTACT_GAIN:-5.0}"
+BELLMAN_LOSS_WEIGHT="${BELLMAN_LOSS_WEIGHT:-1.0}"
+BELLMAN_RESIDUAL_L2_WEIGHT="${BELLMAN_RESIDUAL_L2_WEIGHT:-0.0001}"
+BELLMAN_DISCOUNT="${BELLMAN_DISCOUNT:-0.99}"
+BELLMAN_TAU="${BELLMAN_TAU:-0.005}"
+BELLMAN_HIDDEN_DIM="${BELLMAN_HIDDEN_DIM:-256}"
+HER_REWARD_THRESHOLD="${HER_REWARD_THRESHOLD:-0.05}"
+STEP_PENALTY_REWARD="${STEP_PENALTY_REWARD:-true}"
+DCC_SAC_Q_LOSS_WEIGHT="${DCC_SAC_Q_LOSS_WEIGHT:-1.0}"
+DCC_SAC_Q_LEARNING_RATE="${DCC_SAC_Q_LEARNING_RATE:-0.0003}"
+DCC_SAC_DISCOUNT="${DCC_SAC_DISCOUNT:-0.99}"
+DCC_SAC_TAU="${DCC_SAC_TAU:-0.005}"
+DCC_SAC_Q_HIDDEN_DIM="${DCC_SAC_Q_HIDDEN_DIM:-1024}"
+DCC_SAC_BETA_MAX="${DCC_SAC_BETA_MAX:-0.1}"
+DCC_SAC_Q_WARMUP_UPDATES="${DCC_SAC_Q_WARMUP_UPDATES:-10000}"
+DCC_SAC_Q_RAMP_UPDATES="${DCC_SAC_Q_RAMP_UPDATES:-25000}"
+DCC_SAC_TD_ERROR_THRESHOLD="${DCC_SAC_TD_ERROR_THRESHOLD:-0.5}"
+DCC_SAC_TWIN_DISAGREEMENT_THRESHOLD="${DCC_SAC_TWIN_DISAGREEMENT_THRESHOLD:-0.1}"
+DCC_SAC_EMA_DECAY="${DCC_SAC_EMA_DECAY:-0.99}"
+DCC_SAC_CANDIDATE_ACTIONS="${DCC_SAC_CANDIDATE_ACTIONS:-8}"
+DCC_SAC_NORMALIZATION_EPS="${DCC_SAC_NORMALIZATION_EPS:-0.001}"
+DCC_SAC_CORRECTION_CLIP="${DCC_SAC_CORRECTION_CLIP:-5.0}"
+ACTION_CONTRAST_WEIGHT="${ACTION_CONTRAST_WEIGHT:-1.0}"
+ACTION_CONTRAST_TEMPERATURE="${ACTION_CONTRAST_TEMPERATURE:-1.0}"
+ACTION_CONTRAST_BATCH_SIZE="${ACTION_CONTRAST_BATCH_SIZE:-32}"
+SHORTCUT_DIAGNOSTIC_INTERVAL="${SHORTCUT_DIAGNOSTIC_INTERVAL:-0}"
+SHORTCUT_DIAGNOSTIC_BATCH_SIZE="${SHORTCUT_DIAGNOSTIC_BATCH_SIZE:-32}"
+SHORTCUT_CANDIDATE_ACTIONS="${SHORTCUT_CANDIDATE_ACTIONS:-16}"
+ACTION_LANDSCAPE_DIAGNOSTIC_INTERVAL_STEPS="${ACTION_LANDSCAPE_DIAGNOSTIC_INTERVAL_STEPS:-0}"
+ACTION_LANDSCAPE_NUM_ANCHORS="${ACTION_LANDSCAPE_NUM_ANCHORS:-1}"
+ACTION_LANDSCAPE_CANDIDATES_PER_FAMILY="${ACTION_LANDSCAPE_CANDIDATES_PER_FAMILY:-4}"
+ACTION_LANDSCAPE_ROLLOUT_HORIZON="${ACTION_LANDSCAPE_ROLLOUT_HORIZON:-25}"
+ACTION_LANDSCAPE_ANCHOR_PREFIX_STEPS="${ACTION_LANDSCAPE_ANCHOR_PREFIX_STEPS:-20}"
+ACTION_LANDSCAPE_LOCAL_NOISE_STD="${ACTION_LANDSCAPE_LOCAL_NOISE_STD:-0.10}"
+ACTION_LANDSCAPE_INTERACTION_AWARE_ANCHOR="${ACTION_LANDSCAPE_INTERACTION_AWARE_ANCHOR:-false}"
+ACTION_LANDSCAPE_ANCHOR_SEARCH_STEPS="${ACTION_LANDSCAPE_ANCHOR_SEARCH_STEPS:-200}"
+ACTION_LANDSCAPE_INTERACTION_THRESHOLD="${ACTION_LANDSCAPE_INTERACTION_THRESHOLD:-0.09}"
+ACTION_LANDSCAPE_ACTION_REPEAT="${ACTION_LANDSCAPE_ACTION_REPEAT:-1}"
+ACTION_LANDSCAPE_USE_BEST_PROGRESS="${ACTION_LANDSCAPE_USE_BEST_PROGRESS:-false}"
+ACTION_LANDSCAPE_SUCCESS_THRESHOLD="${ACTION_LANDSCAPE_SUCCESS_THRESHOLD:-0.05}"
+ACTION_LANDSCAPE_SUCCESS_MODE="${ACTION_LANDSCAPE_SUCCESS_MODE:-goal_distance}"
+POST_TASK_EVAL_SCOPE="${POST_TASK_EVAL_SCOPE:-all_seen}"
+LOG_POOL_COSINE="${LOG_POOL_COSINE:-true}"
+LOG_MIXTURE_NORM="${LOG_MIXTURE_NORM:-false}"
+LOG_PROBE_DATA="${LOG_PROBE_DATA:-false}"
+HER_FUTURE_SAMPLING_MODE="${HER_FUTURE_SAMPLING_MODE:-discounted}"
+HER_FUTURE_DISCOUNT="${HER_FUTURE_DISCOUNT:--1.0}"
+HER_SUCCESS_OVERSAMPLE_BOOST="${HER_SUCCESS_OVERSAMPLE_BOOST:-9.0}"
+HER_SUCCESS_DISTANCE_THRESHOLD="${HER_SUCCESS_DISTANCE_THRESHOLD:-0.05}"
+FREEZE_CRITIC_AFTER_SUCCESS_RATE="${FREEZE_CRITIC_AFTER_SUCCESS_RATE:--1.0}"
+FREEZE_CRITIC_MIN_ENV_STEPS="${FREEZE_CRITIC_MIN_ENV_STEPS:-50000}"
+CRITIC_PHASE_PROBE_ENABLED="${CRITIC_PHASE_PROBE_ENABLED:-false}"
+CRITIC_PHASE_PROBE_EPISODES="${CRITIC_PHASE_PROBE_EPISODES:-10}"
+CRITIC_PHASE_PROBE_INTERACTION_THRESHOLD="${CRITIC_PHASE_PROBE_INTERACTION_THRESHOLD:-0.09}"
+CRITIC_PHASE_PROBE_MID_REACH_THRESHOLD="${CRITIC_PHASE_PROBE_MID_REACH_THRESHOLD:-0.15}"
+MID_TASK_CHECKPOINT_EVERY="${MID_TASK_CHECKPOINT_EVERY:-0}"
+USE_ACTION_ENTROPY="${USE_ACTION_ENTROPY:-true}"
+HER_PHASE_LOG_ENABLED="${HER_PHASE_LOG_ENABLED:-false}"
+HER_PHASE_LOG_EMA_DECAY="${HER_PHASE_LOG_EMA_DECAY:-0.99}"
+HER_PHASE_LOG_EVERY_EPISODES="${HER_PHASE_LOG_EVERY_EPISODES:-10}"
+SUCCESS_TRACE_LOG_ENABLED="${SUCCESS_TRACE_LOG_ENABLED:-false}"
+ACTOR_FOLLOW_PROBE_ENABLED="${ACTOR_FOLLOW_PROBE_ENABLED:-false}"
+ACTOR_FOLLOW_NUM_CANDIDATES="${ACTOR_FOLLOW_NUM_CANDIDATES:-32}"
+ACTOR_FOLLOW_MAX_ANCHORS="${ACTOR_FOLLOW_MAX_ANCHORS:-16}"
+SUCCESS_INJECT_ENABLED="${SUCCESS_INJECT_ENABLED:-false}"
+SUCCESS_INJECT_N="${SUCCESS_INJECT_N:-256}"
+SUCCESS_INJECT_SUCCESS_RATE="${SUCCESS_INJECT_SUCCESS_RATE:-0.2}"
+SUCCESS_INJECT_MIN_ENV_STEPS="${SUCCESS_INJECT_MIN_ENV_STEPS:-50000}"
+SUCCESS_INJECT_MAX_ATTEMPTS="${SUCCESS_INJECT_MAX_ATTEMPTS:-40}"
+SUCCESS_INJECT_TARGET_FRAC="${SUCCESS_INJECT_TARGET_FRAC:-0.0}"
+SUCCESS_INJECT_CLONE="${SUCCESS_INJECT_CLONE:-false}"
+STAGE_DWELL_LOG_ENABLED="${STAGE_DWELL_LOG_ENABLED:-false}"
+PRESS_VS_PI_PROBE_ENABLED="${PRESS_VS_PI_PROBE_ENABLED:-false}"
+
+# Directories
+LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch/yd2247/sgcrl/logs/continual_checkpoints}"
+REPO_DIR="/scratch/yd2247/sgcrl"
+
+# ---- Jubail HPC environment setup (match draft_3.sh / draft_4.sh) --------
+export SCRATCH="${SCRATCH:-/scratch/$(whoami)}"
+
+module purge 2>/dev/null || true
+module load cuda/11.8.0
+module load conda-gcc/11.2.0
+eval "$(conda shell.bash hook)"
+conda activate contrastive_rl
+
+# shellcheck source=/dev/null
+source "${REPO_DIR}/set_up/jubail_hpc_env.sh"
+
+# One learner per GPU on this diagnostic; wrappers may override.
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.75}"
+
+# Optional causal-probe preflight. It must run here—not in a thin wrapper—so
+# it uses the exact Conda/Jubail environment that will execute training.
+if [ "${ACTION_LANDSCAPE_SELF_TEST:-false}" = "true" ]; then
+  python -m contrastive.action_ranking_diagnostics \
+    --self-test-env=sawyer_handle_press_side \
+    --self-test-env=sawyer_window_close \
+    --seed=5
+fi
+if [ "${OUTCOME_FALSIFICATION_SELF_TEST:-false}" = "true" ]; then
+  python -m contrastive.outcome_credit --self-test
+  python tests/test_outcome_falsification.py
+fi
+if [ "${COUNTERFACTUAL_RANK_SELF_TEST:-false}" = "true" ]; then
+  python -m contrastive.counterfactual_ranking
+  python tests/test_counterfactual_ranking.py
+fi
+if [ "${COUNTERFACTUAL_STAGES_SELF_TEST:-false}" = "true" ]; then
+  python tests/test_counterfactual_stages.py
+fi
+
+mkdir -p "$LOG_DIR" "$CHECKPOINT_DIR"
+
+# ---- helper: build flags for a single experiment --------------------------
+build_flags() {
+  # Arguments: ACTOR_MODE CRITIC_MODE SEED
+  local _ACTOR_MODE="$1"
+  local _CRITIC_MODE="$2"
+  local _SEED="$3"
+
+  local _FLAGS="--seed=$_SEED"
+  _FLAGS="$_FLAGS --alg=$ALG"
+  _FLAGS="$_FLAGS --num_tasks=$NUM_TASKS"
+  _FLAGS="$_FLAGS --steps_per_task=$STEPS_PER_TASK"
+  _FLAGS="$_FLAGS --base_steps=$BASE_STEPS"
+  _FLAGS="$_FLAGS --k_max=$K_MAX"
+  _FLAGS="$_FLAGS --start_task=$START_TASK"
+  _FLAGS="$_FLAGS --eval_every=$EVAL_EVERY"
+  _FLAGS="$_FLAGS --log_dir=$LOG_DIR"
+  _FLAGS="$_FLAGS --checkpoint_dir=$CHECKPOINT_DIR"
+
+  if [ "$USE_WANDB" = "true" ]; then
+    _FLAGS="$_FLAGS --use_wandb"
+  fi
+  _FLAGS="$_FLAGS --wandb_project=$WANDB_PROJECT"
+  _FLAGS="$_FLAGS --wandb_group=$WANDB_GROUP"
+  if [ "$ADD_UID" = "true" ]; then
+    _FLAGS="$_FLAGS --add_uid"
+  fi
+
+  _FLAGS="$_FLAGS --critic_mode=$_CRITIC_MODE"
+  if [ "$USE_TASK_ID" = "true" ]; then
+    _FLAGS="$_FLAGS --use_task_id"
+  else
+    _FLAGS="$_FLAGS --nouse_task_id"
+  fi
+
+  _FLAGS="$_FLAGS --eval_episodes=$EVAL_EPISODES"
+  if [ "$EVAL_RECORD_VIDEO" = "true" ]; then
+    _FLAGS="$_FLAGS --eval_record_video"
+  else
+    _FLAGS="$_FLAGS --noeval_record_video"
+  fi
+  _FLAGS="$_FLAGS --eval_video_every=$EVAL_VIDEO_EVERY"
+  _FLAGS="$_FLAGS --eval_video_fps=$EVAL_VIDEO_FPS"
+  if [ "$INTRA_EVAL_PREVIOUS" = "true" ]; then
+    _FLAGS="$_FLAGS --intra_eval_previous_tasks"
+  else
+    _FLAGS="$_FLAGS --nointra_eval_previous_tasks"
+  fi
+  if [ "$LOG_RL_METRICS" = "true" ]; then
+    _FLAGS="$_FLAGS --log_rl_metrics"
+  else
+    _FLAGS="$_FLAGS --nolog_rl_metrics"
+  fi
+  _FLAGS="$_FLAGS --rl_metrics_occasional_multiplier=$RL_METRICS_OCCASIONAL_MULTIPLIER"
+  _FLAGS="$_FLAGS --k_sample_k=$K_SAMPLE_K"
+
+  if [ "$ADAPT_HEADS_ONLY" = "true" ]; then
+    _FLAGS="$_FLAGS --adapt_heads_only"
+  else
+    _FLAGS="$_FLAGS --noadapt_heads_only"
+  fi
+  if [ "$ENCODER_FROM_BASE" = "true" ]; then
+    _FLAGS="$_FLAGS --encoder_from_base"
+  else
+    _FLAGS="$_FLAGS --noencoder_from_base"
+  fi
+  if [ "$USE_20_TASKS" = "true" ]; then
+    _FLAGS="$_FLAGS --use_20_tasks"
+  else
+    _FLAGS="$_FLAGS --nouse_20_tasks"
+  fi
+  _FLAGS="$_FLAGS --actor_mode=$_ACTOR_MODE"
+
+  if [ "$USE_RESIDUAL" = "true" ]; then
+    _FLAGS="$_FLAGS --use_residual"
+  else
+    _FLAGS="$_FLAGS --nouse_residual"
+  fi
+  _FLAGS="$_FLAGS --network_width=$NETWORK_WIDTH"
+  _FLAGS="$_FLAGS --critic_depth=$CRITIC_DEPTH"
+  _FLAGS="$_FLAGS --actor_depth=$ACTOR_DEPTH"
+  _FLAGS="$_FLAGS --energy_fn=$ENERGY_FN"
+  _FLAGS="$_FLAGS --logsumexp_penalty=$LOGSUMEXP_PENALTY"
+  if [ -n "$SINGLE_TASK" ]; then
+    _FLAGS="$_FLAGS --single_task=$SINGLE_TASK"
+  fi
+  _FLAGS="$_FLAGS --goal_conditioning_mode=$GOAL_CONDITIONING_MODE"
+  _FLAGS="$_FLAGS --sawyer_success_mode=$SAWYER_SUCCESS_MODE"
+  if [ "$PROFILE_RUNTIME" = "true" ]; then
+    _FLAGS="$_FLAGS --profile_runtime"
+  else
+    _FLAGS="$_FLAGS --noprofile_runtime"
+  fi
+  if [ "$ACTOR_AUTO_RESET" = "true" ]; then
+    _FLAGS="$_FLAGS --actor_auto_reset"
+  else
+    _FLAGS="$_FLAGS --noactor_auto_reset"
+  fi
+  _FLAGS="$_FLAGS --actor_reset_dormant_threshold=$ACTOR_RESET_DORMANT_THRESHOLD"
+  _FLAGS="$_FLAGS --actor_reset_warmup=$ACTOR_RESET_WARMUP"
+  _FLAGS="$_FLAGS --actor_reset_max=$ACTOR_RESET_MAX"
+
+  # Decomposed-critic + diagnostic flags. Read directly from the
+  # surrounding shell environment so per-cell overrides from
+  # experiment_configs.py take effect.
+  _FLAGS="$_FLAGS --dyn_aux_weight=$DYN_AUX_WEIGHT"
+  _FLAGS="$_FLAGS --dyn_aux_after_task0=$DYN_AUX_AFTER_TASK0"
+  _FLAGS="$_FLAGS --phi_task_width=$PHI_TASK_WIDTH"
+  _FLAGS="$_FLAGS --phi_task_depth=$PHI_TASK_DEPTH"
+  _FLAGS="$_FLAGS --combine_mode=$COMBINE_MODE"
+  _FLAGS="$_FLAGS --goal_encoder_mode=$GOAL_ENCODER_MODE"
+  _FLAGS="$_FLAGS --in_trajectory_negative_repeats=$IN_TRAJECTORY_NEGATIVE_REPEATS"
+  if [ "$INTERACTION_WEIGHTED_RELABELING" = "true" ]; then
+    _FLAGS="$_FLAGS --interaction_weighted_relabeling"
+  else
+    _FLAGS="$_FLAGS --nointeraction_weighted_relabeling"
+  fi
+  _FLAGS="$_FLAGS --interaction_threshold=$INTERACTION_THRESHOLD"
+  _FLAGS="$_FLAGS --interaction_bandwidth=$INTERACTION_BANDWIDTH"
+  _FLAGS="$_FLAGS --interaction_weight_floor=$INTERACTION_WEIGHT_FLOOR"
+  if [ "$ACTION_EFFECT_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --action_effect_enabled"
+  else
+    _FLAGS="$_FLAGS --noaction_effect_enabled"
+  fi
+  _FLAGS="$_FLAGS --action_effect_loss_weight=$ACTION_EFFECT_LOSS_WEIGHT"
+  _FLAGS="$_FLAGS --action_effect_discount=$ACTION_EFFECT_DISCOUNT"
+  _FLAGS="$_FLAGS --action_effect_temperature=$ACTION_EFFECT_TEMPERATURE"
+  _FLAGS="$_FLAGS --action_effect_actor_weight=$ACTION_EFFECT_ACTOR_WEIGHT"
+  _FLAGS="$_FLAGS --action_effect_normalization_eps=$ACTION_EFFECT_NORMALIZATION_EPS"
+  _FLAGS="$_FLAGS --action_effect_q_scale_ema_decay=$ACTION_EFFECT_Q_SCALE_EMA_DECAY"
+  _FLAGS="$_FLAGS --action_effect_hidden_dim=$ACTION_EFFECT_HIDDEN_DIM"
+  _FLAGS="$_FLAGS --action_effect_actor_mode=$ACTION_EFFECT_ACTOR_MODE"
+  _FLAGS="$_FLAGS --action_effect_target_mode=$ACTION_EFFECT_TARGET_MODE"
+  _FLAGS="$_FLAGS --outcome_horizon=$OUTCOME_HORIZON"
+  _FLAGS="$_FLAGS --outcome_success_threshold=$OUTCOME_SUCCESS_THRESHOLD"
+  _FLAGS="$_FLAGS --outcome_progress_loss_weight=$OUTCOME_PROGRESS_LOSS_WEIGHT"
+  _FLAGS="$_FLAGS --outcome_success_loss_weight=$OUTCOME_SUCCESS_LOSS_WEIGHT"
+  _FLAGS="$_FLAGS --outcome_success_actor_weight=$OUTCOME_SUCCESS_ACTOR_WEIGHT"
+  _FLAGS="$_FLAGS --outcome_progress_ema_decay=$OUTCOME_PROGRESS_EMA_DECAY"
+  _FLAGS="$_FLAGS --outcome_progress_std_floor=$OUTCOME_PROGRESS_STD_FLOOR"
+  _FLAGS="$_FLAGS --success_bc_weight=$SUCCESS_BC_WEIGHT"
+  _FLAGS="$_FLAGS --success_bc_label_mode=$SUCCESS_BC_LABEL_MODE"
+  _FLAGS="$_FLAGS --success_buffer_capacity=$SUCCESS_BUFFER_CAPACITY"
+  _FLAGS="$_FLAGS --success_bc_batch_size=$SUCCESS_BC_BATCH_SIZE"
+  _FLAGS="$_FLAGS --actor_goal_mode=$ACTOR_GOAL_MODE"
+  _FLAGS="$_FLAGS --actor_success_score_weight=$ACTOR_SUCCESS_SCORE_WEIGHT"
+  _FLAGS="$_FLAGS --counterfactual_rank_interval_steps=$COUNTERFACTUAL_RANK_INTERVAL_STEPS"
+  _FLAGS="$_FLAGS --counterfactual_rank_num_anchors=$COUNTERFACTUAL_RANK_NUM_ANCHORS"
+  _FLAGS="$_FLAGS --counterfactual_rank_candidates_per_family=$COUNTERFACTUAL_RANK_CANDIDATES_PER_FAMILY"
+  _FLAGS="$_FLAGS --counterfactual_rank_rollout_horizon=$COUNTERFACTUAL_RANK_ROLLOUT_HORIZON"
+  _FLAGS="$_FLAGS --counterfactual_rank_action_repeat=$COUNTERFACTUAL_RANK_ACTION_REPEAT"
+  _FLAGS="$_FLAGS --counterfactual_rank_local_noise_std=$COUNTERFACTUAL_RANK_LOCAL_NOISE_STD"
+  _FLAGS="$_FLAGS --counterfactual_rank_anchor_mode=$COUNTERFACTUAL_RANK_ANCHOR_MODE"
+  _FLAGS="$_FLAGS --counterfactual_rank_anchor_search_steps=$COUNTERFACTUAL_RANK_ANCHOR_SEARCH_STEPS"
+  _FLAGS="$_FLAGS --counterfactual_rank_interaction_threshold=$COUNTERFACTUAL_RANK_INTERACTION_THRESHOLD"
+  _FLAGS="$_FLAGS --counterfactual_rank_contact_gain=$COUNTERFACTUAL_RANK_CONTACT_GAIN"
+  _FLAGS="$_FLAGS --counterfactual_rank_success_threshold=$COUNTERFACTUAL_RANK_SUCCESS_THRESHOLD"
+  _FLAGS="$_FLAGS --counterfactual_rank_success_bonus=$COUNTERFACTUAL_RANK_SUCCESS_BONUS"
+  _FLAGS="$_FLAGS --counterfactual_rank_min_outcome_gap=$COUNTERFACTUAL_RANK_MIN_OUTCOME_GAP"
+  _FLAGS="$_FLAGS --counterfactual_rank_buffer_capacity=$COUNTERFACTUAL_RANK_BUFFER_CAPACITY"
+  _FLAGS="$_FLAGS --counterfactual_rank_batch_anchors=$COUNTERFACTUAL_RANK_BATCH_ANCHORS"
+  _FLAGS="$_FLAGS --counterfactual_rank_updates_per_event=$COUNTERFACTUAL_RANK_UPDATES_PER_EVENT"
+  _FLAGS="$_FLAGS --counterfactual_rank_pairwise_temperature=$COUNTERFACTUAL_RANK_PAIRWISE_TEMPERATURE"
+  _FLAGS="$_FLAGS --counterfactual_rank_l2_weight=$COUNTERFACTUAL_RANK_L2_WEIGHT"
+  _FLAGS="$_FLAGS --counterfactual_rank_validation_anchors=$COUNTERFACTUAL_RANK_VALIDATION_ANCHORS"
+  _FLAGS="$_FLAGS --counterfactual_rank_success_mode=$COUNTERFACTUAL_RANK_SUCCESS_MODE"
+  if [ "$COUNTERFACTUAL_RANK_ACTOR_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --counterfactual_rank_actor_enabled"
+  else
+    _FLAGS="$_FLAGS --nocounterfactual_rank_actor_enabled"
+  fi
+  _FLAGS="$_FLAGS --counterfactual_oracle_interval_steps=$COUNTERFACTUAL_ORACLE_INTERVAL_STEPS"
+  _FLAGS="$_FLAGS --counterfactual_oracle_num_anchors=$COUNTERFACTUAL_ORACLE_NUM_ANCHORS"
+  _FLAGS="$_FLAGS --counterfactual_oracle_condition_set=$COUNTERFACTUAL_ORACLE_CONDITION_SET"
+  _FLAGS="$_FLAGS --counterfactual_oracle_max_events=$COUNTERFACTUAL_ORACLE_MAX_EVENTS"
+  if [ "$PHASE_GATED_CONTROL" = "true" ]; then
+    _FLAGS="$_FLAGS --phase_gated_control"
+  else
+    _FLAGS="$_FLAGS --nophase_gated_control"
+  fi
+  _FLAGS="$_FLAGS --phase_gate_reach_mode=$PHASE_GATE_REACH_MODE"
+  _FLAGS="$_FLAGS --phase_gate_interaction_threshold=$PHASE_GATE_INTERACTION_THRESHOLD"
+  _FLAGS="$_FLAGS --phase_gate_chunk_length=$PHASE_GATE_CHUNK_LENGTH"
+  _FLAGS="$_FLAGS --phase_gate_num_candidates=$PHASE_GATE_NUM_CANDIDATES"
+  _FLAGS="$_FLAGS --phase_gate_local_noise_std=$PHASE_GATE_LOCAL_NOISE_STD"
+  _FLAGS="$_FLAGS --phase_gate_contact_gain=$PHASE_GATE_CONTACT_GAIN"
+  _FLAGS="$_FLAGS --bellman_loss_weight=$BELLMAN_LOSS_WEIGHT"
+  _FLAGS="$_FLAGS --bellman_residual_l2_weight=$BELLMAN_RESIDUAL_L2_WEIGHT"
+  _FLAGS="$_FLAGS --bellman_discount=$BELLMAN_DISCOUNT"
+  _FLAGS="$_FLAGS --bellman_tau=$BELLMAN_TAU"
+  _FLAGS="$_FLAGS --bellman_hidden_dim=$BELLMAN_HIDDEN_DIM"
+  _FLAGS="$_FLAGS --her_reward_threshold=$HER_REWARD_THRESHOLD"
+_FLAGS="$_FLAGS --dcc_sac_q_loss_weight=$DCC_SAC_Q_LOSS_WEIGHT"
+_FLAGS="$_FLAGS --dcc_sac_q_learning_rate=$DCC_SAC_Q_LEARNING_RATE"
+_FLAGS="$_FLAGS --dcc_sac_discount=$DCC_SAC_DISCOUNT"
+_FLAGS="$_FLAGS --dcc_sac_tau=$DCC_SAC_TAU"
+_FLAGS="$_FLAGS --dcc_sac_q_hidden_dim=$DCC_SAC_Q_HIDDEN_DIM"
+_FLAGS="$_FLAGS --dcc_sac_beta_max=$DCC_SAC_BETA_MAX"
+_FLAGS="$_FLAGS --dcc_sac_q_warmup_updates=$DCC_SAC_Q_WARMUP_UPDATES"
+_FLAGS="$_FLAGS --dcc_sac_q_ramp_updates=$DCC_SAC_Q_RAMP_UPDATES"
+_FLAGS="$_FLAGS --dcc_sac_td_error_threshold=$DCC_SAC_TD_ERROR_THRESHOLD"
+_FLAGS="$_FLAGS --dcc_sac_twin_disagreement_threshold=$DCC_SAC_TWIN_DISAGREEMENT_THRESHOLD"
+_FLAGS="$_FLAGS --dcc_sac_ema_decay=$DCC_SAC_EMA_DECAY"
+_FLAGS="$_FLAGS --dcc_sac_candidate_actions=$DCC_SAC_CANDIDATE_ACTIONS"
+_FLAGS="$_FLAGS --dcc_sac_normalization_eps=$DCC_SAC_NORMALIZATION_EPS"
+_FLAGS="$_FLAGS --dcc_sac_correction_clip=$DCC_SAC_CORRECTION_CLIP"
+_FLAGS="$_FLAGS --action_contrast_weight=$ACTION_CONTRAST_WEIGHT"
+_FLAGS="$_FLAGS --action_contrast_temperature=$ACTION_CONTRAST_TEMPERATURE"
+_FLAGS="$_FLAGS --action_contrast_batch_size=$ACTION_CONTRAST_BATCH_SIZE"
+_FLAGS="$_FLAGS --shortcut_diagnostic_interval=$SHORTCUT_DIAGNOSTIC_INTERVAL"
+_FLAGS="$_FLAGS --shortcut_diagnostic_batch_size=$SHORTCUT_DIAGNOSTIC_BATCH_SIZE"
+_FLAGS="$_FLAGS --shortcut_candidate_actions=$SHORTCUT_CANDIDATE_ACTIONS"
+_FLAGS="$_FLAGS --action_landscape_diagnostic_interval_steps=$ACTION_LANDSCAPE_DIAGNOSTIC_INTERVAL_STEPS"
+_FLAGS="$_FLAGS --action_landscape_num_anchors=$ACTION_LANDSCAPE_NUM_ANCHORS"
+_FLAGS="$_FLAGS --action_landscape_candidates_per_family=$ACTION_LANDSCAPE_CANDIDATES_PER_FAMILY"
+_FLAGS="$_FLAGS --action_landscape_rollout_horizon=$ACTION_LANDSCAPE_ROLLOUT_HORIZON"
+_FLAGS="$_FLAGS --action_landscape_anchor_prefix_steps=$ACTION_LANDSCAPE_ANCHOR_PREFIX_STEPS"
+_FLAGS="$_FLAGS --action_landscape_local_noise_std=$ACTION_LANDSCAPE_LOCAL_NOISE_STD"
+  if [ "$ACTION_LANDSCAPE_INTERACTION_AWARE_ANCHOR" = "true" ]; then
+    _FLAGS="$_FLAGS --action_landscape_interaction_aware_anchor"
+  else
+    _FLAGS="$_FLAGS --noaction_landscape_interaction_aware_anchor"
+  fi
+_FLAGS="$_FLAGS --action_landscape_anchor_search_steps=$ACTION_LANDSCAPE_ANCHOR_SEARCH_STEPS"
+_FLAGS="$_FLAGS --action_landscape_interaction_threshold=$ACTION_LANDSCAPE_INTERACTION_THRESHOLD"
+_FLAGS="$_FLAGS --action_landscape_action_repeat=$ACTION_LANDSCAPE_ACTION_REPEAT"
+  if [ "$ACTION_LANDSCAPE_USE_BEST_PROGRESS" = "true" ]; then
+    _FLAGS="$_FLAGS --action_landscape_use_best_progress"
+  else
+    _FLAGS="$_FLAGS --noaction_landscape_use_best_progress"
+  fi
+_FLAGS="$_FLAGS --action_landscape_success_threshold=$ACTION_LANDSCAPE_SUCCESS_THRESHOLD"
+_FLAGS="$_FLAGS --action_landscape_success_mode=$ACTION_LANDSCAPE_SUCCESS_MODE"
+_FLAGS="$_FLAGS --post_task_eval_scope=$POST_TASK_EVAL_SCOPE"
+  if [ "$STEP_PENALTY_REWARD" = "true" ]; then
+    _FLAGS="$_FLAGS --step_penalty_reward"
+  else
+    _FLAGS="$_FLAGS --nostep_penalty_reward"
+  fi
+  if [ "$LOG_POOL_COSINE" = "true" ]; then
+    _FLAGS="$_FLAGS --log_pool_cosine"
+  else
+    _FLAGS="$_FLAGS --nolog_pool_cosine"
+  fi
+  if [ "$LOG_MIXTURE_NORM" = "true" ]; then
+    _FLAGS="$_FLAGS --log_mixture_norm"
+  else
+    _FLAGS="$_FLAGS --nolog_mixture_norm"
+  fi
+  if [ "$LOG_PROBE_DATA" = "true" ]; then
+    _FLAGS="$_FLAGS --log_probe_data"
+  else
+    _FLAGS="$_FLAGS --nolog_probe_data"
+  fi
+  _FLAGS="$_FLAGS --her_future_sampling_mode=$HER_FUTURE_SAMPLING_MODE"
+  _FLAGS="$_FLAGS --her_future_discount=$HER_FUTURE_DISCOUNT"
+  _FLAGS="$_FLAGS --her_success_oversample_boost=$HER_SUCCESS_OVERSAMPLE_BOOST"
+  _FLAGS="$_FLAGS --her_success_distance_threshold=$HER_SUCCESS_DISTANCE_THRESHOLD"
+  _FLAGS="$_FLAGS --freeze_critic_after_success_rate=$FREEZE_CRITIC_AFTER_SUCCESS_RATE"
+  _FLAGS="$_FLAGS --freeze_critic_min_env_steps=$FREEZE_CRITIC_MIN_ENV_STEPS"
+  if [ "$CRITIC_PHASE_PROBE_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --critic_phase_probe_enabled"
+  else
+    _FLAGS="$_FLAGS --nocritic_phase_probe_enabled"
+  fi
+  _FLAGS="$_FLAGS --critic_phase_probe_episodes=$CRITIC_PHASE_PROBE_EPISODES"
+  _FLAGS="$_FLAGS --critic_phase_probe_interaction_threshold=$CRITIC_PHASE_PROBE_INTERACTION_THRESHOLD"
+  _FLAGS="$_FLAGS --critic_phase_probe_mid_reach_threshold=$CRITIC_PHASE_PROBE_MID_REACH_THRESHOLD"
+  _FLAGS="$_FLAGS --mid_task_checkpoint_every=$MID_TASK_CHECKPOINT_EVERY"
+  if [ "$USE_ACTION_ENTROPY" = "true" ]; then
+    _FLAGS="$_FLAGS --use_action_entropy"
+  else
+    _FLAGS="$_FLAGS --nouse_action_entropy"
+  fi
+  if [ "$HER_PHASE_LOG_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --her_phase_log_enabled"
+  else
+    _FLAGS="$_FLAGS --noher_phase_log_enabled"
+  fi
+  _FLAGS="$_FLAGS --her_phase_log_ema_decay=$HER_PHASE_LOG_EMA_DECAY"
+  _FLAGS="$_FLAGS --her_phase_log_every_episodes=$HER_PHASE_LOG_EVERY_EPISODES"
+  if [ "$SUCCESS_TRACE_LOG_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --success_trace_log_enabled"
+  else
+    _FLAGS="$_FLAGS --nosuccess_trace_log_enabled"
+  fi
+  if [ "$ACTOR_FOLLOW_PROBE_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --actor_follow_probe_enabled"
+  else
+    _FLAGS="$_FLAGS --noactor_follow_probe_enabled"
+  fi
+  _FLAGS="$_FLAGS --actor_follow_num_candidates=$ACTOR_FOLLOW_NUM_CANDIDATES"
+  _FLAGS="$_FLAGS --actor_follow_max_anchors=$ACTOR_FOLLOW_MAX_ANCHORS"
+  if [ "$SUCCESS_INJECT_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --success_inject_enabled"
+  else
+    _FLAGS="$_FLAGS --nosuccess_inject_enabled"
+  fi
+  _FLAGS="$_FLAGS --success_inject_n=$SUCCESS_INJECT_N"
+  _FLAGS="$_FLAGS --success_inject_success_rate=$SUCCESS_INJECT_SUCCESS_RATE"
+  _FLAGS="$_FLAGS --success_inject_min_env_steps=$SUCCESS_INJECT_MIN_ENV_STEPS"
+  _FLAGS="$_FLAGS --success_inject_max_attempts=$SUCCESS_INJECT_MAX_ATTEMPTS"
+  _FLAGS="$_FLAGS --success_inject_target_frac=$SUCCESS_INJECT_TARGET_FRAC"
+  if [ "$SUCCESS_INJECT_CLONE" = "true" ]; then
+    _FLAGS="$_FLAGS --success_inject_clone"
+  else
+    _FLAGS="$_FLAGS --nosuccess_inject_clone"
+  fi
+  if [ "$STAGE_DWELL_LOG_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --stage_dwell_log_enabled"
+  else
+    _FLAGS="$_FLAGS --nostage_dwell_log_enabled"
+  fi
+  if [ "$PRESS_VS_PI_PROBE_ENABLED" = "true" ]; then
+    _FLAGS="$_FLAGS --press_vs_pi_probe_enabled"
+  else
+    _FLAGS="$_FLAGS --nopress_vs_pi_probe_enabled"
+  fi
+
+  echo "$_FLAGS"
+}
+
+cd "$REPO_DIR"
+TOTAL_CONFIGS=$(python "$CONFIG_SCRIPT" --total)
+CONFIG_END="$TOTAL_CONFIGS"
+if [ "$CONFIG_LIMIT" -gt 0 ]; then
+  CONFIG_END=$(( CONFIG_INDEX_OFFSET + CONFIG_LIMIT ))
+  if [ "$CONFIG_END" -gt "$TOTAL_CONFIGS" ]; then
+    CONFIG_END="$TOTAL_CONFIGS"
+  fi
+fi
+
+echo "============================================================"
+echo "Continual Goal-Conditioned Contrastive RL — Jubail Batch"
+echo "============================================================"
+echo "SLURM Array Job ID : ${SLURM_ARRAY_JOB_ID:-local}"
+echo "SLURM Array Task ID: ${SLURM_ARRAY_TASK_ID:-0}"
+echo "Node               : $(hostname)"
+echo "GPU                : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
+echo "Conda prefix       : ${CONDA_PREFIX:-N/A}"
+echo "Tasks per GPU      : $TASKS_PER_GPU"
+echo "Config script      : $CONFIG_SCRIPT"
+echo "Total configs      : $TOTAL_CONFIGS"
+echo "Selected configs   : [$CONFIG_INDEX_OFFSET, $CONFIG_END)"
+echo "JAX mem fraction   : $XLA_PYTHON_CLIENT_MEM_FRACTION"
+echo "============================================================"
+
+PIDS=()
+
+for ((i = 0; i < TASKS_PER_GPU; i++)); do
+  CONFIG_IDX=$(( CONFIG_INDEX_OFFSET
+      + TASKS_PER_GPU * ${SLURM_ARRAY_TASK_ID:-0} + i ))
+
+  if [ "$CONFIG_IDX" -ge "$CONFIG_END" ]; then
+    echo "[slot $i] Config index $CONFIG_IDX >= selected end $CONFIG_END - skipping."
+    continue
+  fi
+
+  eval "$(python "$CONFIG_SCRIPT" --setting "$CONFIG_IDX")"
+
+  FLAGS=$(build_flags "$ACTOR_MODE" "$CRITIC_MODE" "$SEED")
+
+  EXP_LOG_PREFIX="${LOG_DIR}/${SLURM_ARRAY_JOB_ID:-local}_${SLURM_ARRAY_TASK_ID:-0}_${CONFIG_IDX}"
+
+  echo ""
+  echo "------------------------------------------------------------"
+  echo "[slot $i] Config #${CONFIG_IDX}: actor=$ACTOR_MODE critic=$CRITIC_MODE seed=$SEED"
+  echo "[slot $i] Log: ${EXP_LOG_PREFIX}.{out,err}"
+  echo "[slot $i] Running: python -u run_continual_contrastive.py $FLAGS"
+  echo "------------------------------------------------------------"
+
+  (
+    echo "============================================================"
+    echo "Continual Goal-Conditioned Contrastive RL (Jubail HPC)"
+    echo "============================================================"
+    echo "SLURM Array Job ID : ${SLURM_ARRAY_JOB_ID:-local}"
+    echo "SLURM Array Task ID: ${SLURM_ARRAY_TASK_ID:-0}"
+    echo "Config Index       : $CONFIG_IDX"
+    echo "Node               : $(hostname)"
+    echo "GPU                : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
+    echo "Conda prefix       : ${CONDA_PREFIX:-N/A}"
+    echo "------------------------------------------------------------"
+    echo "Seed            : $SEED"
+    echo "Algorithm       : $ALG"
+    echo "Num tasks       : $NUM_TASKS"
+    echo "Steps per task  : $STEPS_PER_TASK"
+    echo "Base steps      : $BASE_STEPS"
+    echo "K_max           : $K_MAX"
+    echo "Start task      : $START_TASK"
+    echo "Eval every      : $EVAL_EVERY"
+    echo "Success mode    : $SAWYER_SUCCESS_MODE"
+    echo "W&B             : $USE_WANDB"
+    echo "W&B project     : $WANDB_PROJECT"
+    echo "W&B group       : $WANDB_GROUP"
+    echo "Critic mode     : $CRITIC_MODE"
+    echo "Actor mode      : $ACTOR_MODE"
+    echo "Use task ID     : $USE_TASK_ID"
+    echo "Eval episodes   : $EVAL_EPISODES"
+    echo "Intra-eval prev : $INTRA_EVAL_PREVIOUS"
+    echo "RL metrics      : $LOG_RL_METRICS (occasional x$RL_METRICS_OCCASIONAL_MULTIPLIER)"
+    echo "K-sample K      : $K_SAMPLE_K"
+    echo "Heads only      : $ADAPT_HEADS_ONLY"
+    echo "Encoder base    : $ENCODER_FROM_BASE"
+    echo "20-task         : $USE_20_TASKS"
+    echo "Use residual    : $USE_RESIDUAL"
+    echo "Network width   : $NETWORK_WIDTH"
+    echo "Critic depth    : $CRITIC_DEPTH"
+    echo "Actor depth     : $ACTOR_DEPTH"
+    echo "Energy fn       : $ENERGY_FN"
+    echo "LSE penalty     : $LOGSUMEXP_PENALTY"
+    echo "Single task     : ${SINGLE_TASK:-none}"
+    echo "Goal contract   : $GOAL_CONDITIONING_MODE"
+    echo "Runtime profile : $PROFILE_RUNTIME"
+    echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
+    echo "Decomp critic   : dyn_aux_weight=$DYN_AUX_WEIGHT (after_task0=$DYN_AUX_AFTER_TASK0) phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
+    echo "In-traj negs    : repeats=$IN_TRAJECTORY_NEGATIVE_REPEATS"
+    echo "Bridge sampling : iwr=$INTERACTION_WEIGHTED_RELABELING threshold=$INTERACTION_THRESHOLD bandwidth=$INTERACTION_BANDWIDTH floor=$INTERACTION_WEIGHT_FLOOR"
+    echo "Action effect   : enabled=$ACTION_EFFECT_ENABLED actor=$ACTION_EFFECT_ACTOR_MODE target=$ACTION_EFFECT_TARGET_MODE H=$OUTCOME_HORIZON bc=$SUCCESS_BC_WEIGHT"
+    echo "Counterfactual  : interval=$COUNTERFACTUAL_RANK_INTERVAL_STEPS anchors=$COUNTERFACTUAL_RANK_NUM_ANCHORS candidates/family=$COUNTERFACTUAL_RANK_CANDIDATES_PER_FAMILY H=$COUNTERFACTUAL_RANK_ROLLOUT_HORIZON repeat=$COUNTERFACTUAL_RANK_ACTION_REPEAT"
+    echo "Oracle budget   : conditions=$COUNTERFACTUAL_ORACLE_CONDITION_SET max_events=$COUNTERFACTUAL_ORACLE_MAX_EVENTS"
+    echo "Diagnostics     : log_pool_cosine=$LOG_POOL_COSINE log_mixture_norm=$LOG_MIXTURE_NORM log_probe_data=$LOG_PROBE_DATA"
+    echo "Log dir         : $LOG_DIR"
+    echo "Checkpoint dir  : $CHECKPOINT_DIR"
+    echo "============================================================"
+    echo ""
+    echo "Running: python -u run_continual_contrastive.py $FLAGS"
+    echo ""
+
+    python -u run_continual_contrastive.py $FLAGS
+
+    echo ""
+    echo "============================================================"
+    echo "Run complete. Checkpoints saved to: $CHECKPOINT_DIR"
+    echo "============================================================"
+  ) > "${EXP_LOG_PREFIX}.out" 2> "${EXP_LOG_PREFIX}.err" &
+
+  PIDS+=($!)
+done
+
+echo ""
+echo "Launched ${#PIDS[@]} experiment(s). PIDs: ${PIDS[*]:-none}"
+echo "Waiting for all to finish..."
+
+wait
+
+echo ""
+echo "============================================================"
+echo "All experiments on this GPU complete."
+echo "============================================================"

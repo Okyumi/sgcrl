@@ -1,7 +1,9 @@
 # Same-state action advice vs success-state preference
 
 Date: 2026-09-10
-Status: offline probe queued (`DRAFT_hover_action_advice.sh`); analysis below
+Status: Torch probe blocked by QOS; Jubail 1-seed train+probe submitted
+(`DRAFT_jubail_task5_action_advice.sh`, see
+`docs/2026-09-10_jubail_task5_action_advice.md`). Analysis below
 uses already-finished dwell JSONs + retention v3.
 
 ## Motivation
