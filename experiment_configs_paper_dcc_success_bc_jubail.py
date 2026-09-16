@@ -75,6 +75,7 @@ def _shared(seed: int, success_bc_weight: float, wandb_group: str) -> dict:
       'log_mixture_norm': False,
       'log_probe_data': False,
       'profile_runtime': True,
+      'num_actors': 2,
       'intra_eval_previous': False,
       'post_task_eval_scope': 'current',
       'her_phase_log_enabled': False,

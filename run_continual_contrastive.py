@@ -78,6 +78,7 @@ from contrastive import outcome_credit
 from contrastive import task58_reevaluation
 from contrastive import critic_phase_probe
 from contrastive import success_propagation_probe
+from contrastive.parallel_actors import ActorEpisodePool, SilentLogger
 from contrastive import her_future_phase
 from contrastive.knowledge_pool import (
     KnowledgePool, _pytree_zeros_like, cosine_summary_from_vectors,
@@ -135,7 +136,11 @@ flags.DEFINE_bool('add_uid', False, 'Add UID to log dirs.')
 flags.DEFINE_integer('start_task', 0, 'Resume from this task (loads ckpt from task-1).')
 flags.DEFINE_integer('eval_every', 50_000, 'Evaluate every N env steps.')
 flags.DEFINE_integer('time_delta_minutes', 5, 'Checkpoint frequency (minutes).')
-flags.DEFINE_integer('num_actors', 1, 'Number of parallel actors (1 for sequential).')
+flags.DEFINE_integer(
+    'num_actors', 1,
+    'CPU actors collecting episodes in parallel. The learner still takes '
+    'exactly one step (num_sgd_steps_per_step SGD updates) per completed '
+    'episode, so UTD is unchanged. 1 keeps the historical sequential loop.')
 flags.DEFINE_bool('use_task_id', False, 'Append one-hot task ID to state and goal.')
 flags.DEFINE_string('critic_mode', 'persistent',
                     'Critic evolution across tasks: "persistent" (never reset, carry forward), '
@@ -2015,32 +2020,62 @@ def train_single_task(
     )
 
   # ---- actor (for data collection) ---------------------------------------
+  # Actor 0 reuses the env created for the spec so num_actors=1 stays
+  # seed-identical to the historical sequential runner. Extra actors get
+  # their own env / adder / VariableClient; the learner still steps once
+  # per completed episode.
+  num_actors = max(1, int(FLAGS.num_actors))
   policy_network = contrastive_networks.apply_policy_and_sample(networks)
   actor_core = actor_core_lib.batched_feed_forward_to_actor_core(policy_network)
-  variable_client = variable_utils.VariableClient(learner, 'policy', device='cpu')
 
-  adder = adders_reverb.EpisodeAdder(
-      client=replay_client,
-      priority_fns={config.replay_table_name: None},
-      max_sequence_length=config.max_episode_steps + 1)
+  def _make_collection_actor(actor_id):
+    client = variable_utils.VariableClient(
+        learner, 'policy', device='cpu')
+    adder = adders_reverb.EpisodeAdder(
+        client=replay_client,
+        priority_fns={config.replay_table_name: None},
+        max_sequence_length=config.max_episode_steps + 1)
+    actor_key = jax.random.PRNGKey(
+        seed + task_id + 100 if actor_id == 0
+        else seed + task_id + 100 + actor_id * 997)
+    if config.use_random_actor:
+      collection_actor = contrastive_utils.InitiallyRandomActor(
+          actor_core, actor_key, client, adder, backend='cpu')
+    else:
+      collection_actor = actors.GenericActor(
+          actor_core, actor_key, client, adder, backend='cpu')
+    return collection_actor, client
 
-  if config.use_random_actor:
-    actor = contrastive_utils.InitiallyRandomActor(
-        actor_core, jax.random.PRNGKey(seed + task_id + 100),
-        variable_client, adder, backend='cpu')
-  else:
-    actor = actors.GenericActor(
-        actor_core, jax.random.PRNGKey(seed + task_id + 100),
-        variable_client, adder, backend='cpu')
+  collection_envs = [env]
+  collection_actors = []
+  collection_clients = []
+  first_actor, variable_client = _make_collection_actor(0)
+  collection_actors.append(first_actor)
+  collection_clients.append(variable_client)
+  for actor_id in range(1, num_actors):
+    extra_env, _ = contrastive_utils.make_environment(
+        env_name, config.start_index, config.end_index,
+        seed + task_id + 10_000 * actor_id, fixed_start_end=fixed_goal,
+        task_id=_tid, num_tasks=_ntasks,
+        sawyer_success_mode=FLAGS.sawyer_success_mode)
+    extra_actor, extra_client = _make_collection_actor(actor_id)
+    collection_envs.append(extra_env)
+    collection_actors.append(extra_actor)
+    collection_clients.append(extra_client)
+  actor = collection_actors[0]
+  if num_actors > 1:
+    print(f'  Collection actors: {num_actors} (one learner.step per '
+          'episode; UTD unchanged).', flush=True)
 
   # ---- observers ---------------------------------------------------------
-  observers = [
-      contrastive_utils.SuccessObserver(),
-      contrastive_utils.DistanceObserver(
-          obs_dim=config.obs_dim,
-          start_index=config.start_index,
-          end_index=config.end_index),
-  ]
+  def _make_actor_observers():
+    return [
+        contrastive_utils.SuccessObserver(),
+        contrastive_utils.DistanceObserver(
+            obs_dim=config.obs_dim,
+            start_index=config.start_index,
+            end_index=config.end_index),
+    ]
 
   # ---- evaluator (deterministic policy) ----------------------------------
   eval_policy_network = contrastive_networks.apply_policy_and_sample(
@@ -2088,9 +2123,13 @@ def train_single_task(
         'contact_gain': float(getattr(
             continual_cfg, 'phase_gate_contact_gain', 5.0)),
     }
-    actor = phase_gated_control.PhaseGatedChunkActor(
-        actor, action_spec=env.action_spec(),
-        rng=np.random.default_rng(seed + task_id + 610), **phase_kwargs)
+    for actor_id, collection_actor in enumerate(collection_actors):
+      collection_actors[actor_id] = phase_gated_control.PhaseGatedChunkActor(
+          collection_actor,
+          action_spec=collection_envs[actor_id].action_spec(),
+          rng=np.random.default_rng(seed + task_id + 610 + actor_id),
+          **phase_kwargs)
+    actor = collection_actors[0]
     eval_actor = phase_gated_control.PhaseGatedChunkActor(
         eval_actor, action_spec=eval_env.action_spec(),
         rng=np.random.default_rng(seed + task_id + 620), **phase_kwargs)
@@ -2204,9 +2243,16 @@ def train_single_task(
       add_uid=config.add_uid, use_wandb=config.use_wandb,
       time_delta=10.0, steps_key='actor_steps')
 
-  env_loop = environment_loop.EnvironmentLoop(
-      env, actor, counter=counting.Counter(),
-      logger=actor_logger, observers=observers)
+  env_loops = [
+      environment_loop.EnvironmentLoop(
+          collection_envs[actor_id], collection_actors[actor_id],
+          counter=counting.Counter(),
+          logger=actor_logger if actor_id == 0 else SilentLogger(),
+          observers=_make_actor_observers())
+      for actor_id in range(num_actors)
+  ]
+  env_loop = env_loops[0]
+  actor_pool = None
 
   # Prefill replay buffer.  We need enough data for the first learner
   # batch (batch_size * num_sgd_steps_per_step transitions) plus one
@@ -2219,8 +2265,9 @@ def train_single_task(
   prefill_done = 0
   prefill_eps = 0
   while prefill_done < prefill_steps:
-    result = env_loop.run_episode()
-    env_loop._logger.write(result)  # pylint: disable=protected-access
+    result = env_loops[prefill_eps % num_actors].run_episode()
+    if prefill_eps % num_actors == 0:
+      actor_logger.write(result)
     prefill_done += int(result['episode_length'])
     prefill_eps += 1
   print(f'  Prefill complete ({prefill_done} steps, '
@@ -2289,6 +2336,8 @@ def train_single_task(
       and neg_bank.size() > 0)
 
   print(f'  Training for {train_steps} env steps...', flush=True)
+  if num_actors > 1:
+    actor_pool = ActorEpisodePool(env_loops)
   if auto_reset_active:
     print(f'  Actor auto-reset enabled: warmup={FLAGS.actor_reset_warmup}, '
           f'threshold={FLAGS.actor_reset_dormant_threshold}, '
@@ -2315,12 +2364,17 @@ def train_single_task(
     # NOTE: Acme's `EnvironmentLoop.run()` returns None (it only writes logs),
     # so we call `run_episode()` to get the per-episode metrics dict.
     actor_started_at = time.perf_counter()
-    result = env_loop.run_episode()
+    if actor_pool is None:
+      actor_id = 0
+      result = env_loop.run_episode()
+    else:
+      actor_id, result, _ = actor_pool.get()
     if FLAGS.profile_runtime:
       runtime_totals['actor_seconds'] += (
           time.perf_counter() - actor_started_at)
     # Mirror `EnvironmentLoop.run()` behavior: write the episode log.
-    env_loop._logger.write(result)  # pylint: disable=protected-access
+    if actor_id == 0:
+      actor_logger.write(result)
     episode_steps = int(result['episode_length'])
     env_steps_done += episode_steps
     episodes_done += 1
@@ -3418,6 +3472,10 @@ def train_single_task(
         wandb_intra['intra_eval/env_steps'] = env_steps_done
         wandb.log(wandb_intra)
 
+  if actor_pool is not None:
+    actor_pool.stop()
+    actor_pool = None
+
   print(f'  Task {task_id} training complete '
         f'({env_steps_done} env steps, {episodes_done} episodes).', flush=True)
 
@@ -3519,6 +3577,11 @@ def train_single_task(
       env.close()
     except Exception:
       pass
+    for extra_env in collection_envs[1:]:
+      try:
+        extra_env.close()
+      except Exception:
+        pass
     try:
       eval_env.close()
     except Exception:
@@ -3739,6 +3802,11 @@ def train_single_task(
     env.close()
   except Exception:
     pass
+  for extra_env in collection_envs[1:]:
+    try:
+      extra_env.close()
+    except Exception:
+      pass
   try:
     eval_env.close()
   except Exception:
@@ -4209,6 +4277,7 @@ def main(_):
                   'goal_conditioning_mode': FLAGS.goal_conditioning_mode,
                   'sawyer_success_mode': FLAGS.sawyer_success_mode,
                   'profile_runtime': FLAGS.profile_runtime,
+                  'num_actors': FLAGS.num_actors,
                   'eval_episodes': FLAGS.eval_episodes,
                   'intra_eval_previous_tasks': FLAGS.intra_eval_previous_tasks,
                   'log_rl_metrics': FLAGS.log_rl_metrics,

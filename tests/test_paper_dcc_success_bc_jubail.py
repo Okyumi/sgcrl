@@ -55,6 +55,7 @@ def test_both_cells_disable_dynamics_and_keep_paper_metrics():
     assert run['log_rl_metrics'] is True
     assert run['rl_metrics_occasional_multiplier'] == 2
     assert run['profile_runtime'] is True
+    assert run['num_actors'] == 2
     assert run['post_task_eval_scope'] == 'current'
     assert run['eval_record_video'] is False
     assert run['counterfactual_rank_interval_steps'] == 0
@@ -152,6 +153,8 @@ def test_launcher_packs_two_jobs_and_chains_resubmits():
   assert '#SBATCH --gres=gpu:a100:1' in launcher
   assert '#SBATCH --mail-type=FAIL' in launcher
   assert 'TASKS_PER_GPU="${TASKS_PER_GPU:-2}"' in launcher
+  assert '--num_actors=$NUM_ACTORS' in draft
+  assert 'NUM_ACTORS="${NUM_ACTORS:-1}"' in draft
   assert 'XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.45}"' in launcher
   assert '--dependency="afterany:${SLURM_JOB_ID}"' in launcher
   assert 'DRAFT_jubail.sh' in launcher
@@ -171,6 +174,7 @@ def test_config_emission_forwards_no_dyn_and_bc_flags():
        '--setting', '0'],
       cwd=REPO_ROOT, capture_output=True, text=True, check=True)
   assert 'DYN_AUX_WEIGHT=0.0' in ablation.stdout
+  assert 'NUM_ACTORS=2' in ablation.stdout
   assert 'SUCCESS_BC_WEIGHT=0.0' in ablation.stdout
   assert 'CRITIC_MODE=decomposed' in ablation.stdout
   assert 'SAWYER_SUCCESS_MODE=native_info' in ablation.stdout
@@ -179,6 +183,7 @@ def test_config_emission_forwards_no_dyn_and_bc_flags():
        '--setting', '10'],
       cwd=REPO_ROOT, capture_output=True, text=True, check=True)
   assert 'DYN_AUX_WEIGHT=0.0' in proposed.stdout
+  assert 'NUM_ACTORS=2' in proposed.stdout
   assert 'SUCCESS_BC_WEIGHT=0.1' in proposed.stdout
   assert 'SUCCESS_BC_LABEL_MODE=episode_sparse_reward' in proposed.stdout
   assert 'LOG_RL_METRICS=true' in proposed.stdout

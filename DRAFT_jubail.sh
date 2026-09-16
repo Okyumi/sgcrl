@@ -221,6 +221,7 @@ SUCCESS_INJECT_TARGET_FRAC="${SUCCESS_INJECT_TARGET_FRAC:-0.0}"
 SUCCESS_INJECT_CLONE="${SUCCESS_INJECT_CLONE:-false}"
 STAGE_DWELL_LOG_ENABLED="${STAGE_DWELL_LOG_ENABLED:-false}"
 PRESS_VS_PI_PROBE_ENABLED="${PRESS_VS_PI_PROBE_ENABLED:-false}"
+NUM_ACTORS="${NUM_ACTORS:-1}"
 
 # Directories
 LOG_DIR="${LOG_DIR:-/scratch/yd2247/sgcrl/logs/continual}"
@@ -356,6 +357,7 @@ build_flags() {
   fi
   _FLAGS="$_FLAGS --goal_conditioning_mode=$GOAL_CONDITIONING_MODE"
   _FLAGS="$_FLAGS --sawyer_success_mode=$SAWYER_SUCCESS_MODE"
+  _FLAGS="$_FLAGS --num_actors=$NUM_ACTORS"
   if [ "$PROFILE_RUNTIME" = "true" ]; then
     _FLAGS="$_FLAGS --profile_runtime"
   else
@@ -682,6 +684,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "Single task     : ${SINGLE_TASK:-none}"
     echo "Goal contract   : $GOAL_CONDITIONING_MODE"
     echo "Runtime profile : $PROFILE_RUNTIME"
+    echo "Num actors      : $NUM_ACTORS"
     echo "Actor auto-reset: $ACTOR_AUTO_RESET (threshold=$ACTOR_RESET_DORMANT_THRESHOLD, warmup=$ACTOR_RESET_WARMUP, max=$ACTOR_RESET_MAX)"
     echo "Decomp critic   : dyn_aux_weight=$DYN_AUX_WEIGHT (after_task0=$DYN_AUX_AFTER_TASK0) phi_task=${PHI_TASK_WIDTH}x${PHI_TASK_DEPTH}"
     echo "In-traj negs    : repeats=$IN_TRAJECTORY_NEGATIVE_REPEATS"
