@@ -13,11 +13,11 @@
 #SBATCH --error=/scratch/yd2247/sgcrl/logs/paper_remaining_seeds/%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
 #SBATCH --mail-type=END,FAIL
-#SBATCH --array=0-16
+#SBATCH --array=0-33
 
 # Leftover 68 of the 90 paper contrastive runs (10 seeds × 9 cells minus
-# the 22 first-seed jobs). Submit behind paper_fs:
-#   sbatch --dependency=after:17897878 DRAFT_paper_remaining_seeds.sh
+# the 22 first-seed jobs). Two learners x two CPU actors per L40S.
+# The CPU dispatcher submits these with nice=100 after paper_fs is queued.
 set -euo pipefail
 
 CHAIN_INDEX="${PAPER_REMAINING_CHAIN_INDEX:-0}"
@@ -28,8 +28,8 @@ cd "$REPO_DIR"
 export CONFIG_SCRIPT="experiment_configs_paper_remaining_seeds.py"
 export CONFIG_INDEX_OFFSET=0
 export CONFIG_LIMIT=68
-export TASKS_PER_GPU="${TASKS_PER_GPU:-4}"
-export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.22}"
+export TASKS_PER_GPU="${TASKS_PER_GPU:-2}"
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.45}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=true
 export TF_FORCE_GPU_ALLOW_GROWTH=true
 export TF_NUM_INTRAOP_THREADS=2

@@ -139,7 +139,9 @@ def build_configs():
       if key in seen:
         raise ValueError(f'duplicate remaining pack entry {key}')
       seen.add(key)
-      configs.append(by_key[key])
+      config = dict(by_key[key])
+      config['num_actors'] = 2
+      configs.append(config)
   expected = {
       (config['actor_mode'], config['critic_mode'], config['seed'])
       for config in baseline.build_configs()

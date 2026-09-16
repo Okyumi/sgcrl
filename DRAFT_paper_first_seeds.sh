@@ -12,11 +12,11 @@
 #SBATCH --error=/scratch/yd2247/sgcrl/logs/paper_first_seeds/%A_%a.err
 #SBATCH --mail-user=yd2247@nyu.edu
 #SBATCH --mail-type=END,FAIL
-#SBATCH --array=0-5
+#SBATCH --array=0-10
 
 # Breadth-first paper wave: 3 furthest seeds of R/R, R/P, P/R, P/P and
 # 2 furthest seeds of each CKA cell. Same native_info checkpoints as
-# the 9-baseline array. Six packs fit the ~6 L40S user cap.
+# the 9-baseline array. Two learners x two CPU actors per L40S.
 #
 #   sbatch DRAFT_paper_first_seeds.sh
 #   ARRAY=$(python scripts/paper_first_seeds_status.py --incomplete-array-ids)
@@ -24,15 +24,15 @@
 set -euo pipefail
 
 CHAIN_INDEX="${PAPER_FIRST_SEEDS_CHAIN_INDEX:-0}"
-MAX_CHAIN="${PAPER_FIRST_SEEDS_MAX_CHAIN:-6}"
+MAX_CHAIN="${PAPER_FIRST_SEEDS_MAX_CHAIN:-0}"
 REPO_DIR="/scratch/yd2247/sgcrl"
 cd "$REPO_DIR"
 
 export CONFIG_SCRIPT="experiment_configs_paper_first_seeds.py"
 export CONFIG_INDEX_OFFSET=0
 export CONFIG_LIMIT=22
-export TASKS_PER_GPU="${TASKS_PER_GPU:-4}"
-export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.22}"
+export TASKS_PER_GPU="${TASKS_PER_GPU:-2}"
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.45}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=true
 export TF_FORCE_GPU_ALLOW_GROWTH=true
 export TF_NUM_INTRAOP_THREADS=2

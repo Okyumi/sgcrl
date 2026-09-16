@@ -88,6 +88,7 @@ LOGSUMEXP_PENALTY="${LOGSUMEXP_PENALTY:-0.01}"
 SINGLE_TASK="${SINGLE_TASK:-}"
 GOAL_CONDITIONING_MODE="${GOAL_CONDITIONING_MODE:-full_state}"
 SAWYER_SUCCESS_MODE="${SAWYER_SUCCESS_MODE:-corrected}"
+NUM_ACTORS="${NUM_ACTORS:-1}"
 PROFILE_RUNTIME="${PROFILE_RUNTIME:-false}"
 ACTOR_AUTO_RESET="${ACTOR_AUTO_RESET:-false}"
 ACTOR_RESET_DORMANT_THRESHOLD="${ACTOR_RESET_DORMANT_THRESHOLD:-0.1}"
@@ -367,6 +368,7 @@ build_flags() {
   fi
   _FLAGS="$_FLAGS --goal_conditioning_mode=$GOAL_CONDITIONING_MODE"
   _FLAGS="$_FLAGS --sawyer_success_mode=$SAWYER_SUCCESS_MODE"
+  _FLAGS="$_FLAGS --num_actors=$NUM_ACTORS"
   if [ "$PROFILE_RUNTIME" = "true" ]; then
     _FLAGS="$_FLAGS --profile_runtime"
   else
@@ -671,6 +673,7 @@ for ((i = 0; i < TASKS_PER_GPU; i++)); do
     echo "Start task      : $START_TASK"
     echo "Eval every      : $EVAL_EVERY"
     echo "Success mode    : $SAWYER_SUCCESS_MODE"
+    echo "Num actors      : $NUM_ACTORS"
     echo "W&B             : $USE_WANDB"
     echo "W&B project     : $WANDB_PROJECT"
     echo "W&B group       : $WANDB_GROUP"

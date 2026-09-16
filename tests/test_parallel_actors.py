@@ -88,6 +88,12 @@ def test_runner_keeps_one_learner_step_per_episode():
   assert found_learner
 
 
+def test_torch_draft_forwards_num_actors():
+  draft = (REPO_ROOT / 'DRAFT.sh').read_text(encoding='utf-8')
+  assert 'NUM_ACTORS="${NUM_ACTORS:-1}"' in draft
+  assert '--num_actors=$NUM_ACTORS' in draft
+
+
 if __name__ == '__main__':
   tests = [value for name, value in sorted(globals().items())
            if name.startswith('test_') and callable(value)]

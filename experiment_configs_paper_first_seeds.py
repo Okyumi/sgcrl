@@ -20,8 +20,8 @@ ALL_CELLS = tuple(
     for critic in ('reset', 'persistent', 'cka')
 )
 
-# Packs use the furthest-along seeds as of 2026-09-16. Arrays 0–2 are
-# the four non-CKA cells (3 seeds, ~task 7). Arrays 3–5 are CKA sides.
+# Arrays 0–5 (2-pack: 0–10) keep furthest-along seeds together so
+# task-7 R/P runs are not stuck behind task-0 CKA roommates.
 FIRST_SEED_PACKS = (
     (
         ('reset', 'reset', 5),
@@ -84,7 +84,11 @@ def build_configs():
       if key in seen:
         raise ValueError(f'duplicate pack entry {key}')
       seen.add(key)
-      configs.append(by_key[key])
+      config = dict(by_key[key])
+      # Two collectors per learner; Torch launchers pack two learners
+      # per L40S so the GPU still sees four MuJoCo sims, matching Jubail.
+      config['num_actors'] = 2
+      configs.append(config)
   counts = Counter((actor, critic) for actor, critic, _ in seen)
   missing = [cell for cell in ALL_CELLS if counts[cell] < 2]
   if missing:

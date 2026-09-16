@@ -2,7 +2,8 @@
 
 Date: 2026-09-16  
 Status: launched on Torch HPC. Supersedes the R/P-only 40-run rush in
-`docs/2026-09-16_paper_rp_priority_finish.md`.
+`docs/2026-09-16_paper_rp_priority_finish.md`. Packing is now two
+learners × two CPU actors per L40S (`docs/2026-09-16_torch_parallel_actors.md`).
 
 ## Motivation
 
@@ -21,7 +22,8 @@ No cell has completed the 10-task curriculum. The furthest seeds are:
   a resume hang.
 
 This wave trains **3 seeds of each non-CKA cell** and **2 seeds of each
-CKA cell** (22 runs, 6 array tasks). A later sweep can fill seeds 5–14.
+CKA cell** (22 runs, 11 array tasks at 2 learners per GPU). A later sweep
+can fill seeds 5–14.
 
 Sparse SAC is not in this wave: 4-way packing still dies in `tf.data`
 (`FunctionDef` registry). It needs a 1-process-per-GPU retry after the
@@ -38,8 +40,10 @@ Unchanged 3×3 actor/critic grid `{reset, persistent, CKA}` with
   identity as `experiment_configs_paper_9baseline_10seed.py`. Packs are
   grouped by remaining work so task-7 seeds are not stuck behind task-0
   CKA roommates.
-- `DRAFT_paper_first_seeds.sh`: array `0-5`, 4 learners per L40S, 48h
-  `afterany` chain (max 6 hops). Array 5 has only the two CKA/CKA seeds.
+- `DRAFT_paper_first_seeds.sh`: array `0-10`, 2 learners per L40S with
+  `--num_actors=2`, no 48h self-chain (`MAX_CHAIN=0`) so 11 GPUs plus
+  pending hops stay under the 16-GPU TRES cap. The CPU dispatcher
+  resubmits timed-out arrays. Array 10 has only the two CKA/CKA seeds.
 - `scripts/paper_first_seeds_status.py` and unit tests.
 
 The pending `paper_rp` array `17897850` is cancelled so these six packs

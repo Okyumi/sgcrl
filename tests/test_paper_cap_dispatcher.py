@@ -38,6 +38,18 @@ def test_gpu_task_count_sums_array_sizes():
   assert disp.gpu_task_count(jobs) == 9
 
 
+def test_array_counts_match_two_learners_per_gpu():
+  assert disp.FIRST_N_ARRAY == 11
+  assert disp.REMAINING_N_ARRAY == 34
+  assert disp.SAC_N_ARRAY == 20
+
+
+def test_incomplete_status_ids_parse_comma_lists():
+  assert disp.parse_incomplete_ids('') == []
+  assert disp.parse_incomplete_ids('0,1,10') == [0, 1, 10]
+  assert disp.parse_incomplete_ids('0,1,2,3,4,5,6,7,8,9,10\n') == list(range(11))
+
+
 def test_launcher_is_cpu_only():
   launcher = (REPO_ROOT / 'DRAFT_paper_cap_dispatcher.sh').read_text(
       encoding='utf-8')

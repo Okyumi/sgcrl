@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 
@@ -59,21 +60,28 @@ def test_checkpoint_paths_match_nine_baseline():
       '/tmp/ckpts', run['actor_mode'], run['critic_mode'], run['seed'], 7
   ) == baseline.checkpoint_path(
       '/tmp/ckpts', run['actor_mode'], run['critic_mode'], run['seed'], 7)
+  assert all(run['num_actors'] == 2 for run in remaining.build_configs())
+  emitted = subprocess.run(
+      [sys.executable, 'experiment_configs_paper_remaining_seeds.py',
+       '--setting', '0'],
+      cwd=REPO_ROOT, capture_output=True, text=True, check=True)
+  assert 'NUM_ACTORS=2' in emitted.stdout
 
 
 def test_status_incomplete_ids_cover_seventeen_arrays():
   with tempfile.TemporaryDirectory() as tmp:
-    ids = status.incomplete_array_ids(tasks_per_gpu=4, checkpoint_dir=tmp)
-    assert ids == list(range(17))
+    ids = status.incomplete_array_ids(tasks_per_gpu=2, checkpoint_dir=tmp)
+    assert ids == list(range(34))
 
 
 def test_launcher_uses_lower_slurm_priority():
   launcher = (REPO_ROOT / 'DRAFT_paper_remaining_seeds.sh').read_text(
       encoding='utf-8')
-  assert '#SBATCH --array=0-16' in launcher
+  assert '#SBATCH --array=0-33' in launcher
   assert '#SBATCH --nice=100' in launcher
   assert 'job-name=paper_rest' in launcher
   assert 'CONFIG_LIMIT=68' in launcher
+  assert 'TASKS_PER_GPU="${TASKS_PER_GPU:-2}"' in launcher
 
 
 if __name__ == '__main__':

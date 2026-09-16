@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Fill leftover paper GPU jobs without exceeding qos gpu48 MaxTRESPU=16.
+"""Fill paper GPU jobs without exceeding qos gpu48 MaxTRESPU=16.
 
-Waits until ``paper_fs`` is actually running (so its 48h continuations are
-already in the pending count), then submits leftover contrastive packs
-and 1-per-GPU SAC only into free slots. Remaining jobs are launched with
-``MAX_CHAIN=0`` so they do not spawn extra pending GPUs; this dispatcher
-resubmits timed-out array tasks.
+Priority: incomplete ``paper_fs`` arrays, then leftover contrastive
+packs, then 1-per-GPU SAC. First-seed packing is two learners per L40S
+(11 GPUs for 22 runs). Continuations are off (``MAX_CHAIN=0``): 11
+running plus 11 pending hops would exceed the 16-GPU TRES cap. This
+dispatcher resubmits timed-out array tasks.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import argparse
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -22,9 +23,11 @@ SPARE = 1
 SLEEP_SEC = 120
 USER = os.environ.get('USER', 'yd2247')
 
+FIRST_LAUNCHER = REPO_ROOT / 'DRAFT_paper_first_seeds.sh'
 REMAINING_LAUNCHER = REPO_ROOT / 'DRAFT_paper_remaining_seeds.sh'
 SAC_LAUNCHER = REPO_ROOT / 'DRAFT_paper_sparse_sac_10seed.sh'
-REMAINING_N_ARRAY = 17
+FIRST_N_ARRAY = 11
+REMAINING_N_ARRAY = 34
 SAC_N_ARRAY = 20
 
 
@@ -87,22 +90,46 @@ def queued_array_ids(jobs, name):
   return ids
 
 
-def paper_fs_running(jobs):
-  return any(job['name'] == 'paper_fs' and job['state'] == 'RUNNING'
-             for job in jobs)
+def parse_incomplete_ids(text):
+  if not text.strip():
+    return []
+  return [int(part) for part in text.strip().split(',') if part.strip()]
 
 
-def paper_fs_present(jobs):
-  return any(job['name'] == 'paper_fs' for job in jobs)
+def incomplete_status_ids(script_name):
+  result = _run([
+      sys.executable,
+      str(REPO_ROOT / 'scripts' / script_name),
+      '--incomplete-array-ids',
+  ], check=False)
+  if result.returncode != 0:
+    raise RuntimeError(
+        result.stderr.strip() or result.stdout.strip()
+        or f'{script_name} failed')
+  return parse_incomplete_ids(result.stdout)
 
 
 def sbatch_array(launcher, array_id, extra=None):
   cmd = ['sbatch', f'--array={array_id}', str(launcher)]
   if extra:
     cmd[1:1] = extra
-  result = _run(cmd)
+  result = _run(cmd, check=False)
   print(result.stdout.strip() or result.stderr.strip(), flush=True)
   return result.returncode == 0
+
+
+def _submit_missing(name, launcher, ids, extra, jobs, slots, submitted):
+  queued = queued_array_ids(jobs, name)
+  for array_id in ids:
+    if submitted >= slots:
+      break
+    if array_id in queued:
+      continue
+    print(f'[dispatcher] submit {name} array {array_id}', flush=True)
+    if sbatch_array(launcher, array_id, extra=extra):
+      submitted += 1
+      queued.add(array_id)
+  return submitted, queued
 
 
 def fill_slots(jobs):
@@ -114,24 +141,25 @@ def fill_slots(jobs):
     return 0
 
   submitted = 0
-  rest_queued = queued_array_ids(jobs, 'paper_rest')
-  for array_id in range(REMAINING_N_ARRAY):
-    if submitted >= slots:
-      return submitted
-    if array_id in rest_queued:
-      continue
-    extra = [
-        '--nice=100',
-        '--export=ALL,PAPER_REMAINING_MAX_CHAIN=0',
-    ]
-    print(f'[dispatcher] submit paper_rest array {array_id}', flush=True)
-    if sbatch_array(REMAINING_LAUNCHER, array_id, extra=extra):
-      submitted += 1
-      rest_queued.add(array_id)
+  fs_ids = incomplete_status_ids('paper_first_seeds_status.py')
+  submitted, fs_queued = _submit_missing(
+      'paper_fs', FIRST_LAUNCHER, fs_ids,
+      ['--export=ALL,PAPER_FIRST_SEEDS_MAX_CHAIN=0'],
+      jobs, slots, submitted)
+  missing_fs = sorted(set(fs_ids) - fs_queued)
+  if missing_fs:
+    print(f'[dispatcher] still need first-seed arrays {missing_fs}',
+          flush=True)
+    return submitted
 
-  if rest_queued != set(range(REMAINING_N_ARRAY)):
-    missing = sorted(set(range(REMAINING_N_ARRAY)) - rest_queued)
-    print(f'[dispatcher] still need contrastive arrays {missing}',
+  rest_ids = incomplete_status_ids('paper_remaining_seeds_status.py')
+  submitted, rest_queued = _submit_missing(
+      'paper_rest', REMAINING_LAUNCHER, rest_ids,
+      ['--nice=100', '--export=ALL,PAPER_REMAINING_MAX_CHAIN=0'],
+      jobs, slots, submitted)
+  missing_rest = sorted(set(rest_ids) - rest_queued)
+  if missing_rest:
+    print(f'[dispatcher] still need contrastive arrays {missing_rest}',
           flush=True)
     return submitted
 
@@ -148,19 +176,12 @@ def fill_slots(jobs):
     print(f'[dispatcher] submit paper_sac array {array_id}', flush=True)
     if sbatch_array(SAC_LAUNCHER, array_id, extra=extra):
       submitted += 1
+      sac_queued.add(array_id)
   return submitted
 
 
 def once():
   jobs = gpu_queue()
-  if not paper_fs_running(jobs):
-    if paper_fs_present(jobs):
-      print('[dispatcher] paper_fs pending; not filling yet', flush=True)
-    else:
-      print('[dispatcher] paper_fs not in queue; filling leftover only',
-            flush=True)
-      fill_slots(jobs)
-    return
   fill_slots(jobs)
 
 

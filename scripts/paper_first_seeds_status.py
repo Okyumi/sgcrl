@@ -70,7 +70,7 @@ def incomplete_array_ids(tasks_per_gpu, checkpoint_dir, offset=0, limit=0):
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--checkpoint-dir', default=None)
-  parser.add_argument('--tasks-per-gpu', type=int, default=4)
+  parser.add_argument('--tasks-per-gpu', type=int, default=2)
   parser.add_argument('--offset', type=int, default=0)
   parser.add_argument('--limit', type=int, default=0)
   parser.add_argument('--array-task-id', type=int, default=0)

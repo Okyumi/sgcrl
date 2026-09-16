@@ -11,8 +11,8 @@
 #SBATCH --mail-user=yd2247@nyu.edu
 #SBATCH --mail-type=END,FAIL
 
-# CPU watcher: after paper_fs is running, submit leftover 10-seed GPU
-# jobs into free qos-gpu48 slots (max 16 pending+running).
+# CPU watcher: submit incomplete paper_fs arrays first, then leftover
+# 10-seed GPU jobs, into free qos-gpu48 slots (max 16 pending+running).
 set -euo pipefail
 REPO_DIR="/scratch/yd2247/sgcrl"
 mkdir -p /scratch/yd2247/sgcrl/logs/paper_dispatcher
