@@ -1018,24 +1018,32 @@ class ContinualDecomposedLearner(acme.Learner):
           critic_loss_fn, has_aux=True)(critic_dict, transitions, k_critic)
 
       # ---- 2. dyn-aux step on b_shared + h_dyn ---------------------
-      (d_loss_val, d_aux), (g_b_dyn, g_h_dyn) = jax.value_and_grad(
-          dyn_loss_fn, argnums=(0, 1), has_aux=True)(
-              state.b_shared_params, state.h_dyn_params, transitions)
+      # ``dyn_w`` is a Python constant captured at learner construction, so
+      # this branch is resolved at JIT trace time. When mu=0 the dynamics
+      # head is not forwarded, differentiated, or stepped.
+      if dyn_w > 0:
+        (d_loss_val, d_aux), (g_b_dyn, g_h_dyn) = jax.value_and_grad(
+            dyn_loss_fn, argnums=(0, 1), has_aux=True)(
+                state.b_shared_params, state.h_dyn_params, transitions)
+        g_b_shared = jax.tree_util.tree_map(
+            lambda g_nce, g_dyn: g_nce + dyn_w * g_dyn,
+            c_grads['b_shared'], g_b_dyn)
+        g_h_dyn_scaled = jax.tree_util.tree_map(lambda g: dyn_w * g, g_h_dyn)
+        dyn_upd, dyn_opt = h_dyn_opt.update(
+            g_h_dyn_scaled, state.h_dyn_opt_state)
+        new_h_dyn = optax.apply_updates(state.h_dyn_params, dyn_upd)
+      else:
+        d_aux = dict(dyn_mse=jnp.asarray(0.0))
+        g_b_shared = c_grads['b_shared']
+        new_h_dyn = state.h_dyn_params
+        dyn_opt = state.h_dyn_opt_state
 
-      # ---- 3. compose b_shared gradient (NCE + mu * dyn) -----------
-      g_b_shared = jax.tree_util.tree_map(
-          lambda g_nce, g_dyn: g_nce + dyn_w * g_dyn,
-          c_grads['b_shared'], g_b_dyn)
-      g_h_dyn_scaled = jax.tree_util.tree_map(lambda g: dyn_w * g, g_h_dyn)
-
+      # ---- 3. compose remaining critic updates ---------------------
       b_upd, b_opt = b_shared_opt.update(g_b_shared, state.b_shared_opt_state)
       new_b_shared = optax.apply_updates(state.b_shared_params, b_upd)
       phi_upd, phi_opt = h_phi_opt.update(c_grads['h_phi'],
                                            state.h_phi_opt_state)
       new_h_phi = optax.apply_updates(state.h_phi_params, phi_upd)
-      dyn_upd, dyn_opt = h_dyn_opt.update(g_h_dyn_scaled,
-                                          state.h_dyn_opt_state)
-      new_h_dyn = optax.apply_updates(state.h_dyn_params, dyn_upd)
       task_upd, task_opt = phi_task_opt.update(c_grads['phi_task'],
                                                 state.phi_task_opt_state)
       new_phi_task = optax.apply_updates(state.phi_task_params, task_upd)

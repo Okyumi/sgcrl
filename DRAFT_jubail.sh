@@ -55,6 +55,7 @@ EVAL_EPISODES="${EVAL_EPISODES:-10}"
 EVAL_RECORD_VIDEO="${EVAL_RECORD_VIDEO:-false}"
 EVAL_VIDEO_EVERY="${EVAL_VIDEO_EVERY:-50000}"
 EVAL_VIDEO_FPS="${EVAL_VIDEO_FPS:-20}"
+EVAL_VIDEO_FIRST_SUCCESS="${EVAL_VIDEO_FIRST_SUCCESS:-false}"
 INTRA_EVAL_PREVIOUS="${INTRA_EVAL_PREVIOUS:-false}"
 LOG_RL_METRICS="${LOG_RL_METRICS:-true}"
 RL_METRICS_OCCASIONAL_MULTIPLIER="${RL_METRICS_OCCASIONAL_MULTIPLIER:-5}"
@@ -305,6 +306,11 @@ build_flags() {
   fi
   _FLAGS="$_FLAGS --eval_video_every=$EVAL_VIDEO_EVERY"
   _FLAGS="$_FLAGS --eval_video_fps=$EVAL_VIDEO_FPS"
+  if [ "$EVAL_VIDEO_FIRST_SUCCESS" = "true" ]; then
+    _FLAGS="$_FLAGS --eval_video_first_success"
+  else
+    _FLAGS="$_FLAGS --noeval_video_first_success"
+  fi
   if [ "$INTRA_EVAL_PREVIOUS" = "true" ]; then
     _FLAGS="$_FLAGS --intra_eval_previous_tasks"
   else

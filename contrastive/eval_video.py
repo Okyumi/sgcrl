@@ -1,6 +1,7 @@
-"""Record deterministic evaluation rollouts as RGB frame stacks for W&B."""
+"""Record deterministic evaluation rollouts as RGB frames, GIFs, or W&B video."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Tuple
 
 import dm_env
@@ -72,6 +73,18 @@ def _as_uint8_frame(frame: np.ndarray) -> np.ndarray:
   return array
 
 
+def _maybe_observe_first(actor, timestep) -> None:
+  observe_first = getattr(actor, 'observe_first', None)
+  if callable(observe_first):
+    observe_first(timestep)
+
+
+def _maybe_observe(actor, action, timestep) -> None:
+  observe = getattr(actor, 'observe', None)
+  if callable(observe):
+    observe(action, next_timestep=timestep)
+
+
 def record_episode_frames(
     environment: dm_env.Environment,
     actor,
@@ -80,15 +93,90 @@ def record_episode_frames(
   frames = []
   episode_return = 0.0
   timestep = environment.reset()
-  actor.observe_first(timestep)
+  _maybe_observe_first(actor, timestep)
   frames.append(render_rgb_array(environment))
 
   while not timestep.last():
     action = actor.select_action(timestep.observation)
     timestep = environment.step(action)
-    actor.observe(action, next_timestep=timestep)
+    _maybe_observe(actor, action, timestep)
     episode_return += float(timestep.reward)
     frames.append(render_rgb_array(environment))
 
   success = float(episode_return >= 1.0)
   return np.stack(frames, axis=0), episode_return, success
+
+
+def record_until_success(
+    environment: dm_env.Environment,
+    actor,
+    *,
+    max_episodes: int = 20,
+) -> Tuple[np.ndarray, float, float, int]:
+  """Roll out up to ``max_episodes`` and keep the first successful one.
+
+  Returns ``(frames, return, success, attempts)``. If no episode succeeds,
+  the last attempt is returned with ``success=0``.
+  """
+  if int(max_episodes) < 1:
+    raise ValueError('max_episodes must be >= 1')
+  last = None
+  for attempt in range(1, int(max_episodes) + 1):
+    frames, episode_return, success = record_episode_frames(environment, actor)
+    last = (frames, episode_return, success, attempt)
+    if success >= 1.0:
+      return last
+  return last
+
+
+def downsample_frames(
+    frames: np.ndarray,
+    *,
+    max_side: int = 320,
+    max_frames: int = 80,
+) -> np.ndarray:
+  """Shrink a rollout for a compact GIF (no extra interpolation library)."""
+  frames = np.asarray(frames)
+  if frames.ndim != 4:
+    raise ValueError(f'Expected (T,H,W,C) frames, got {frames.shape}')
+  n = frames.shape[0]
+  if n > max_frames:
+    idx = np.linspace(0, n - 1, num=max_frames).round().astype(int)
+    frames = frames[idx]
+  height, width = int(frames.shape[1]), int(frames.shape[2])
+  scale = min(1.0, float(max_side) / float(max(height, width)))
+  if scale < 1.0:
+    new_h = max(1, int(round(height * scale)))
+    new_w = max(1, int(round(width * scale)))
+    ys = np.linspace(0, height - 1, num=new_h).round().astype(int)
+    xs = np.linspace(0, width - 1, num=new_w).round().astype(int)
+    frames = frames[:, ys][:, :, xs]
+  return _as_uint8_frame(frames)
+
+
+def save_gif(
+    frames: np.ndarray,
+    path,
+    *,
+    fps: int = 10,
+    max_side: int = 320,
+    max_frames: int = 80,
+) -> str:
+  """Write an animated GIF. Returns the output path as a string."""
+  from PIL import Image
+
+  path = Path(path)
+  path.parent.mkdir(parents=True, exist_ok=True)
+  small = downsample_frames(
+      frames, max_side=max_side, max_frames=max_frames)
+  images = [Image.fromarray(frame) for frame in small]
+  duration_ms = int(round(1000.0 / max(int(fps), 1)))
+  images[0].save(
+      path,
+      save_all=True,
+      append_images=images[1:],
+      duration=duration_ms,
+      loop=0,
+      optimize=True,
+  )
+  return str(path)

@@ -154,6 +154,9 @@ flags.DEFINE_integer('eval_video_every', 50_000,
                      'Record an eval video every N env steps (requires eval_record_video).')
 flags.DEFINE_integer('eval_video_fps', 20,
                      'FPS for W&B eval rollout videos.')
+flags.DEFINE_bool('eval_video_first_success', False,
+                  'When eval success first becomes >0, hunt a successful '
+                  'eval episode and save it as a GIF next to paced eval videos.')
 flags.DEFINE_bool('intra_eval_previous_tasks', False,
                   'During training on the current task, periodically evaluate on '
                   'all previously learned tasks. Disabled by default because it '
@@ -2234,6 +2237,12 @@ def train_single_task(
   next_evaluator_at = eval_every if (FLAGS.eval_episodes > 0 and eval_every > 0) else float('inf')
   mid_every = int(getattr(continual_cfg, 'mid_task_checkpoint_every', 0))
   next_mid_ckpt_at = mid_every if mid_every > 0 else float('inf')
+  eval_video_dir = os.path.join(log_dir, 'eval_videos')
+  first_success_video_saved = False
+  next_eval_video_at = (
+      FLAGS.eval_video_every
+      if FLAGS.eval_record_video and FLAGS.eval_video_every > 0
+      else float('inf'))
   episodes_done = 0
   # Metric logging schedule: frequent (1x eval), occasional (Nx eval).
   metrics_every = eval_every if eval_every > 0 else 50000
@@ -3136,14 +3145,40 @@ def train_single_task(
           except Exception as press_error:  # pylint: disable=broad-except
             print(f'  [press vs pi] failed: {press_error}', flush=True)
 
+      def _write_eval_gif(frames, stem, episode_return, video_success, extra=None):
+        os.makedirs(eval_video_dir, exist_ok=True)
+        gif_path = os.path.join(eval_video_dir, f'{stem}.gif')
+        contrastive_eval_video.save_gif(
+            frames, gif_path, fps=min(int(FLAGS.eval_video_fps), 10))
+        meta = {
+            'env_name': env_name,
+            'env_steps': int(env_steps_done),
+            'episode_return': float(episode_return),
+            'gif': gif_path,
+            'seed': int(seed),
+            'success': float(video_success),
+        }
+        if extra:
+          meta.update(extra)
+        with open(os.path.join(eval_video_dir, f'{stem}.json'), 'w') as handle:
+          json.dump(meta, handle, indent=2, sort_keys=True)
+        print(
+            f'  [eval gif @ {env_steps_done}] {gif_path} '
+            f'success={video_success:.0f} return={episode_return:.1f}',
+            flush=True)
+        return gif_path
+
       if (FLAGS.eval_record_video
           and eval_every > 0
-          and env_steps_done % FLAGS.eval_video_every == 0):
+          and env_steps_done >= next_eval_video_at):
         video_started_at = time.perf_counter()
         try:
           frames, video_return, video_success = (
               contrastive_eval_video.record_episode_frames(
                   eval_env, eval_actor))
+          _write_eval_gif(
+              frames, f'step_{int(env_steps_done):07d}',
+              video_return, video_success)
           if FLAGS.use_wandb and wandb is not None:
             wandb.log({
                 'evaluator/rollout_video': wandb.Video(
@@ -3161,6 +3196,49 @@ def train_single_task(
         except Exception as video_error:  # pylint: disable=broad-except
           print(
               f'  [eval video @ {env_steps_done}] failed: {video_error}',
+              flush=True)
+        next_eval_video_at = env_steps_done + FLAGS.eval_video_every
+        if FLAGS.profile_runtime:
+          runtime_totals['evaluation_seconds'] += (
+              time.perf_counter() - video_started_at)
+
+      if (FLAGS.eval_record_video
+          and FLAGS.eval_video_first_success
+          and not first_success_video_saved
+          and eval_success_rate > 0):
+        video_started_at = time.perf_counter()
+        try:
+          frames, video_return, video_success, attempts = (
+              contrastive_eval_video.record_until_success(
+                  eval_env, eval_actor, max_episodes=20))
+          stem = (
+              f'first_success_step_{int(env_steps_done):07d}'
+              if video_success >= 1.0
+              else f'first_success_miss_step_{int(env_steps_done):07d}')
+          _write_eval_gif(
+              frames, stem, video_return, video_success,
+              extra={'attempts': int(attempts),
+                     'eval_success_rate': float(eval_success_rate)})
+          first_success_video_saved = True
+          if FLAGS.use_wandb and wandb is not None:
+            wandb.log({
+                'evaluator/first_success_video': wandb.Video(
+                    frames,
+                    fps=FLAGS.eval_video_fps,
+                    format='mp4'),
+                'evaluator/first_success_episode_return': video_return,
+                'evaluator/first_success_episode_success': video_success,
+                'evaluator/first_success_attempts': attempts,
+                'evaluator/env_steps': env_steps_done,
+            }, step=env_steps_done)
+          print(
+              f'  [first-success video @ {env_steps_done}] '
+              f'success={video_success:.0f} attempts={attempts}',
+              flush=True)
+        except Exception as video_error:  # pylint: disable=broad-except
+          print(
+              f'  [first-success video @ {env_steps_done}] failed: '
+              f'{video_error}',
               flush=True)
         if FLAGS.profile_runtime:
           runtime_totals['evaluation_seconds'] += (
