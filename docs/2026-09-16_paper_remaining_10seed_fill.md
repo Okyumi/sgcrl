@@ -1,8 +1,9 @@
 # Queue the leftover 10-seed paper runs behind the first-seed wave
 
 Date: 2026-09-16  
-Status: submitted on Torch HPC with lower SLURM nice, dependent on
-`paper_fs` `17897878` starting.
+Status: first leftover submit hit `QOSMaxGRESPerUser` (pending+running
+GPUs count toward 16). Remaining work is filled by a CPU dispatcher
+after `paper_fs` `17898476` is running.
 
 ## Motivation
 
@@ -32,11 +33,16 @@ runs: no duplicated actor/critic/seed keys, same checkpoint paths.
 ## Launch command
 
 ```bash
-sbatch --dependency=after:17897878 DRAFT_paper_remaining_seeds.sh
-sbatch --array=0-19 --nice=200 --dependency=after:17897878 \
-    --export=ALL,TASKS_PER_GPU=1 DRAFT_paper_sparse_sac_10seed.sh
-python scripts/paper_remaining_seeds_status.py --summary
+sbatch DRAFT_paper_cap_dispatcher.sh
+python scripts/paper_cap_dispatcher.py   # one-shot dry check
 ```
+
+The dispatcher runs on the `cs` CPU partition, waits until `paper_fs` is
+RUNNING, then `sbatch --array=<id>` leftover packs into free slots
+(`gpu48` cap 16, one spare). Remaining GPU jobs use `MAX_CHAIN=0` so
+they do not stack extra pending GPUs; the dispatcher resubmits on
+timeout. SAC is 1 learner per GPU after all 17 contrastive leftover
+packs are queued.
 
 ## Logged metrics
 
