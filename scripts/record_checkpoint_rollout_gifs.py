@@ -27,6 +27,9 @@ STEP_RE = re.compile(r'task_0_step_(\d+)\.pkl$')
 FIXED_GOALS = {
     'sawyer_handle_press_side': np.array([-0.07, 0.68, 0.07], dtype=np.float32),
     'sawyer_push': np.array([0.02, 0.89, 0.02], dtype=np.float32),
+    'sawyer_window_close': np.array([0.0, 0.80, 0.20], dtype=np.float32),
+    'sawyer_stick_pull': np.array([0.41, 0.54, 0.02], dtype=np.float32),
+    'sawyer_shelf_place': np.array([0.02, 0.89, 0.30], dtype=np.float32),
 }
 
 DEFAULT_EVEN_TARGETS = (
@@ -97,6 +100,36 @@ def even_target_tokens(n: int = 10) -> list:
   return seen
 
 
+def _linear_layers(policy_params, prefix):
+  layers = []
+  for name, values in policy_params.items():
+    if (str(name).startswith(prefix)
+        and isinstance(values, dict)
+        and 'w' in values
+        and 'b' in values):
+      layers.append((str(name), values))
+  return sorted(layers)
+
+
+def infer_actor_architecture(policy_params, args):
+  residual_layers = _linear_layers(policy_params, 'actor_body/')
+  if residual_layers:
+    actor_depth = len(residual_layers) - 2
+    network_width = int(np.asarray(residual_layers[0][1]['b']).shape[0])
+    return {
+        'use_residual': True,
+        'network_width': network_width,
+        'actor_depth': max(actor_depth, 4),
+        'hidden_layer_sizes': (256, 256),
+    }
+  return {
+      'use_residual': True,
+      'network_width': args.network_width,
+      'actor_depth': args.actor_depth,
+      'hidden_layer_sizes': (args.network_width, args.network_width),
+  }
+
+
 def _load_actor(ckpt_path: Path, env_name: str, seed: int, args):
   import jax
   from acme import specs
@@ -106,27 +139,33 @@ def _load_actor(ckpt_path: Path, env_name: str, seed: int, args):
 
   with ckpt_path.open('rb') as handle:
     ckpt = pickle.load(handle)
-  if 'decomposed_training_state' not in ckpt:
-    raise KeyError(f'{ckpt_path} is not a decomposed mid-task checkpoint')
-
-  start_index = int(ckpt.get('goal_start_index', 0))
-  end_index = int(ckpt.get('goal_end_index', -1))
-  success_mode = ckpt.get('sawyer_success_mode', 'corrected')
-  environment, obs_dim = contrastive_utils.make_environment(
-      env_name, start_index, end_index, seed,
-      fixed_start_end=FIXED_GOALS[env_name],
-      sawyer_success_mode=success_mode)
-  obs_dim = int(ckpt.get('obs_dim') or obs_dim)
-  env_spec = specs.make_environment_spec(environment)
-  networks = contrastive.make_networks(
-      env_spec, obs_dim=obs_dim,
-      hidden_layer_sizes=(args.network_width, args.network_width),
-      use_residual=True, network_width=args.network_width,
-      critic_depth=args.critic_depth, actor_depth=args.actor_depth)
   policy_params = ckpt.get('decomposed_policy_params') or ckpt.get(
       'composed_policy')
   if policy_params is None:
-    raise KeyError(f'{ckpt_path} has no policy parameters')
+    raise KeyError(
+        f'{ckpt_path} has neither decomposed_policy_params nor composed_policy')
+
+  start_index = int(ckpt.get('goal_start_index', 0))
+  end_index = int(ckpt.get('goal_end_index', -1))
+  success_mode = (
+      args.sawyer_success_mode or ckpt.get('sawyer_success_mode', 'corrected'))
+  task_id = args.task_id if args.use_task_id else None
+  num_tasks = args.num_tasks if args.use_task_id else None
+  environment, obs_dim = contrastive_utils.make_environment(
+      env_name, start_index, end_index, seed,
+      fixed_start_end=FIXED_GOALS[env_name],
+      task_id=task_id, num_tasks=num_tasks,
+      sawyer_success_mode=success_mode)
+  obs_dim = int(ckpt.get('obs_dim') or obs_dim)
+  env_spec = specs.make_environment_spec(environment)
+  architecture = infer_actor_architecture(policy_params, args)
+  networks = contrastive.make_networks(
+      env_spec, obs_dim=obs_dim,
+      hidden_layer_sizes=architecture['hidden_layer_sizes'],
+      use_residual=architecture['use_residual'],
+      network_width=architecture['network_width'],
+      critic_depth=args.critic_depth,
+      actor_depth=architecture['actor_depth'])
 
   def _mode_or_mean(observation):
     dist_params = networks.policy_network.apply(policy_params, observation)
@@ -185,14 +224,20 @@ def _record_one(args, step, ckpt_path, output_dir, label, hunt_success):
 
 def main():
   parser = argparse.ArgumentParser()
-  parser.add_argument('--checkpoint-dir', required=True)
+  parser.add_argument('--checkpoint-dir', default='')
+  parser.add_argument('--checkpoint-file', default='',
+                      help='Record from a single task_k.pkl (composed_policy).')
   parser.add_argument('--env-name', required=True, choices=sorted(FIXED_GOALS))
   parser.add_argument('--seed', type=int, default=6)
   parser.add_argument('--label', default='dcc')
   parser.add_argument('--even', type=int, default=10)
+  parser.add_argument('--rollouts', type=int, default=10,
+                      help='Eval rollouts when --checkpoint-file is set.')
   parser.add_argument('--first-success-step', type=int, default=0,
                       help='Also hunt a successful eval episode near this step. '
-                           '0 disables the extra GIF.')
+                           '0 disables the extra GIF for mid-ckpt mode; '
+                           'for --checkpoint-file a hunt always runs if '
+                           '--hunt-episodes > 0.')
   parser.add_argument('--hunt-episodes', type=int, default=20)
   parser.add_argument('--output-dir', required=True)
   parser.add_argument('--network-width', type=int, default=1024)
@@ -201,33 +246,56 @@ def main():
   parser.add_argument('--fps', type=int, default=10)
   parser.add_argument('--max-side', type=int, default=320)
   parser.add_argument('--max-frames', type=int, default=80)
+  parser.add_argument('--sawyer-success-mode', default='')
+  parser.add_argument('--use-task-id', action='store_true')
+  parser.add_argument('--task-id', type=int, default=0)
+  parser.add_argument('--num-tasks', type=int, default=10)
   args = parser.parse_args()
 
-  ckpt_dir = Path(args.checkpoint_dir).expanduser().resolve()
   output_dir = Path(args.output_dir).expanduser().resolve()
   output_dir.mkdir(parents=True, exist_ok=True)
-
-  ckpts = list_step_ckpts(ckpt_dir, args.env_name, args.seed)
-  if not ckpts:
-    print(f'No mid-task checkpoints for {args.env_name} seed={args.seed} '
-          f'under {ckpt_dir}', file=sys.stderr)
-    return 1
-
-  chosen = pick_targets(ckpts, even_target_tokens(args.even))
   records = []
-  for step, path in chosen:
-    records.append(_record_one(
-        args, step, path, output_dir, args.label, hunt_success=False))
 
-  if args.first_success_step > 0:
-    first = pick_targets(ckpts, [str(args.first_success_step)])
-    if first:
-      step, path = first[0]
+  if args.checkpoint_file:
+    ckpt_path = Path(args.checkpoint_file).expanduser().resolve()
+    if not ckpt_path.is_file():
+      print(f'Checkpoint file not found: {ckpt_path}', file=sys.stderr)
+      return 1
+    base_seed = int(args.seed)
+    for i in range(max(args.rollouts, 0)):
+      args.seed = base_seed + 1000 + i
       records.append(_record_one(
-          args, step, path, output_dir, args.label, hunt_success=True))
+          args, i, ckpt_path, output_dir, f'{args.label}_r{i}',
+          hunt_success=False))
+    args.seed = base_seed
+    if args.hunt_episodes > 0:
+      records.append(_record_one(
+          args, 0, ckpt_path, output_dir, args.label, hunt_success=True))
+    ckpt_dir = str(ckpt_path.parent)
+  else:
+    ckpt_dir_path = Path(args.checkpoint_dir).expanduser().resolve()
+    ckpts = list_step_ckpts(ckpt_dir_path, args.env_name, args.seed)
+    if not ckpts:
+      print(f'No mid-task checkpoints for {args.env_name} seed={args.seed} '
+            f'under {ckpt_dir_path}', file=sys.stderr)
+      return 1
+
+    chosen = pick_targets(ckpts, even_target_tokens(args.even))
+    for step, path in chosen:
+      records.append(_record_one(
+          args, step, path, output_dir, args.label, hunt_success=False))
+
+    if args.first_success_step > 0:
+      first = pick_targets(ckpts, [str(args.first_success_step)])
+      if first:
+        step, path = first[0]
+        records.append(_record_one(
+            args, step, path, output_dir, args.label, hunt_success=True))
+    ckpt_dir = str(ckpt_dir_path)
 
   manifest = {
-      'checkpoint_dir': str(ckpt_dir),
+      'checkpoint_dir': ckpt_dir,
+      'checkpoint_file': args.checkpoint_file,
       'env_name': args.env_name,
       'label': args.label,
       'n_gifs': len(records),

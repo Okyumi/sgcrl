@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Jubail Task-5 / Task-6 rollout GIFs.
+"""Jubail Task-5 / Task-6 / Task-8 rollout GIFs.
 
 Cells:
   0  handle_nobc_gifs  — offline GIFs from seed-6 DCC w/o BC (job 17901349)
   1  push_gifs         — offline GIFs from seed-6 DCC push
   2  handle_bc_train   — train DCC + Success-BC 1M, save paced + first-success GIFs
+  3  window_nobc_gifs  — offline GIFs from seed-6 DCC window (job 17954891)
+  4  window_bc_train   — train DCC + Success-BC 1M on Task 8
 
 W&B: TASK58-JUBAIL-TASK-VIDEOS
 """
@@ -52,6 +54,28 @@ VARIANTS = (
         'eval_video_first_success': True,
         'label': 'dcc_bc',
         'first_success_step': 150_000,
+        'source_checkpoint_dir': '',
+    },
+    {
+        'variant': 'window_nobc_gifs',
+        'job_mode': 'offline_gifs',
+        'single_task': 'sawyer_window_close',
+        'success_bc_weight': 0.0,
+        'success_bc_label_mode': 'raw_horizon',
+        'eval_video_first_success': False,
+        'label': 'dcc_nobc',
+        'first_success_step': 250_000,
+        'source_checkpoint_dir': SOURCE_CKPT_DIR,
+    },
+    {
+        'variant': 'window_bc_train',
+        'job_mode': 'train',
+        'single_task': 'sawyer_window_close',
+        'success_bc_weight': 0.1,
+        'success_bc_label_mode': 'terminal_episode',
+        'eval_video_first_success': True,
+        'label': 'dcc_bc',
+        'first_success_step': 250_000,
         'source_checkpoint_dir': '',
     },
 )

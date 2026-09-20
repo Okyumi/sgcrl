@@ -286,10 +286,11 @@ class ContinualDecomposedLearner(acme.Learner):
         raise ValueError('counterfactual rank minimum gap cannot be negative.')
     if self._success_buffer_enabled:
       if self._success_bc_label_mode not in (
-          'raw_horizon', 'terminal_episode', 'episode_sparse_reward'):
+          'raw_horizon', 'terminal_episode', 'episode_sparse_reward',
+          'current_sparse_reward'):
         raise ValueError(
             'success_bc_label_mode must be raw_horizon, terminal_episode, '
-            'or episode_sparse_reward.')
+            'episode_sparse_reward, or current_sparse_reward.')
       if (self._success_bc_label_mode == 'raw_horizon'
           and self._action_effect_target_mode != 'raw_horizon'):
         raise ValueError(

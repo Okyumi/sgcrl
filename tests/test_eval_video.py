@@ -79,7 +79,7 @@ def test_record_until_success_keeps_first_hit():
   original = eval_video.render_rgb_array
   eval_video.render_rgb_array = lambda env: np.zeros((2, 2, 3), dtype=np.uint8)
   try:
-    env = _FakeEnv(rewards=[0.0, 1.0])
+    env = _FakeEnv(rewards=[0.0, 1.0, 0.0])
     frames, episode_return, success, attempts = eval_video.record_until_success(
         env, _FakeActor(), max_episodes=4)
     assert success == 1.0

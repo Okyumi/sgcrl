@@ -131,6 +131,8 @@ class ContinualConfig:
   # Defaults preserve legacy HER-conditioned actor training.
   actor_goal_mode: str = 'her'  # her | task | mix
   actor_success_score_weight: float = 0.0
+  # End collection on first sparse success; no success-buffer / BC.
+  truncate_on_success: bool = False
 
   # -- Task-goal same-state counterfactual action ranking ------------------
   # This mode trains u_task only from exact simulator-state interventions.

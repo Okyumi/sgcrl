@@ -129,6 +129,66 @@ def _set_sawyer_success_mode(environment, success_mode):
   sawyer_success.set_success_mode(environment, success_mode)
 
 
+def _sparse_success_from_step(reward, info) -> bool:
+  if info is not None and 'success' in info:
+    return float(info['success']) >= 1.0
+  return float(reward) >= 1.0
+
+
+class SuccessTruncateGymWrapper(gym.Wrapper):
+  """Stop the simulator after the first sparse success (no post-goal linger).
+
+  Collection episodes stay 150 steps so Reverb can batch them, but after
+  success the wrapper freezes the last successful observation instead of
+  stepping the arm. Evaluation should *not* use this wrapper.
+  """
+
+  def __init__(self, env):
+    super().__init__(env)
+    self._frozen = False
+    self._last_obs = None
+
+  def reset(self, **kwargs):
+    self._frozen = False
+    self._last_obs = self.env.reset(**kwargs)
+    return self._last_obs
+
+  def step(self, action):
+    if self._frozen:
+      info = {
+          'success': 1.0,
+          'truncated_on_success': 1.0,
+          'frozen_after_success': 1.0,
+      }
+      return self._last_obs, 0.0, False, info
+    result = self.env.step(action)
+    if len(result) == 5:
+      obs, reward, terminated, truncated, info = result
+      success = _sparse_success_from_step(reward, info)
+      if info is not None:
+        info = dict(info)
+        info['truncated_on_success'] = float(success)
+        info['frozen_after_success'] = float(success)
+      if success:
+        self._frozen = True
+        self._last_obs = obs
+      else:
+        self._last_obs = obs
+      return obs, reward, terminated, truncated, info
+    obs, reward, done, info = result
+    success = _sparse_success_from_step(reward, info)
+    if info is not None:
+      info = dict(info)
+      info['truncated_on_success'] = float(success)
+      info['frozen_after_success'] = float(success)
+    if success:
+      self._frozen = True
+      self._last_obs = obs
+    else:
+      self._last_obs = obs
+    return obs, reward, done, info
+
+
 def _native_sparse_transition(environment, native_result, action):
   """Convert MetaWorld's authoritative success signal to a sparse reward.
 
@@ -207,7 +267,7 @@ def euler2quat(euler):
 
 
 def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
-         sawyer_success_mode='corrected'):
+         sawyer_success_mode='corrected', truncate_on_success=False):
   """Loads the train and eval environments, as well as the obs_dim.
 
   If task_id and num_tasks are provided, wraps the environment with
@@ -307,8 +367,12 @@ def load(env_name, fixed_start_end=None, task_id=None, num_tasks=None,
   if env_name.startswith('sawyer_'):
     _set_sawyer_success_mode(gym_env, sawyer_success_mode)
     obs_dim = STATE_DIM_UNIFIED
+    if truncate_on_success:
+      gym_env = SuccessTruncateGymWrapper(gym_env)
   else:
     obs_dim = gym_env.observation_space.shape[0] // 2
+    if truncate_on_success:
+      gym_env = SuccessTruncateGymWrapper(gym_env)
 
   # Optionally wrap with task_id one-hot for continual RL.
   if task_id is not None and num_tasks is not None:

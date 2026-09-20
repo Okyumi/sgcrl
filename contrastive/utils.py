@@ -162,7 +162,8 @@ class ObservationFilterWrapper(base.EnvironmentWrapper):
 def make_environment(env_name, start_index, end_index,
                      seed, fixed_start_end=None,
                      task_id=None, num_tasks=None,
-                     sawyer_success_mode='corrected'):
+                     sawyer_success_mode='corrected',
+                     truncate_on_success=False):
   """Creates the environment.
 
   Args:
@@ -187,7 +188,8 @@ def make_environment(env_name, start_index, end_index,
   np.random.seed(seed)
   gym_env, obs_dim, max_episode_steps = env_utils.load(
       env_name, fixed_start_end, task_id=task_id, num_tasks=num_tasks,
-      sawyer_success_mode=sawyer_success_mode)
+      sawyer_success_mode=sawyer_success_mode,
+      truncate_on_success=truncate_on_success)
   goal_indices = obs_dim + obs_to_goal_1d(np.arange(obs_dim), start_index,
                                           end_index)
   indices = np.concatenate([

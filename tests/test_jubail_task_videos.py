@@ -28,23 +28,32 @@ def _load_recorder():
 
 def test_video_configs():
   configs = cfg.build_configs()
-  assert len(configs) == 3
+  assert len(configs) == 5
   names = [c['variant'] for c in configs]
-  assert names == ['handle_nobc_gifs', 'push_gifs', 'handle_bc_train']
+  assert names == [
+      'handle_nobc_gifs', 'push_gifs', 'handle_bc_train',
+      'window_nobc_gifs', 'window_bc_train']
   assert [c['job_mode'] for c in configs] == [
-      'offline_gifs', 'offline_gifs', 'train']
+      'offline_gifs', 'offline_gifs', 'train',
+      'offline_gifs', 'train']
   assert configs[0]['single_task'] == 'sawyer_handle_press_side'
   assert configs[1]['single_task'] == 'sawyer_push'
+  assert configs[3]['single_task'] == 'sawyer_window_close'
+  assert configs[4]['single_task'] == 'sawyer_window_close'
   assert configs[0]['success_bc_weight'] == 0.0
   assert configs[2]['success_bc_weight'] == 0.1
-  assert configs[2]['success_bc_label_mode'] == 'terminal_episode'
+  assert configs[4]['success_bc_weight'] == 0.1
+  assert configs[4]['success_bc_label_mode'] == 'terminal_episode'
   assert configs[2]['eval_video_first_success'] is True
+  assert configs[4]['eval_video_first_success'] is True
   assert configs[2]['eval_record_video'] is True
   assert configs[2]['eval_video_every'] == 100_000
   assert configs[0]['first_success_step'] == 150_000
   assert configs[1]['first_success_step'] == 0
+  assert configs[3]['first_success_step'] == 250_000
   assert configs[0]['adapt_heads_only'] is False
   assert configs[2]['critic_mode'] == 'decomposed'
+  assert configs[4]['critic_mode'] == 'decomposed'
   assert all(c['seed'] == 6 for c in configs)
   assert all(c['network_width'] == 1024 for c in configs)
 

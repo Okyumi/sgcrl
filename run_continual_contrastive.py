@@ -386,16 +386,28 @@ flags.DEFINE_float('success_bc_weight', 0.0,
                    'Actor BC weight on retained task-goal successful actions.')
 flags.DEFINE_enum(
     'success_bc_label_mode', 'raw_horizon',
-    ('raw_horizon', 'terminal_episode', 'episode_sparse_reward'),
+    ('raw_horizon', 'terminal_episode', 'episode_sparse_reward',
+     'current_sparse_reward'),
     'How SuccessBC selects examples. raw_horizon preserves the historical '
     'H-step goal-distance proxy; terminal_episode uses only the final sparse '
-    'reward of the replay episode; episode_sparse_reward uses whether any '
-    'observed sparse reward in the episode is positive. Neither sparse-reward '
-    'mode requires mechanism coordinates or a success threshold.')
+    'reward of the replay episode; episode_sparse_reward copies every step '
+    'of an episode that ever saw a positive sparse reward; '
+    'current_sparse_reward inserts only transitions whose own sparse '
+    'reward is positive. All sparse-reward modes use the 0/1 env bit only.')
 flags.DEFINE_integer('success_buffer_capacity', 4096,
                      'Task-local successful-transition ring-buffer capacity.')
 flags.DEFINE_integer('success_bc_batch_size', 64,
                      'Successful actions sampled per actor update for BC.')
+flags.DEFINE_string(
+    'resume_checkpoint_file', '',
+    'Optional explicit pickle loaded before --start_task. Use this when the '
+    'predecessor lives under a different retention fingerprint. Empty means '
+    'load task_{start-1}.pkl through the ordinary checkpoint path.')
+flags.DEFINE_bool(
+    'truncate_on_success', False,
+    'End collection episodes on the first sparse success so replay has no '
+    'post-goal linger. Evaluation stays 150-step. Do not combine with '
+    'Success-BC; this is an alternative to the success buffer.')
 flags.DEFINE_integer('counterfactual_rank_interval_steps', 0,
                      'Env-step interval between exact-state rank collections; '
                      'zero disables the experiment and its extra environment.')
@@ -829,6 +841,7 @@ def _bridge_identity_config():
       'success_bc_batch_size': FLAGS.success_bc_batch_size,
       'actor_goal_mode': FLAGS.actor_goal_mode,
       'actor_success_score_weight': FLAGS.actor_success_score_weight,
+      'truncate_on_success': FLAGS.truncate_on_success,
       'counterfactual_rank_interval_steps':
           FLAGS.counterfactual_rank_interval_steps,
       'counterfactual_rank_num_anchors':
@@ -916,6 +929,7 @@ def _retention_identity_config():
       'success_inject_success_rate': float(FLAGS.success_inject_success_rate),
       'success_inject_target_frac': float(FLAGS.success_inject_target_frac),
       'success_inject_clone': bool(FLAGS.success_inject_clone),
+      'truncate_on_success': bool(FLAGS.truncate_on_success),
   }
 
 
@@ -930,6 +944,7 @@ def _retention_ckpt_suffix_needed():
       or float(FLAGS.actor_success_score_weight) > 0.0
       or float(FLAGS.success_bc_weight) > 0.0
       or bool(FLAGS.success_inject_enabled)
+      or bool(FLAGS.truncate_on_success)
   )
 
 
@@ -1109,6 +1124,19 @@ def load_ckpt(ckpt_dir, task_id, seed, critic_mode='persistent',
   with open(path, 'rb') as f:
     data = pickle.load(f)
   # Convert back to JAX arrays
+  data_jax = jax.tree_util.tree_map(
+      lambda x: jnp.array(x) if isinstance(x, np.ndarray) else x,
+      data)
+  print(f'  [ckpt] Loaded ← {path}', flush=True)
+  return data_jax
+
+
+def _read_ckpt_file(path):
+  """Load a checkpoint pickle from an explicit path."""
+  if not os.path.exists(path):
+    raise FileNotFoundError(f'No checkpoint found at {path}.')
+  with open(path, 'rb') as f:
+    data = pickle.load(f)
   data_jax = jax.tree_util.tree_map(
       lambda x: jnp.array(x) if isinstance(x, np.ndarray) else x,
       data)
@@ -1303,6 +1331,20 @@ def train_single_task(
   # obs_dim = STATE_DIM_UNIFIED + num_tasks, so state and goal have
   # identical dimensionality.  The contrastive critic sees the task ID
   # in both φ(s,a) and ψ(g).
+  truncate_on_success = bool(getattr(
+      continual_cfg, 'truncate_on_success', False))
+  success_bc_enabled = float(getattr(
+      continual_cfg, 'success_bc_weight', 0.0)) > 0.0
+  if truncate_on_success and success_bc_enabled:
+    raise ValueError(
+        'truncate_on_success is an alternative to Success-BC; set '
+        'success_bc_weight=0.')
+  if truncate_on_success:
+    print(
+        '  [truncate] collection freezes the simulator on first sparse '
+        'success so replay has no post-goal linger; eval stays live '
+        '150-step; Success-BC is off.',
+        flush=True)
   fixed_goal = FIXED_GOALS[env_name]
   _tid = task_id if FLAGS.use_task_id else None
   _ntasks = continual_cfg.num_tasks if FLAGS.use_task_id else None
@@ -1310,7 +1352,8 @@ def train_single_task(
       env_name, config.start_index, config.end_index,
       seed + task_id, fixed_start_end=fixed_goal,
       task_id=_tid, num_tasks=_ntasks,
-      sawyer_success_mode=FLAGS.sawyer_success_mode)
+      sawyer_success_mode=FLAGS.sawyer_success_mode,
+      truncate_on_success=truncate_on_success)
 
   config.obs_dim = obs_dim
   config.max_episode_steps = getattr(env, '_step_limit') + 1
@@ -1493,8 +1536,6 @@ def train_single_task(
       bool(getattr(continual_cfg, 'action_effect_enabled', False))
       and getattr(continual_cfg, 'action_effect_target_mode',
                   'psi_one_step') == 'raw_horizon')
-  success_bc_enabled = float(getattr(
-      continual_cfg, 'success_bc_weight', 0.0)) > 0.0
   actor_success_score_enabled = float(getattr(
       continual_cfg, 'actor_success_score_weight', 0.0)) > 0.0
   success_retention_enabled = (
@@ -1529,6 +1570,12 @@ def train_single_task(
     print(
         '  [success BC] retaining actions only from replay episodes with an '
         'observed positive sparse reward.', flush=True)
+  if (success_bc_enabled
+      and success_bc_label_mode == 'current_sparse_reward'):
+    print(
+        '  [success BC] retaining only transitions whose current sparse '
+        'reward is positive (eval still counts any in-episode success).',
+        flush=True)
   if actor_success_score_enabled:
     print(
         '  [actor success score] maximising critic score on success-buffer '
@@ -1674,6 +1721,15 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
+    if (success_retention_enabled
+        and success_bc_label_mode == 'current_sparse_reward'):
+      original_goal = sample.data.observation[:-1, config.obs_dim:]
+      extras.update({
+          'outcome_task_success': tf.cast(
+              sample.data.reward[:-1] > 0.0, tf.float32),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
     if actor_goal_mode in ('task', 'mix'):
       original_goal = sample.data.observation[:-1, config.obs_dim:]
       extras['actor_task_observation'] = tf.concat(
@@ -1765,6 +1821,16 @@ def train_single_task(
       extras.update({
           'outcome_task_success': tf.fill(
               [in_trajectory_repeats], episode_success),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
+    if (success_retention_enabled
+        and success_bc_label_mode == 'current_sparse_reward'):
+      original_goal = tf.gather(
+          sample.data.observation[:, config.obs_dim:], anchor_index)
+      extras.update({
+          'outcome_task_success': tf.cast(
+              tf.gather(sample.data.reward, anchor_index) > 0.0, tf.float32),
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
@@ -2057,7 +2123,8 @@ def train_single_task(
         env_name, config.start_index, config.end_index,
         seed + task_id + 10_000 * actor_id, fixed_start_end=fixed_goal,
         task_id=_tid, num_tasks=_ntasks,
-        sawyer_success_mode=FLAGS.sawyer_success_mode)
+        sawyer_success_mode=FLAGS.sawyer_success_mode,
+        truncate_on_success=truncate_on_success)
     extra_actor, extra_client = _make_collection_actor(actor_id)
     collection_envs.append(extra_env)
     collection_actors.append(extra_actor)
@@ -3922,6 +3989,7 @@ def main(_):
       success_bc_batch_size=FLAGS.success_bc_batch_size,
       actor_goal_mode=FLAGS.actor_goal_mode,
       actor_success_score_weight=FLAGS.actor_success_score_weight,
+      truncate_on_success=FLAGS.truncate_on_success,
       counterfactual_rank_interval_steps=
           FLAGS.counterfactual_rank_interval_steps,
       counterfactual_rank_num_anchors=
@@ -4179,7 +4247,10 @@ def main(_):
       return
     resume_checkpoint_dir = (
         FLAGS.resume_checkpoint_dir or FLAGS.checkpoint_dir)
-    ckpt = load_ckpt(resume_checkpoint_dir, start_task - 1, seed,
+    if FLAGS.resume_checkpoint_file:
+      ckpt = _read_ckpt_file(FLAGS.resume_checkpoint_file)
+    else:
+      ckpt = load_ckpt(resume_checkpoint_dir, start_task - 1, seed,
                       critic_mode=FLAGS.critic_mode,
                       use_task_id=FLAGS.use_task_id,
                       adapt_heads_only=FLAGS.adapt_heads_only,
@@ -4300,6 +4371,7 @@ def main(_):
                   'shared_repr_normalization':
                       FLAGS.shared_repr_normalization,
                   'resume_checkpoint_dir': FLAGS.resume_checkpoint_dir,
+                  'resume_checkpoint_file': FLAGS.resume_checkpoint_file,
                   'phi_task_width': FLAGS.phi_task_width,
                   'phi_task_depth': FLAGS.phi_task_depth,
                   'combine_mode': FLAGS.combine_mode,
