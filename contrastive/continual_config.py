@@ -124,9 +124,28 @@ class ContinualConfig:
   # raw_horizon preserves the historical H-step distance proxy.
   # terminal_episode preserves the completed pilot's final-step semantics.
   # episode_sparse_reward matches evaluation: any observed sparse reward.
+  # first_success_window clones [t_first-K+1, t_first] iff the last bit is 1.
+  # first_sparse_bit keeps only the first r>0 transition of the episode.
   success_bc_label_mode: str = 'raw_horizon'
+  success_bc_window: int = 64
   success_buffer_capacity: int = 4096
   success_bc_batch_size: int = 64
+  # If True, skip BC NLL when the critic's score varies across random
+  # actions at the observed success state (DCC already ranks). The
+  # stored a_succ is the cloning target only, never a ranking oracle.
+  success_bc_critic_gate: bool = False
+  # batch: σ_s is std of scores across the BC minibatch (legacy).
+  # local: σ_s is std of scores at s + ε z on this one observation.
+  success_bc_critic_gate_mode: str = 'batch'
+  # Local-mode jitter in z-score units of the BC-batch state std.
+  success_bc_critic_state_noise: float = 0.1
+  # Scale λ_succ by min(1, |D_succ| / (N0 * episode_len)) so the first
+  # lucky episode cannot overpower DCC. 0 disables (constant λ).
+  success_bc_warmup_episodes: int = 0
+  success_bc_episode_len: int = 150
+  # If >0, BC samples D_succ with exponential recency (half-life in
+  # episodes). 0 keeps uniform sampling.
+  success_bc_recency_half_life: float = 0.0
   # Actor train-eval goal alignment and critic-guided success retention.
   # Defaults preserve legacy HER-conditioned actor training.
   actor_goal_mode: str = 'her'  # her | task | mix

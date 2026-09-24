@@ -1167,6 +1167,12 @@ class SawyerShelfPlace(
     if self._fixed_start_end is not None:
       self._goal = np.array(self._fixed_start_end, dtype=np.float32)
       self._target_pos = self._goal.copy()
+      # MetaWorld random_init already moved the shelf body. Success and the
+      # observation use the fixed xyz above; put the mesh back under that
+      # xyz with the same body = goal - (0, 0, 0.3) rule as reset_model.
+      self.sim.model.body_pos[self.model.body_name2id('shelf')] = (
+          self._goal - np.array([0.0, 0.0, 0.3], dtype=np.float32))
+      sawyer_success.synchronize_simulator_after_reset(self)
     else:
       self._goal = self._target_pos.copy()
     return self._get_obs()

@@ -54,6 +54,22 @@ def list_step_ckpts(checkpoint_dir: Path, env_name: str, seed: int):
   return matches
 
 
+def list_task_step_ckpts(checkpoint_dir: Path, seed: int, task_id: int):
+  """Mid-task snapshots ``task_{id}_step_{N}.pkl`` under ``seed_{seed}``."""
+  matches = []
+  seed_dir = f'seed_{seed}'
+  step_re = re.compile(rf'task_{int(task_id)}_step_(\d+)\.pkl$')
+  for path in checkpoint_dir.rglob(f'task_{int(task_id)}_step_*.pkl'):
+    if path.parent.name != seed_dir:
+      continue
+    match = step_re.search(path.name)
+    if not match:
+      continue
+    matches.append((int(match.group(1)), path))
+  matches.sort()
+  return matches
+
+
 def pick_targets(ckpts, targets):
   if not ckpts:
     return []
@@ -86,18 +102,24 @@ class _PolicyActor:
     return np.asarray(self._apply_mode(observation), dtype=np.float32)
 
 
-def even_target_tokens(n: int = 10) -> list:
+def even_target_tokens(n: int = 10, horizon: int = 1_000_000) -> list:
   if n <= 0:
     return []
-  if n >= len(DEFAULT_EVEN_TARGETS):
-    return [str(step) for step in DEFAULT_EVEN_TARGETS]
-  idx = np.linspace(0, len(DEFAULT_EVEN_TARGETS) - 1, n).round().astype(int)
-  seen = []
-  for i in idx:
-    token = str(DEFAULT_EVEN_TARGETS[int(i)])
-    if token not in seen:
-      seen.append(token)
-  return seen
+  horizon = int(horizon)
+  if horizon <= 0:
+    raise ValueError('horizon must be positive')
+  if horizon == 1_000_000 and n <= len(DEFAULT_EVEN_TARGETS):
+    if n >= len(DEFAULT_EVEN_TARGETS):
+      return [str(step) for step in DEFAULT_EVEN_TARGETS]
+    idx = np.linspace(0, len(DEFAULT_EVEN_TARGETS) - 1, n).round().astype(int)
+    seen = []
+    for i in idx:
+      token = str(DEFAULT_EVEN_TARGETS[int(i)])
+      if token not in seen:
+        seen.append(token)
+    return seen
+  step = max(horizon // n, 1)
+  return [str(step * i) for i in range(1, n + 1)]
 
 
 def _linear_layers(policy_params, prefix):
@@ -231,6 +253,8 @@ def main():
   parser.add_argument('--seed', type=int, default=6)
   parser.add_argument('--label', default='dcc')
   parser.add_argument('--even', type=int, default=10)
+  parser.add_argument('--horizon', type=int, default=1_000_000,
+                      help='Budget used to space --even mid-ckpt GIFs.')
   parser.add_argument('--rollouts', type=int, default=10,
                       help='Eval rollouts when --checkpoint-file is set.')
   parser.add_argument('--first-success-step', type=int, default=0,
@@ -274,13 +298,18 @@ def main():
     ckpt_dir = str(ckpt_path.parent)
   else:
     ckpt_dir_path = Path(args.checkpoint_dir).expanduser().resolve()
-    ckpts = list_step_ckpts(ckpt_dir_path, args.env_name, args.seed)
+    if int(args.task_id) > 0:
+      ckpts = list_task_step_ckpts(
+          ckpt_dir_path, args.seed, int(args.task_id))
+    else:
+      ckpts = list_step_ckpts(ckpt_dir_path, args.env_name, args.seed)
     if not ckpts:
       print(f'No mid-task checkpoints for {args.env_name} seed={args.seed} '
-            f'under {ckpt_dir_path}', file=sys.stderr)
+            f'task_id={args.task_id} under {ckpt_dir_path}', file=sys.stderr)
       return 1
 
-    chosen = pick_targets(ckpts, even_target_tokens(args.even))
+    chosen = pick_targets(
+        ckpts, even_target_tokens(args.even, horizon=args.horizon))
     for step, path in chosen:
       records.append(_record_one(
           args, step, path, output_dir, args.label, hunt_success=False))

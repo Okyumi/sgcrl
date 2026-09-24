@@ -1,7 +1,8 @@
 # One Success-BC rule for Tasks 4/7 and 5/8
 
 Date: 2026-09-20  
-Status: 1M diagnostic grid launched (`DRAFT_jubail_universal_success_bc.sh`).
+Status: superseded. Task 4/7 redo uses `terminal_episode` at 8M
+(`DRAFT_jubail_terminal_bc_task47.sh`). The 1M mixed grid was cancelled.
 
 ## Motivation
 

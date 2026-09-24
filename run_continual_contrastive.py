@@ -75,6 +75,7 @@ from contrastive import counterfactual_ranking
 from contrastive import goal_semantics
 from contrastive import phase_gated_control
 from contrastive import outcome_credit
+from contrastive import success_bc_labels
 from contrastive import task58_reevaluation
 from contrastive import critic_phase_probe
 from contrastive import success_propagation_probe
@@ -387,17 +388,53 @@ flags.DEFINE_float('success_bc_weight', 0.0,
 flags.DEFINE_enum(
     'success_bc_label_mode', 'raw_horizon',
     ('raw_horizon', 'terminal_episode', 'episode_sparse_reward',
-     'current_sparse_reward'),
+     'current_sparse_reward', 'first_success_window', 'first_sparse_bit'),
     'How SuccessBC selects examples. raw_horizon preserves the historical '
     'H-step goal-distance proxy; terminal_episode uses only the final sparse '
     'reward of the replay episode; episode_sparse_reward copies every step '
     'of an episode that ever saw a positive sparse reward; '
     'current_sparse_reward inserts only transitions whose own sparse '
-    'reward is positive. All sparse-reward modes use the 0/1 env bit only.')
+    'reward is positive; first_success_window clones the last K steps up '
+    'to the first sparse hit iff the episode is still successful at the '
+    'final transition; first_sparse_bit keeps only the first positive '
+    'sparse bit of the episode. All sparse-reward modes use the 0/1 env '
+    'bit only.')
+flags.DEFINE_integer(
+    'success_bc_window', 64,
+    'For first_success_window, keep this many transitions ending at the '
+    'first positive sparse reward. Ignored by other label modes.')
+flags.DEFINE_bool(
+    'success_bc_critic_gate', False,
+    'Scale Success-BC NLL by how action-uninformative the DCC critic '
+    'is at the observed success state. The stored success action is '
+    'the cloning target only, not a ranking label.')
+flags.DEFINE_enum(
+    'success_bc_critic_gate_mode', 'batch',
+    ('batch', 'local'),
+    'How σ_s is measured when the critic gate is on. batch uses score '
+    'std across the BC minibatch (legacy). local jitters this one '
+    'observed state and keeps g and π(s) fixed.')
+flags.DEFINE_float(
+    'success_bc_critic_state_noise', 0.1,
+    'Local-gate state jitter in z-score units of the BC-batch per-dim '
+    'state std. Ignored when success_bc_critic_gate_mode=batch.')
 flags.DEFINE_integer('success_buffer_capacity', 4096,
                      'Task-local successful-transition ring-buffer capacity.')
 flags.DEFINE_integer('success_bc_batch_size', 64,
                      'Successful actions sampled per actor update for BC.')
+flags.DEFINE_integer(
+    'success_bc_warmup_episodes', 0,
+    'If >0, multiply λ_succ by min(1, |D_succ| / (this * episode_len)) '
+    'so BC starts immediately but cannot overpower DCC on the first '
+    'lucky episode. 0 keeps a constant λ_succ.')
+flags.DEFINE_integer(
+    'success_bc_episode_len', 150,
+    'Transitions per stored episode for the BC warmup scale. MetaWorld '
+    'horizon is 150.')
+flags.DEFINE_float(
+    'success_bc_recency_half_life', 0.0,
+    'If >0, sample D_succ with exponential recency; this is the half-life '
+    'in episodes. 0 keeps uniform sampling.')
 flags.DEFINE_string(
     'resume_checkpoint_file', '',
     'Optional explicit pickle loaded before --start_task. Use this when the '
@@ -837,8 +874,14 @@ def _bridge_identity_config():
       'outcome_progress_std_floor': FLAGS.outcome_progress_std_floor,
       'success_bc_weight': FLAGS.success_bc_weight,
       'success_bc_label_mode': FLAGS.success_bc_label_mode,
+      'success_bc_window': FLAGS.success_bc_window,
+      'success_bc_critic_gate': FLAGS.success_bc_critic_gate,
+      'success_bc_critic_gate_mode': FLAGS.success_bc_critic_gate_mode,
+      'success_bc_critic_state_noise': FLAGS.success_bc_critic_state_noise,
       'success_buffer_capacity': FLAGS.success_buffer_capacity,
       'success_bc_batch_size': FLAGS.success_bc_batch_size,
+      'success_bc_warmup_episodes': FLAGS.success_bc_warmup_episodes,
+      'success_bc_episode_len': FLAGS.success_bc_episode_len,
       'actor_goal_mode': FLAGS.actor_goal_mode,
       'actor_success_score_weight': FLAGS.actor_success_score_weight,
       'truncate_on_success': FLAGS.truncate_on_success,
@@ -924,6 +967,13 @@ def _retention_identity_config():
       'actor_success_score_weight': float(FLAGS.actor_success_score_weight),
       'success_bc_weight': float(FLAGS.success_bc_weight),
       'success_bc_label_mode': str(FLAGS.success_bc_label_mode),
+      'success_bc_window': int(FLAGS.success_bc_window),
+      'success_bc_critic_gate': bool(FLAGS.success_bc_critic_gate),
+      'success_bc_critic_gate_mode': str(FLAGS.success_bc_critic_gate_mode),
+      'success_bc_critic_state_noise': float(
+          FLAGS.success_bc_critic_state_noise),
+      'success_bc_warmup_episodes': int(FLAGS.success_bc_warmup_episodes),
+      'success_bc_episode_len': int(FLAGS.success_bc_episode_len),
       'success_inject_enabled': bool(FLAGS.success_inject_enabled),
       'success_inject_n': int(FLAGS.success_inject_n),
       'success_inject_success_rate': float(FLAGS.success_inject_success_rate),
@@ -1542,6 +1592,7 @@ def train_single_task(
       success_bc_enabled or actor_success_score_enabled)
   success_bc_label_mode = getattr(
       continual_cfg, 'success_bc_label_mode', 'raw_horizon')
+  success_bc_window = int(getattr(continual_cfg, 'success_bc_window', 64))
   actor_goal_mode = str(getattr(continual_cfg, 'actor_goal_mode', 'her'))
   counterfactual_rank_enabled = (
       bool(getattr(continual_cfg, 'action_effect_enabled', False))
@@ -1565,6 +1616,23 @@ def train_single_task(
     print(
         '  [success BC] retaining actions only from episodes whose final '
         'sparse reward is positive.', flush=True)
+  warmup_episodes = int(getattr(
+      continual_cfg, 'success_bc_warmup_episodes', 0))
+  episode_len = int(getattr(continual_cfg, 'success_bc_episode_len', 150))
+  if success_bc_enabled and warmup_episodes > 0:
+    print(
+        '  [success BC] λ warmup: clone immediately from D_succ, scale '
+        f'λ by min(1, |D_succ|/({warmup_episodes}*{episode_len})); '
+        'uniform sampling unchanged.',
+        flush=True)
+  recency_half_life = float(getattr(
+      continual_cfg, 'success_bc_recency_half_life', 0.0))
+  if success_bc_enabled and recency_half_life > 0:
+    print(
+        '  [success BC] recency sampling: half-life '
+        f'{recency_half_life:g} episodes (overweight recent terminal '
+        'successes; buffer stays large).',
+        flush=True)
   if (success_bc_enabled
       and success_bc_label_mode == 'episode_sparse_reward'):
     print(
@@ -1575,6 +1643,30 @@ def train_single_task(
     print(
         '  [success BC] retaining only transitions whose current sparse '
         'reward is positive (eval still counts any in-episode success).',
+        flush=True)
+  if (success_bc_enabled
+      and success_bc_label_mode == 'first_success_window'):
+    if success_bc_window <= 0:
+      raise ValueError('success_bc_window must be positive.')
+    print(
+        '  [success BC] first-success window '
+        f'K={success_bc_window}: clone [t_first-K+1, t_first] iff the '
+        'final sparse reward is still positive.',
+        flush=True)
+  if (success_bc_enabled
+      and success_bc_label_mode == 'first_sparse_bit'):
+    print(
+        '  [success BC] retaining only the first sparse-bit=1 transition '
+        'of each replay episode (later 1-bits are linger / hold).',
+        flush=True)
+  if success_bc_enabled and bool(getattr(
+      continual_cfg, 'success_bc_critic_gate', False)):
+    print(
+        '  [success BC] critic gate: clone when score(s, a, g) is flat '
+        'across random actions at the observed success state, relative '
+        f"to {getattr(continual_cfg, 'success_bc_critic_gate_mode', 'batch')} "
+        'σ_s (batch = other success states; local = jitter this s). '
+        'a_succ is the NLL target only, not a ranking label.',
         flush=True)
   if actor_success_score_enabled:
     print(
@@ -1730,6 +1822,26 @@ def train_single_task(
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
+    if (success_retention_enabled
+        and success_bc_label_mode == 'first_success_window'):
+      original_goal = sample.data.observation[:-1, config.obs_dim:]
+      extras.update({
+          'outcome_task_success':
+              success_bc_labels.tensorflow_first_success_window(
+                  tf, sample.data.reward, success_bc_window),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
+    if (success_retention_enabled
+        and success_bc_label_mode == 'first_sparse_bit'):
+      original_goal = sample.data.observation[:-1, config.obs_dim:]
+      extras.update({
+          'outcome_task_success':
+              success_bc_labels.tensorflow_first_sparse_bit(
+                  tf, sample.data.reward),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
     if actor_goal_mode in ('task', 'mix'):
       original_goal = sample.data.observation[:-1, config.obs_dim:]
       extras['actor_task_observation'] = tf.concat(
@@ -1831,6 +1943,28 @@ def train_single_task(
       extras.update({
           'outcome_task_success': tf.cast(
               tf.gather(sample.data.reward, anchor_index) > 0.0, tf.float32),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
+    if (success_retention_enabled
+        and success_bc_label_mode == 'first_success_window'):
+      original_goal = tf.gather(
+          sample.data.observation[:, config.obs_dim:], anchor_index)
+      window_keep = success_bc_labels.tensorflow_first_success_window(
+          tf, sample.data.reward, success_bc_window)
+      extras.update({
+          'outcome_task_success': tf.gather(window_keep, anchor_index),
+          'outcome_retention_observation':
+              tf.concat([state, original_goal], axis=1),
+      })
+    if (success_retention_enabled
+        and success_bc_label_mode == 'first_sparse_bit'):
+      original_goal = tf.gather(
+          sample.data.observation[:, config.obs_dim:], anchor_index)
+      first_keep = success_bc_labels.tensorflow_first_sparse_bit(
+          tf, sample.data.reward)
+      extras.update({
+          'outcome_task_success': tf.gather(first_keep, anchor_index),
           'outcome_retention_observation':
               tf.concat([state, original_goal], axis=1),
       })
@@ -3985,8 +4119,15 @@ def main(_):
       outcome_progress_std_floor=FLAGS.outcome_progress_std_floor,
       success_bc_weight=FLAGS.success_bc_weight,
       success_bc_label_mode=FLAGS.success_bc_label_mode,
+      success_bc_window=FLAGS.success_bc_window,
+      success_bc_critic_gate=FLAGS.success_bc_critic_gate,
+      success_bc_critic_gate_mode=FLAGS.success_bc_critic_gate_mode,
+      success_bc_critic_state_noise=FLAGS.success_bc_critic_state_noise,
       success_buffer_capacity=FLAGS.success_buffer_capacity,
       success_bc_batch_size=FLAGS.success_bc_batch_size,
+      success_bc_warmup_episodes=FLAGS.success_bc_warmup_episodes,
+      success_bc_episode_len=FLAGS.success_bc_episode_len,
+      success_bc_recency_half_life=FLAGS.success_bc_recency_half_life,
       actor_goal_mode=FLAGS.actor_goal_mode,
       actor_success_score_weight=FLAGS.actor_success_score_weight,
       truncate_on_success=FLAGS.truncate_on_success,
@@ -4416,9 +4557,20 @@ def main(_):
                       FLAGS.outcome_progress_std_floor,
                   'success_bc_weight': FLAGS.success_bc_weight,
                   'success_bc_label_mode': FLAGS.success_bc_label_mode,
+                  'success_bc_window': FLAGS.success_bc_window,
+                  'success_bc_critic_gate': FLAGS.success_bc_critic_gate,
+                  'success_bc_critic_gate_mode':
+                      FLAGS.success_bc_critic_gate_mode,
+                  'success_bc_critic_state_noise':
+                      FLAGS.success_bc_critic_state_noise,
                   'success_buffer_capacity':
                       FLAGS.success_buffer_capacity,
                   'success_bc_batch_size': FLAGS.success_bc_batch_size,
+                  'success_bc_warmup_episodes':
+                      FLAGS.success_bc_warmup_episodes,
+                  'success_bc_episode_len': FLAGS.success_bc_episode_len,
+                  'success_bc_recency_half_life':
+                      FLAGS.success_bc_recency_half_life,
                   'actor_goal_mode': FLAGS.actor_goal_mode,
                   'actor_success_score_weight':
                       FLAGS.actor_success_score_weight,

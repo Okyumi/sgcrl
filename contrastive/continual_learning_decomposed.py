@@ -232,10 +232,22 @@ class ContinualDecomposedLearner(acme.Learner):
         continual_config, 'success_bc_weight', 0.0))
     self._success_bc_label_mode = getattr(
         continual_config, 'success_bc_label_mode', 'raw_horizon')
+    self._success_bc_critic_gate = bool(getattr(
+        continual_config, 'success_bc_critic_gate', False))
+    self._success_bc_critic_gate_mode = str(getattr(
+        continual_config, 'success_bc_critic_gate_mode', 'batch'))
+    self._success_bc_critic_state_noise = float(getattr(
+        continual_config, 'success_bc_critic_state_noise', 0.1))
     self._success_buffer_capacity = int(getattr(
         continual_config, 'success_buffer_capacity', 4096))
     self._success_bc_batch_size = int(getattr(
         continual_config, 'success_bc_batch_size', 64))
+    self._success_bc_warmup_episodes = int(getattr(
+        continual_config, 'success_bc_warmup_episodes', 0))
+    self._success_bc_episode_len = int(getattr(
+        continual_config, 'success_bc_episode_len', 150))
+    self._success_bc_recency_half_life = float(getattr(
+        continual_config, 'success_bc_recency_half_life', 0.0))
     self._actor_goal_mode = str(getattr(
         continual_config, 'actor_goal_mode', 'her'))
     self._actor_success_score_weight = float(getattr(
@@ -285,18 +297,31 @@ class ContinualDecomposedLearner(acme.Learner):
       if self._counterfactual_rank_min_gap < 0:
         raise ValueError('counterfactual rank minimum gap cannot be negative.')
     if self._success_buffer_enabled:
+      if self._success_bc_critic_gate_mode not in ('batch', 'local'):
+        raise ValueError(
+            'success_bc_critic_gate_mode must be batch or local.')
+      if self._success_bc_critic_state_noise <= 0:
+        raise ValueError('success_bc_critic_state_noise must be positive.')
       if self._success_bc_label_mode not in (
           'raw_horizon', 'terminal_episode', 'episode_sparse_reward',
-          'current_sparse_reward'):
+          'current_sparse_reward', 'first_success_window',
+          'first_sparse_bit'):
         raise ValueError(
             'success_bc_label_mode must be raw_horizon, terminal_episode, '
-            'episode_sparse_reward, or current_sparse_reward.')
+            'episode_sparse_reward, current_sparse_reward, '
+            'first_success_window, or first_sparse_bit.')
       if (self._success_bc_label_mode == 'raw_horizon'
           and self._action_effect_target_mode != 'raw_horizon'):
         raise ValueError(
             'raw_horizon success retention requires raw_horizon targets.')
       if self._success_buffer_capacity <= 0 or self._success_bc_batch_size <= 0:
         raise ValueError('Success-buffer capacity and batch size must be > 0.')
+      if self._success_bc_warmup_episodes < 0:
+        raise ValueError('success_bc_warmup_episodes must be >= 0.')
+      if self._success_bc_episode_len <= 0:
+        raise ValueError('success_bc_episode_len must be positive.')
+      if self._success_bc_recency_half_life < 0.0:
+        raise ValueError('success_bc_recency_half_life must be >= 0.')
     if self._action_effect_enabled:
       if (self._action_effect_target_mode == 'psi_one_step'
           and (getattr(decomp_nets, 'combine_mode', 'add') != 'add'
@@ -515,8 +540,14 @@ class ContinualDecomposedLearner(acme.Learner):
     outcome_progress_ema_decay = self._outcome_progress_ema_decay
     outcome_progress_std_floor = self._outcome_progress_std_floor
     success_bc_weight = self._success_bc_weight
+    success_bc_critic_gate = self._success_bc_critic_gate
+    success_bc_critic_gate_mode = self._success_bc_critic_gate_mode
+    success_bc_critic_state_noise = self._success_bc_critic_state_noise
     success_buffer_capacity = self._success_buffer_capacity
     success_bc_batch_size = self._success_bc_batch_size
+    success_bc_warmup_episodes = self._success_bc_warmup_episodes
+    success_bc_episode_len = self._success_bc_episode_len
+    success_bc_recency_half_life = self._success_bc_recency_half_life
     actor_goal_mode = self._actor_goal_mode
     actor_success_score_weight = self._actor_success_score_weight
     success_buffer_enabled = self._success_buffer_enabled
@@ -796,6 +827,7 @@ class ContinualDecomposedLearner(acme.Learner):
                       phi_task_params, psi_params, u_task_params,
                       control_q_scale_ema, success_buffer_observation,
                       success_buffer_action, success_buffer_size,
+                      success_buffer_index,
                       counterfactual_rank_updates, log_alpha, transitions,
                       key):
       """Actor loss: matches continual_learning.py:408-438.
@@ -852,8 +884,23 @@ class ContinualDecomposedLearner(acme.Learner):
         key, action_key, bc_key = jax.random.split(key, 3)
       if success_buffer_enabled:
         safe_size = jnp.maximum(success_buffer_size, 1)
-        bc_index = jax.random.randint(
-            bc_key, (success_bc_batch_size,), 0, safe_size)
+        if success_bc_recency_half_life > 0:
+          positions = jnp.arange(success_buffer_capacity)
+          newest = (success_buffer_index - 1) % success_buffer_capacity
+          age = (newest - positions) % success_buffer_capacity
+          filled = age < safe_size
+          denom = (
+              success_bc_recency_half_life
+              * float(success_bc_episode_len))
+          logits = (
+              -jnp.log(2.0) * age.astype(jnp.float32)
+              / jnp.maximum(denom, 1.0))
+          logits = jnp.where(filled, logits, -1e9)
+          bc_index = jax.random.categorical(
+              bc_key, logits, shape=(success_bc_batch_size,))
+        else:
+          bc_index = jax.random.randint(
+              bc_key, (success_bc_batch_size,), 0, safe_size)
         bc_observation = success_buffer_observation[bc_index]
         bc_action = success_buffer_action[bc_index]
       else:
@@ -918,14 +965,95 @@ class ContinualDecomposedLearner(acme.Learner):
 
       if success_bc_weight > 0:
         bc_dist_params = policy_network.apply(policy_params, bc_observation)
-        bc_loss = -jnp.mean(log_prob_fn(bc_dist_params, bc_action))
+        bc_nll = -log_prob_fn(bc_dist_params, bc_action)
+        if success_bc_critic_gate:
+          # Probe the critic only. a_succ is the NLL target, not a
+          # ranking label. Random actions measure σ_a at this (s, g).
+          num_probes = 8
+
+          def _paired(obs, action):
+            return decomp_nets.apply_paired_score(
+                b_shared_params, h_phi_params, phi_task_params,
+                psi_params, obs, action)
+
+          if success_bc_critic_gate_mode == 'local':
+            # Jitter this one observed state; keep g and a_π fixed.
+            # Do not rebind obs_dim/state/goal: actor_loss_fn already
+            # closed over obs_dim and uses state/goal for the DCC actor.
+            key, z_key, pi_key, act_key = jax.random.split(key, 4)
+            bc_state = bc_observation[:, :obs_dim]
+            bc_goal = bc_observation[:, obs_dim:]
+            state_std = jax.lax.stop_gradient(
+                jnp.std(bc_state, axis=0, keepdims=True))
+            state_std = jnp.maximum(state_std, 1e-6)
+            z = jax.random.normal(
+                z_key, (num_probes, bc_state.shape[0], obs_dim))
+            state_pert = (
+                bc_state[None, :, :]
+                + success_bc_critic_state_noise * state_std[None, :, :] * z)
+            goal_pert = jnp.broadcast_to(
+                bc_goal[None, :, :],
+                (num_probes, bc_goal.shape[0], bc_goal.shape[1]))
+            obs_pert = jnp.concatenate([state_pert, goal_pert], axis=-1)
+            a_pi = sample_fn(bc_dist_params, pi_key)
+            a_pi_k = jnp.broadcast_to(
+                a_pi[None, :, :],
+                (num_probes, a_pi.shape[0], a_pi.shape[1]))
+            scores_s = jax.vmap(_paired)(obs_pert, a_pi_k)
+            sigma_s = jnp.std(scores_s, axis=0)
+            a_probe = jax.random.uniform(
+                act_key,
+                (num_probes, bc_observation.shape[0],
+                 decomp_nets.action_dim),
+                minval=-1.0, maxval=1.0)
+            scores_a = jax.vmap(
+                lambda action: _paired(bc_observation, action))(a_probe)
+            sigma_a = jnp.std(scores_a, axis=0)
+          else:
+            key, probe_key = jax.random.split(key)
+            a_probe = jax.random.uniform(
+                probe_key,
+                (num_probes, bc_observation.shape[0],
+                 decomp_nets.action_dim),
+                minval=-1.0, maxval=1.0)
+            probe_scores = jax.vmap(
+                lambda action: _paired(bc_observation, action))(a_probe)
+            sigma_a = jnp.std(probe_scores, axis=0)
+            sigma_s = jnp.std(jnp.mean(probe_scores, axis=0))
+          denom = sigma_s + sigma_a
+          gate = jnp.where(
+              denom > 1e-6, sigma_s / denom, jnp.ones_like(sigma_a))
+          gate = jax.lax.stop_gradient(gate)
+          bc_loss = jnp.mean(gate * bc_nll)
+          bc_gate_mean = jnp.mean(gate)
+          bc_sigma_a = jnp.mean(sigma_a)
+          bc_sigma_s = jnp.mean(sigma_s)
+        else:
+          bc_loss = jnp.mean(bc_nll)
+          bc_gate_mean = jnp.asarray(1.0, dtype=jnp.float32)
+          bc_sigma_a = jnp.asarray(0.0, dtype=jnp.float32)
+          bc_sigma_s = jnp.asarray(0.0, dtype=jnp.float32)
         bc_active = (success_buffer_size > 0).astype(jnp.float32)
-        weighted_bc_loss = success_bc_weight * bc_active * bc_loss
+        if success_bc_warmup_episodes > 0:
+          warmup_n = float(
+              success_bc_warmup_episodes * success_bc_episode_len)
+          bc_scale = jnp.minimum(
+              success_buffer_size.astype(jnp.float32)
+              / jnp.maximum(warmup_n, 1.0),
+              1.0)
+        else:
+          bc_scale = jnp.asarray(1.0, dtype=jnp.float32)
+        weighted_bc_loss = (
+            success_bc_weight * bc_active * bc_scale * bc_loss)
         actor_loss = actor_loss + weighted_bc_loss
       else:
         bc_loss = jnp.asarray(0.0)
         bc_active = jnp.asarray(0.0)
         weighted_bc_loss = jnp.asarray(0.0)
+        bc_scale = jnp.asarray(1.0)
+        bc_gate_mean = jnp.asarray(1.0)
+        bc_sigma_a = jnp.asarray(0.0)
+        bc_sigma_s = jnp.asarray(0.0)
 
       # Critic-guided retention on success states (no action cloning).
       if actor_success_score_weight > 0:
@@ -960,7 +1088,13 @@ class ContinualDecomposedLearner(acme.Learner):
           control_score=jnp.mean(control_score),
           success_bc_loss=bc_loss,
           success_bc_active=bc_active,
+          success_bc_gate_mean=bc_gate_mean,
+          success_bc_sigma_a=bc_sigma_a,
+          success_bc_sigma_s=bc_sigma_s,
           success_bc_weighted_loss=weighted_bc_loss,
+          success_bc_warmup_scale=bc_scale,
+          success_bc_effective_weight=(
+              success_bc_weight * bc_active * bc_scale),
           success_bc_to_dcc_ratio=(
               jnp.abs(weighted_bc_loss)
               / jnp.maximum(jnp.abs(dcc_actor_loss), 1e-8)),
@@ -1121,6 +1255,7 @@ class ContinualDecomposedLearner(acme.Learner):
               state.policy_params, new_b_shared, new_h_phi, new_phi_task,
               new_psi, new_u_task, state.control_q_scale_ema,
               new_success_observation, new_success_action, new_success_size,
+              new_success_index,
               state.counterfactual_rank_updates, log_alpha, transitions,
               k_actor)
       act_upd, act_opt = actor_opt.update(a_grad, state.policy_opt_state)
@@ -1229,7 +1364,16 @@ class ContinualDecomposedLearner(acme.Learner):
             'retention/bc_to_dcc_loss_ratio':
                 a_aux['success_bc_to_dcc_ratio'],
             'retention/bc_weight': success_bc_weight,
+            'retention/bc_warmup_scale': a_aux['success_bc_warmup_scale'],
+            'retention/bc_effective_weight':
+                a_aux['success_bc_effective_weight'],
             'retention/bc_active': a_aux['success_bc_active'],
+            'retention/bc_critic_gate_mean':
+                a_aux['success_bc_gate_mean'],
+            'retention/bc_critic_sigma_a':
+                a_aux['success_bc_sigma_a'],
+            'retention/bc_critic_sigma_s':
+                a_aux['success_bc_sigma_s'],
         })
       if actor_success_score_weight > 0:
         metrics.update({
