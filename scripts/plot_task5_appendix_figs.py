@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Appendix figures for the Task-5 contrastive-critic failure.
 
-Three figures, measured values only (seed 6, no invented CIs):
+Figures (measured seed-6 probes only; no invented CIs):
 
-  1. Same-state action advice vs state-induced score variation
-  2. Feature-shuffle retrieval drops (mechanism xy / z / hand / action)
+  1. Hover action advice: press rank, gradient compass, std_a vs std_s
+  2. State-similarity probe: shuffle heatmap, retrieval slope, occupancy
   3. 20% success-mass inject: eval success and HER success over training
 
 Sources:
@@ -169,13 +169,23 @@ def load_action_advice_rows(
 
 
 def shuffle_drops(blob: dict) -> dict:
+  retrieval = blob['retrieval']
+  density = blob['density']['all_states']
   return {
-      'baseline': float(blob['retrieval']['baseline_accuracy']),
-      'mech_xy': float(blob['retrieval']['state_mech_xy_drop']),
-      'mech_z': float(blob['retrieval']['state_mech_z_drop']),
-      'hand': float(blob['retrieval']['state_hand_drop']),
-      'action': float(blob['retrieval']['action_drop']),
-      'n_pairs': float(blob['retrieval']['n_pairs']),
+      'baseline': float(retrieval['baseline_accuracy']),
+      'mech_xy': float(retrieval['state_mech_xy_drop']),
+      'mech_z': float(retrieval['state_mech_z_drop']),
+      'hand': float(retrieval['state_hand_drop']),
+      'action': float(retrieval['action_drop']),
+      'acc_xy': float(retrieval['state_mech_xy_accuracy']),
+      'acc_z': float(retrieval['state_mech_z_accuracy']),
+      'acc_hand': float(retrieval['state_hand_accuracy']),
+      'acc_action': float(retrieval['action_accuracy']),
+      'n_pairs': float(retrieval['n_pairs']),
+      'frac_success_band': float(density['frac_in_band']),
+      'frac_progress': float(density.get('frac_in_progress_band', 0.0)),
+      'xy_std': float(density['xy_std']),
+      'z_std': float(density['z_std']),
       'd_z_pi': float(
           blob['one_step_mechanism_delta']['pi']['d_mech_z']['mean']),
       'd_z_press': float(
@@ -266,94 +276,134 @@ def load_inject_series(log_dir: Path | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Figure 1
+# Figure 1 — hover action advice (rank, gradient, variance)
 # ---------------------------------------------------------------------------
 
+def _draw_compass(ax, cos_val, color):
+  """Unit circle: press axis along +x, critic gradient at arccos(cos)."""
+  theta = float(np.arccos(np.clip(cos_val, -1.0, 1.0)))
+  ring = plt.Circle((0.0, 0.0), 1.0, fill=False, color=SPINE, lw=0.8, zorder=1)
+  ax.add_patch(ring)
+  ax.plot([-1.08, 1.08], [0, 0], color=SPINE, lw=0.6, zorder=1)
+  ax.plot([0, 0], [-0.18, 1.08], color=SPINE, lw=0.6, zorder=1)
+  ax.annotate(
+      '', xy=(1.0, 0.0), xytext=(0.0, 0.0),
+      arrowprops=dict(
+          arrowstyle='-|>', color=REF, lw=1.3,
+          mutation_scale=9),
+      zorder=2)
+  ax.text(1.18, 0.0, 'press', fontsize=6.6, color=INK_MUTED, va='center', ha='left')
+  gx, gy = np.cos(theta), np.sin(theta)
+  ax.annotate(
+      '', xy=(gx, gy), xytext=(0.0, 0.0),
+      arrowprops=dict(
+          arrowstyle='-|>', color=color, lw=1.8,
+          mutation_scale=11),
+      zorder=3)
+  ax.plot(gx, gy, 'o', color=color, ms=4.0, zorder=4,
+          markeredgecolor='white', markeredgewidth=0.5)
+  ax.set_xlim(-1.35, 1.55)
+  ax.set_ylim(-0.35, 1.25)
+  ax.set_aspect('equal')
+  ax.axis('off')
+
+
 def fig_state_vs_action(rows, out_pdf: Path, out_png: Path, csv_rows: list):
-  fig, axes = plt.subplots(2, 2, figsize=(7.16, 4.55))
-  fig.subplots_adjust(
-      left=0.09, right=0.99, top=0.90, bottom=0.14, wspace=0.38, hspace=0.52)
-  xs = np.arange(len(rows))
-  colors = [r['color'] for r in rows]
-  labels = [r['label'] for r in rows]
-  width = 0.62
+  """Match the appendix table: Task 5 at 100k vs Push at 250k."""
+  shown = [r for r in rows if r['label'] in ('Handle 100k', 'Push 250k')]
+  fig = plt.figure(figsize=(7.16, 2.42))
+  gs = fig.add_gridspec(
+      1, 3, width_ratios=[1.05, 1.15, 1.15],
+      left=0.07, right=0.99, top=0.80, bottom=0.18, wspace=0.38)
+  ax_r, ax_c, ax_v = (fig.add_subplot(gs[0, i]) for i in range(3))
 
-  ax = axes[0, 0]
-  gaps = [r['gap'] for r in rows]
-  ax.axhline(0.0, color=REF, lw=0.7, ls=(0, (3.2, 2.4)), zorder=1)
-  ax.bar(xs, gaps, width=width, color=colors, zorder=3)
-  _style_ax(ax)
-  ax.set_xticks(xs)
-  ax.set_xticklabels(labels, fontsize=7.2)
-  ax.set_ylabel('Press $-$ $\\pi$ score')
-  ax.set_ylim(-0.55, 2.45)
-  _panel_label(ax, 'A')
-  for x, y in zip(xs, gaps):
-    va = 'bottom' if y >= 0 else 'top'
-    _annotate_bar(ax, x, y, f'{y:+.2f}', va=va)
+  # A — press rank among 34 candidate actions
+  _panel_label(ax_r, 'A')
+  ax_r.axhspan(16.5, 18.5, color='#EEF2F6', zorder=0)
+  ax_r.axhline(17.5, color=REF, lw=0.7, ls=(0, (3.2, 2.4)), zorder=1)
+  ax_r.text(
+      -0.38, 17.5, 'chance', fontsize=6.6, color=INK_MUTED,
+      ha='right', va='center')
+  for i, row in enumerate(shown):
+    ax_r.plot([i, i], [1, 34], color=SPINE, lw=1.1, zorder=1)
+    ax_r.plot(
+        i, row['rank'], 'o', color=row['color'], ms=9.5, zorder=4,
+        markeredgecolor='white', markeredgewidth=0.7)
+    rank_txt = f"{row['rank']:.1f}" if row['rank'] >= 2 else f"{row['rank']:.2f}"
+    ax_r.annotate(
+        rank_txt, xy=(i, row['rank']),
+        xytext=(8, 0), textcoords='offset points',
+        fontsize=8.0, fontweight='semibold', color=row['color'], va='center')
+    ax_r.text(
+        i, 36.2, row['label'].replace(' 100k', '').replace(' 250k', ''),
+        ha='center', va='bottom', fontsize=7.5, color=INK)
+  ax_r.set_ylim(36.5, 0.4)
+  ax_r.set_xlim(-0.85, 1.55)
+  ax_r.set_xticks([])
+  ax_r.set_ylabel('Press rank  (1 = best of 34)')
+  ax_r.set_yticks([1, 10, 17.5, 25, 34])
+  ax_r.set_yticklabels(['1', '10', '17.5', '25', '34'])
+  _style_ax(ax_r)
+  ax_r.spines['bottom'].set_visible(False)
+  ax_r.tick_params(axis='x', length=0)
 
-  ax = axes[0, 1]
-  ranks = [r['rank'] for r in rows]
-  ax.axhline(17.5, color=REF, lw=0.7, ls=(0, (3.2, 2.4)), zorder=1)
-  for x, y, color in zip(xs, ranks, colors):
-    ax.plot([x, x], [17.5, y], color=color, lw=2.0, zorder=3, solid_capstyle='round')
-    ax.plot(
-        x, y, 'o', color=color, ms=7.5, zorder=4,
-        markeredgecolor='white', markeredgewidth=0.6)
-  _style_ax(ax)
-  ax.set_xticks(xs)
-  ax.set_xticklabels(labels, fontsize=7.2)
-  ax.set_ylabel('Press rank (of 34)')
-  ax.set_ylim(34.5, 0.2)
-  ax.set_xlim(-0.72, 2.55)
-  ax.text(
-      -0.48, 17.5, 'chance', ha='right', va='center',
-      fontsize=6.8, color=INK_MUTED)
-  _panel_label(ax, 'B')
-  offsets = {0: (6, 5), 1: (6, 5), 2: (6, 5)}
-  for i, (x, y) in enumerate(zip(xs, ranks)):
-    ax.annotate(
-        f'{y:.1f}', xy=(x, y), xytext=offsets[i],
-        textcoords='offset points', fontsize=7.2, fontweight='semibold',
-        color=INK, ha='left', va='center')
+  # B — two gradient compasses
+  _panel_label(ax_c, 'B')
+  ax_c.axis('off')
+  inner = ax_c.inset_axes([0.0, 0.02, 1.0, 0.96])
+  inner.axis('off')
+  left = inner.inset_axes([0.0, 0.08, 0.48, 0.84])
+  right = inner.inset_axes([0.52, 0.08, 0.48, 0.84])
+  _draw_compass(left, shown[0]['cos'], shown[0]['color'])
+  _draw_compass(right, shown[1]['cos'], shown[1]['color'])
+  left.set_title(
+      f"Handle\ncos = {shown[0]['cos']:+.2f}",
+      fontsize=7.2, color=shown[0]['color'], pad=2)
+  right.set_title(
+      f"Push\ncos = {shown[1]['cos']:+.2f}",
+      fontsize=7.2, color=shown[1]['color'], pad=2)
+  ax_c.text(
+      0.5, -0.08,
+      r'Alignment of $\nabla_a f$ with the press/push axis',
+      transform=ax_c.transAxes, ha='center', va='top',
+      fontsize=8.0, color=INK)
 
-  ax = axes[1, 0]
-  coss = [r['cos'] for r in rows]
-  ax.axhline(0.0, color=REF, lw=0.7, ls=(0, (3.2, 2.4)), zorder=1)
-  ax.bar(xs, coss, width=width, color=colors, zorder=3)
-  _style_ax(ax)
-  ax.set_xticks(xs)
-  ax.set_xticklabels(labels, fontsize=7.2)
-  ax.set_ylabel(r'$\cos(\nabla_a s,\, d_{\mathrm{press}})$')
-  ax.set_ylim(-1.05, 1.15)
-  _panel_label(ax, 'C')
-  for x, y in zip(xs, coss):
-    va = 'bottom' if y >= 0 else 'top'
-    _annotate_bar(ax, x, y, f'{y:+.2f}', va=va)
-
-  ax = axes[1, 1]
-  w = 0.34
-  std_s = [r['std_s'] for r in rows]
-  std_a = [r['std_a'] for r in rows]
-  h_state = ax.bar(
-      xs - w / 2, std_s, width=w, color='#4B4B4B', zorder=3)
-  h_act = ax.bar(
-      xs + w / 2, std_a, width=w, color=colors, zorder=3)
-  _style_ax(ax)
-  ax.set_xticks(xs)
-  ax.set_xticklabels(
-      [f"{r['label']}\n{r['ratio']:.3f}" for r in rows], fontsize=7.2)
-  ax.set_ylabel('Score std. dev.')
-  ax.set_yscale('log')
-  ax.set_ylim(0.9, 80)
-  _panel_label(ax, 'D')
-  ax.text(
-      xs[0] - w / 2, std_s[0] * 1.08, r'$\mathrm{std}_s$',
-      ha='center', va='bottom', fontsize=7.0, color='#4B4B4B')
-  ax.text(
-      xs[0] + w / 2, std_a[0] * 1.12, r'$\mathrm{std}_a$',
-      ha='center', va='bottom', fontsize=7.0, color=colors[0])
-  ax.set_xlabel(r'$\mathrm{std}_a/\mathrm{std}_s$', labelpad=2, fontsize=8)
+  # C — std across states vs across actions
+  _panel_label(ax_v, 'C')
+  for i, row in enumerate(shown):
+    y = 1 - i
+    ax_v.plot(
+        [row['std_a'], row['std_s']], [y, y],
+        color=row['color'], lw=2.0, zorder=2, solid_capstyle='round')
+    ax_v.plot(
+        row['std_s'], y, 's', color='#4B4B4B', ms=7.5, zorder=4,
+        markeredgecolor='white', markeredgewidth=0.5)
+    ax_v.plot(
+        row['std_a'], y, 'o', color=row['color'], ms=8.0, zorder=4,
+        markeredgecolor='white', markeredgewidth=0.5)
+    ax_v.text(
+        0.72, y + 0.32, row['label'].replace(' 100k', '').replace(' 250k', ''),
+        fontsize=7.5, color=INK, va='bottom')
+    ratio_x = max(row['std_a'], row['std_s']) * 1.18
+    ax_v.text(
+        ratio_x, y,
+        rf"{row['ratio']:.3f}",
+        fontsize=7.8, fontweight='semibold', color=row['color'], va='center')
+  ax_v.set_xlabel('Critic-score scale at hover')
+  ax_v.text(
+      0.0, -0.28, r'$\blacksquare$  across states    $\bullet$  across actions',
+      transform=ax_v.transAxes, fontsize=6.6, color=INK_MUTED, ha='left')
+  ax_v.set_xlim(0.7, 90)
+  ax_v.set_ylim(-0.45, 1.55)
+  ax_v.set_yticks([])
+  ax_v.set_xlabel('Critic-score scale at hover')
+  _style_ax(ax_v)
+  ax_v.spines['left'].set_visible(False)
+  ax_v.tick_params(axis='y', length=0)
+  ax_v.text(
+      0.98, 1.02, r'$\mathrm{std}_a/\mathrm{std}_s$',
+      transform=ax_v.transAxes, ha='right', va='bottom',
+      fontsize=7.0, color=INK_MUTED)
 
   for row in rows:
     csv_rows.append({
@@ -374,94 +424,151 @@ def fig_state_vs_action(rows, out_pdf: Path, out_png: Path, csv_rows: list):
 
 
 # ---------------------------------------------------------------------------
-# Figure 2
+# Figure 2 — state similarity / feature shuffle
 # ---------------------------------------------------------------------------
 
 def fig_feature_shuffle(feature_rows, out_pdf: Path, out_png: Path, csv_rows: list):
-  fig, axes = plt.subplots(1, 2, figsize=(7.16, 2.55))
-  fig.subplots_adjust(
-      left=0.08, right=0.99, top=0.82, bottom=0.26, wspace=0.36)
+  fig = plt.figure(figsize=(7.16, 2.55))
+  gs = fig.add_gridspec(
+      1, 3, width_ratios=[1.05, 1.2, 1.05],
+      left=0.06, right=0.99, top=0.80, bottom=0.28, wspace=0.32)
+  ax_h, ax_s, ax_o = (fig.add_subplot(gs[0, i]) for i in range(3))
 
-  features = [
-      ('mech_xy', r'Mechanism $xy$'),
-      ('mech_z', r'Mechanism $z$'),
-      ('hand', 'Hand'),
-      ('action', 'Action'),
+  handle = feature_rows['Handle 100k']
+  push = feature_rows['Push 250k']
+  feat_keys = ['mech_xy', 'mech_z', 'hand', 'action']
+  feat_labels = [r'$xy$', r'$z$', 'Hand', 'Action']
+  mat = np.array([
+      [handle[k] for k in feat_keys],
+      [push[k] for k in feat_keys],
+  ], dtype=np.float64)
+  cmap = mpl.colors.LinearSegmentedColormap.from_list(
+      'drop', ['#F8FAFC', '#FDE68A', '#D55E00'])
+  im = ax_h.imshow(
+      mat, cmap=cmap, vmin=0.0, vmax=0.22, aspect='auto', zorder=1)
+  ax_h.set_xticks(np.arange(4))
+  ax_h.set_xticklabels(feat_labels, fontsize=7.5)
+  ax_h.set_yticks([0, 1])
+  ax_h.set_yticklabels(['Task 5', 'Push'], fontsize=8.0)
+  for i in range(2):
+    for j in range(4):
+      val = mat[i, j]
+      ax_h.text(
+          j, i, f'{val:.2f}', ha='center', va='center',
+          fontsize=7.6, fontweight='semibold',
+          color=INK if val < 0.12 else 'white')
+  for spine in ax_h.spines.values():
+    spine.set_visible(False)
+  ax_h.tick_params(length=0, pad=3)
+  ax_h.set_xlabel('Shuffled block of $(s,a)$')
+  _panel_label(ax_h, 'A')
+  cax = ax_h.inset_axes([1.03, 0.15, 0.04, 0.7])
+  cb = fig.colorbar(im, cax=cax)
+  cb.set_ticks([0.0, 0.10, 0.20])
+  cb.ax.tick_params(labelsize=6.4, length=2)
+  cb.set_label('Accuracy drop', fontsize=6.6, labelpad=2)
+
+  chance = 1.0 / 256.0
+  xs = np.arange(4)
+  xlabels = ['Intact', r'Shuffle $xy$', r'Shuffle $z$', 'Shuffle\naction']
+  for rec, lab in ((handle, 'Task 5'), (push, 'Push')):
+    ys = [rec['baseline'], rec['acc_xy'], rec['acc_z'], rec['acc_action']]
+    ax_s.plot(xs, ys, color=rec['color'], lw=1.9, zorder=3, solid_capstyle='round')
+    ax_s.scatter(
+        xs, ys, s=28, color=rec['color'], zorder=4,
+        edgecolors='white', linewidths=0.6)
+    ax_s.text(
+        -0.12, ys[0] + (0.012 if lab == 'Push' else -0.012),
+        lab, color=rec['color'], fontsize=7.2, ha='right', va='center',
+        fontweight='semibold')
+  ax_s.axhline(chance, color=REF, lw=0.7, ls=(0, (3.2, 2.4)), zorder=1)
+  ax_s.text(
+      3.05, chance + 0.006, 'chance', fontsize=6.4, color=INK_MUTED,
+      ha='right', va='bottom')
+  ax_s.set_xticks(xs)
+  ax_s.set_xticklabels(xlabels, fontsize=7.0)
+  ax_s.set_ylim(-0.01, 0.24)
+  ax_s.set_ylabel('256-way HER accuracy')
+  ax_s.set_xlim(-0.55, 3.25)
+  _style_ax(ax_s)
+  _panel_label(ax_s, 'B')
+
+  occ_colors = {
+      'success': '#0072B2',
+      'progress': '#56B4E9',
+      'other': '#E5E7EB',
+  }
+  specs = [
+      ('Task 5', handle, HANDLE),
+      ('Push', push, PUSH),
   ]
-  series = list(feature_rows.items())
-  n_feat = len(features)
-  xs = np.arange(n_feat)
-  width = 0.36
-  ax = axes[0]
-  for i, (name, rec) in enumerate(series):
-    vals = [rec[key] for key, _ in features]
-    ax.bar(
-        xs + (i - 0.5) * width, vals, width=width * 0.92,
-        color=rec['color'], zorder=3, label=name)
-    for key, val in zip((k for k, _ in features), vals):
+  for i, (name, rec, _) in enumerate(specs):
+    y = 1 - i
+    succ = rec['frac_success_band']
+    prog = rec['frac_progress']
+    other = max(0.0, 1.0 - succ - prog)
+    ax_o.barh(y, succ, height=0.42, color=occ_colors['success'], zorder=3)
+    ax_o.barh(
+        y, prog, left=succ, height=0.42, color=occ_colors['progress'], zorder=3)
+    ax_o.barh(
+        y, other, left=succ + prog, height=0.42, color=occ_colors['other'],
+        zorder=3)
+    if succ >= 0.08:
+      ax_o.text(
+          succ / 2.0, y, f'{100 * succ:.0f}%', ha='center', va='center',
+          fontsize=6.6, color='white', fontweight='semibold')
+    elif succ > 0.01:
+      ax_o.text(
+          succ + 0.02, y, f'{100 * succ:.0f}% success',
+          ha='left', va='center', fontsize=6.5, color=INK)
+    if prog > 0.08:
+      ax_o.text(
+          succ + prog / 2.0, y, f'{100 * prog:.0f}%', ha='center', va='center',
+          fontsize=6.6, color=INK, fontweight='semibold')
+    ax_o.text(-0.03, y, name, ha='right', va='center', fontsize=8.0, color=INK)
+  ax_o.set_xlim(0, 1.0)
+  ax_o.set_ylim(-0.55, 1.55)
+  ax_o.set_yticks([])
+  ax_o.set_xlabel('On-policy occupancy')
+  ax_o.set_xticks([0.0, 0.5, 1.0])
+  _style_ax(ax_o)
+  ax_o.spines['left'].set_visible(False)
+  _panel_label(ax_o, 'C')
+  ax_o.plot([], [], color=occ_colors['success'], lw=6, label='Success band')
+  ax_o.plot([], [], color=occ_colors['progress'], lw=6, label='Progress band')
+  ax_o.plot([], [], color=occ_colors['other'], lw=6, label='Other')
+  ax_o.legend(
+      loc='upper center', fontsize=6.4, handlelength=1.1, ncol=3,
+      bbox_to_anchor=(0.55, -0.22), borderaxespad=0.0, columnspacing=1.1)
+
+  for name, rec in feature_rows.items():
+    for key, lab in (
+        ('mech_xy', 'xy'), ('mech_z', 'z'), ('hand', 'hand'),
+        ('action', 'action')):
       csv_rows.append({
           'figure': 'feature_shuffle',
           'panel': 'drop',
           'series': name,
           'feature': key,
-          'accuracy_drop': val,
+          'accuracy_drop': rec[key],
           'baseline_accuracy': rec['baseline'],
           'n_pairs': rec['n_pairs'],
       })
-  ax.axhline(0.0, color=REF, lw=0.6, zorder=1)
-  _style_ax(ax)
-  ax.set_xticks(xs)
-  ax.set_xticklabels(
-      [r'Mechanism' + '\n' + r'$xy$',
-       r'Mechanism' + '\n' + r'$z$',
-       'Hand',
-       'Action'],
-      fontsize=7.2)
-  ax.set_ylabel('Retrieval accuracy drop')
-  ax.set_ylim(0.0, 0.27)
-  ax.legend(loc='upper right', handlelength=1.3, borderaxespad=0.15)
-  _panel_label(ax, 'A')
-  for i, (name, rec) in enumerate(series):
-    x = 0 + (i - 0.5) * width
-    y = rec['mech_xy']
-    _annotate_bar(ax, x, y, f'{y:.2f}')
-
-  ax = axes[1]
-  # Group: Δxy π, Δxy press, Δz π, Δz press — two tasks
-  cats = [
-      r'$\Delta xy$  $\pi$',
-      r'$\Delta xy$  press',
-      r'$\Delta z$  $\pi$',
-      r'$\Delta z$  press',
-  ]
-  keys = ['d_xy_pi', 'd_xy_press', 'd_z_pi', 'd_z_press']
-  xs = np.arange(len(cats))
-  for i, (name, rec) in enumerate(series):
-    vals = [1000.0 * rec[k] for k in keys]  # metres → mm
-    xpos = xs + (i - 0.5) * width
-    ax.bar(
-        xpos, vals, width=width * 0.92,
-        color=rec['color'], zorder=3, label=name)
-    for x, val in zip(xpos, vals):
-      if val < 0.15:
-        ax.text(
-            x, 0.12, '0', ha='center', va='bottom', fontsize=6.6,
-            color=rec['color'], fontweight='semibold')
-    for key, val in zip(keys, vals):
+    csv_rows.append({
+        'figure': 'feature_shuffle',
+        'panel': 'occupancy',
+        'series': name,
+        'frac_success_band': rec['frac_success_band'],
+        'frac_progress': rec['frac_progress'],
+    })
+    for key in ('d_xy_pi', 'd_xy_press', 'd_z_pi', 'd_z_press'):
       csv_rows.append({
           'figure': 'feature_shuffle',
           'panel': 'one_step_mm',
           'series': name,
           'feature': key,
-          'delta_mm': val,
+          'delta_mm': 1000.0 * rec[key],
       })
-  _style_ax(ax)
-  ax.set_xticks(xs)
-  ax.set_xticklabels(cats, fontsize=7.0)
-  ax.set_ylabel('One-step |Δ| at hover (mm)')
-  ax.set_ylim(0.0, 5.6)
-  _panel_label(ax, 'B')
-  ax.legend(loc='upper right', handlelength=1.3, borderaxespad=0.15)
 
   fig.savefig(out_pdf)
   fig.savefig(out_png)
@@ -469,28 +576,28 @@ def fig_feature_shuffle(feature_rows, out_pdf: Path, out_png: Path, csv_rows: li
 
 
 # ---------------------------------------------------------------------------
-# Figure 3
+# Figure 3 — success-mass inject
 # ---------------------------------------------------------------------------
 
 def fig_inject(series, out_pdf: Path, out_png: Path, csv_rows: list):
-  fig, axes = plt.subplots(2, 1, figsize=(7.16, 4.35), sharex=True)
+  fig, axes = plt.subplots(2, 1, figsize=(7.16, 3.85), sharex=True)
   fig.subplots_adjust(
-      left=0.10, right=0.99, top=0.88, bottom=0.12, hspace=0.18)
+      left=0.10, right=0.99, top=0.86, bottom=0.13, hspace=0.16)
   inject_at = series['inject']['inject_at'] or 250500
   names = [
-      ('handle', 'Handle', HANDLE, dict(lw=1.5, ls='-')),
-      ('inject', 'Handle + 20% inject', INJECT, dict(lw=1.7, ls='-')),
-      ('push', 'Push', PUSH, dict(lw=1.5, ls='-')),
+      ('handle', 'Handle', HANDLE, 1.6),
+      ('inject', 'Handle + 20% inject', INJECT, 1.85),
+      ('push', 'Push', PUSH, 1.6),
   ]
 
   ax = axes[0]
-  ax.axvline(inject_at / 1000.0, color=REF, lw=0.8, ls=(0, (3.2, 2.4)), zorder=1)
-  for key, lab, color, style in names:
+  ax.axvline(inject_at / 1000.0, color=REF, lw=0.85, ls=(0, (3.2, 2.4)), zorder=2)
+  for key, lab, color, lw in names:
     rec = series[key]
     x = rec['eval_steps'] / 1000.0
     y = rec['eval_success']
-    ax.plot(x, y, color=color, label=lab, zorder=3, **style)
-    ax.scatter(x, y, s=12, color=color, zorder=4, linewidths=0)
+    ax.plot(x, y, color=color, label=lab, zorder=3, lw=lw)
+    ax.scatter(x, y, s=14, color=color, zorder=4, linewidths=0)
     for step, val in zip(rec['eval_steps'], rec['eval_success']):
       csv_rows.append({
           'figure': 'inject',
@@ -499,25 +606,38 @@ def fig_inject(series, out_pdf: Path, out_png: Path, csv_rows: list):
           'env_steps': int(step),
           'success': float(val),
       })
+  inj = dict(zip(
+      series['inject']['eval_steps'].tolist(),
+      series['inject']['eval_success'].tolist()))
+  callouts = (
+      (250500, inj.get(250500, 0.20), '20%', (8, 10)),
+      (300600, inj.get(300600, 0.10), '10%', (10, -14)),
+      (990000, inj.get(990000, 0.0), '0%', (-18, 12)),
+  )
+  for step, val, text, offset in callouts:
+    ax.annotate(
+        text, xy=(step / 1000.0, val), xytext=offset,
+        textcoords='offset points', color=INJECT, fontsize=7.4,
+        fontweight='semibold',
+        arrowprops=dict(arrowstyle='-', color=INJECT, lw=0.6))
   _style_ax(ax)
-  ax.set_ylim(-0.04, 1.08)
+  ax.set_ylim(-0.06, 1.12)
   ax.set_yticks([0.0, 0.5, 1.0])
   ax.set_ylabel('Eval success')
   _panel_label(ax, 'A')
   ax.text(
-      inject_at / 1000.0, 1.0, '  20% inject',
-      fontsize=7.0, color=INK_MUTED, ha='left', va='bottom',
-      rotation=90, clip_on=False)
+      inject_at / 1000.0 - 8, 1.05, '20% success\ncloned into replay',
+      fontsize=6.6, color=INK_MUTED, ha='right', va='top')
 
   ax = axes[1]
-  ax.axvline(inject_at / 1000.0, color=REF, lw=0.8, ls=(0, (3.2, 2.4)), zorder=1)
-  ax.axhline(0.20, color=INJECT, lw=0.7, ls=(0, (1.6, 1.6)), alpha=0.7, zorder=1)
-  for key, lab, color, style in names:
+  ax.axvline(inject_at / 1000.0, color=REF, lw=0.85, ls=(0, (3.2, 2.4)), zorder=2)
+  ax.axhline(0.20, color=INJECT, lw=0.7, ls=(0, (1.6, 1.6)), alpha=0.75, zorder=1)
+  for key, lab, color, lw in names:
     rec = series[key]
     her = rec['her']
-    x = her['steps'] / 1000.0
-    y = her['succ']
-    ax.plot(x, y, color=color, label=lab, zorder=3, lw=style['lw'], ls=style['ls'])
+    ax.plot(
+        her['steps'] / 1000.0, her['succ'],
+        color=color, zorder=3, lw=lw)
     for step, succ, prog, both in zip(
         her['steps'], her['succ'], her['prog'], her['succ_or_prog']):
       csv_rows.append({
@@ -537,7 +657,7 @@ def fig_inject(series, out_pdf: Path, out_png: Path, csv_rows: list):
   ax.set_xlim(0, 1000)
   _panel_label(ax, 'B')
   ax.text(
-      990, 0.205, 'inject target',
+      992, 0.215, 'inject target',
       fontsize=6.6, color=INJECT, ha='right', va='bottom')
 
   handles, labels = axes[0].get_legend_handles_labels()
@@ -591,13 +711,18 @@ def main():
       out_dir / 'fig_task5_feature_shuffle.pdf',
       out_dir / 'fig_task5_feature_shuffle.png',
       csv_rows)
+  fig_feature_shuffle(
+      feature_rows,
+      out_dir / 'fig_task5_state_similarity.pdf',
+      out_dir / 'fig_task5_state_similarity.png',
+      [])
   fig_inject(
       inject_series,
       out_dir / 'fig_task5_success_inject.pdf',
       out_dir / 'fig_task5_success_inject.png',
       csv_rows)
   _write_csv(csv_dir / 'fig_task5_appendix.csv', csv_rows)
-  print('Wrote three appendix figures to', out_dir)
+  print('Wrote appendix figures to', out_dir)
 
 
 if __name__ == '__main__':

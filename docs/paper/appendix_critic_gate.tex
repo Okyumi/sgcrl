@@ -1,0 +1,34 @@
+\section{Estimating the critic gate}
+\label{app:critic-gate}
+
+The critic gate in Eq.~(7) compares two local sensitivities of the
+existing contrastive score $f(s,a,g)$. Both quantities are estimated
+from a small number of additional critic evaluations at the observed
+pair $(s,g)$ drawn from $\mathcal{D}_{\mathrm{succ}}$. The stored
+successful action is not among the probes.
+
+Action sensitivity $\sigma_a(s,g)$ is the standard deviation of
+$f(s,a',g)$ over eight actions $a'$ drawn independently and uniformly
+from the environment action space, with $(s,g)$ held fixed.
+
+State sensitivity $\sigma_s(s,g)$ is the standard deviation of the
+score under a local change of $s$ alone. We draw eight perturbations
+\begin{equation*}
+\tilde{s}
+=
+s + \varepsilon\,\hat{\sigma}\odot z,
+\qquad
+z\sim\mathcal{N}(0,I),
+\end{equation*}
+evaluate $f(\tilde{s},a_{\pi},g)$ with the same goal and a single
+policy action $a_{\pi}\sim\pi(\cdot\mid s,g)$, and take the standard
+deviation of those scores. The vector $\hat{\sigma}$ is the
+coordinate-wise standard deviation of states in the current success
+minibatch and is treated as a constant; we use $\varepsilon=0.1$.
+Because the perturbation is local to the queried state, $\sigma_s$
+measures how the score changes when that state is nudged, rather than
+how scores vary across different states in the minibatch.
+
+The resulting weight $w(s,g)$ multiplies the success likelihood in
+Eq.~(8). Gradients are stopped through $w$. If the two standard
+deviations vanish together, the gate is set to one.

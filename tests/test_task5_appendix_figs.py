@@ -73,6 +73,9 @@ def test_feature_drops_match_json():
   assert abs(h['mech_xy'] - 0.171875) < 1e-12
   assert abs(h['mech_z'] - 0.02734375) < 1e-12
   assert abs(h['action'] - 0.015625) < 1e-12
+  assert abs(h['acc_xy'] - 0.015625) < 1e-12
+  assert abs(h['baseline'] - 0.1875) < 1e-12
+  assert abs(h['frac_success_band'] - 0.03333333333333333) < 1e-12
   assert abs(p['mech_xy'] - 0.19921875) < 1e-12
   assert h['d_xy_pi'] == 0.0
   assert h['d_xy_press'] == 0.0
