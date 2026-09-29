@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""From-scratch 5-seed full DCC: decomposed critic + gated success matching.
+"""From-scratch paper-seed gated DCC: decomposed critic + gated success matching.
 
 Paper stack, tasks 0–9, 8M steps each. Local-σ_s critic gate, whole-episode
-success buffer, λ=0.1. Seeds 5–9.
+success buffer, λ=0.1. Seeds 5–14 (paper 10-seed set).
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import argparse
 import shlex
 
 
-SEEDS = tuple(range(5, 10))
+SEEDS = tuple(range(5, 15))
 NUM_TASKS = 10
 WANDB_PROJECT = 'continual_gcrl_paper'
 WANDB_GROUP = 'PAPER-DCC-FULL-CRITICGATE-5SEED'

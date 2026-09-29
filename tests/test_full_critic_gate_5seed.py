@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""From-scratch 5-seed gated DCC curriculum."""
+"""From-scratch paper-seed gated DCC curriculum (seeds 5–14)."""
 from __future__ import annotations
 
 import subprocess
@@ -28,9 +28,9 @@ status = _load_status()
 
 def test_five_from_scratch_cells():
   configs = cfg.build_configs()
-  assert cfg.SEEDS == tuple(range(5, 10))
-  assert len(configs) == 5
-  assert [c['seed'] for c in configs] == list(range(5, 10))
+  assert cfg.SEEDS == tuple(range(5, 15))
+  assert len(configs) == 10
+  assert [c['seed'] for c in configs] == list(range(5, 15))
   for config in configs:
     assert config['variant'] == 'dcc_gated_success_matching'
     assert config['actor_mode'] == 'reset'
@@ -64,9 +64,11 @@ def test_status_requires_all_ten_task_pickles():
     assert not status.is_complete(run, tmp)
     (seed_dir / 'task_9.pkl').write_bytes(b'x')
     assert status.is_complete(run, tmp)
-    incomplete = status.incomplete_array_ids(1, tmp)
+    incomplete = status.incomplete_array_ids(1, tmp, offset=0, limit=5)
     assert 0 not in incomplete
     assert incomplete == [1, 2, 3, 4]
+    fill_incomplete = status.incomplete_array_ids(1, tmp, offset=5, limit=5)
+    assert fill_incomplete == [0, 1, 2, 3, 4]
 
 
 def test_launcher_points_at_grid():
@@ -82,6 +84,18 @@ def test_launcher_points_at_grid():
   assert 'PAPER-DCC-FULL-CRITICGATE-5SEED' in launcher
 
 
+def test_fill_launcher_points_at_paper_seeds():
+  launcher = (
+      REPO_ROOT / 'DRAFT_jubail_full_critic_gate_10seed_fill.sh'
+  ).read_text(encoding='utf-8')
+  assert 'experiment_configs_full_critic_gate_5seed.py' in launcher
+  assert 'CONFIG_INDEX_OFFSET=5' in launcher
+  assert 'CONFIG_LIMIT=5' in launcher
+  assert '#SBATCH --array=0-4' in launcher
+  assert 'START_TASK=0' in launcher
+  assert 'PAPER-DCC-FULL-CRITICGATE-5SEED' in launcher
+
+
 def test_config_emission_forwards_gate_flags():
   emitted = subprocess.run(
       [sys.executable, 'experiment_configs_full_critic_gate_5seed.py',
@@ -94,11 +108,17 @@ def test_config_emission_forwards_gate_flags():
   assert 'START_TASK=0' in emitted.stdout
   assert 'NUM_TASKS=10' in emitted.stdout
   assert 'SEED=5' in emitted.stdout
+  fill = subprocess.run(
+      [sys.executable, 'experiment_configs_full_critic_gate_5seed.py',
+       '--setting', '5'],
+      cwd=REPO_ROOT, capture_output=True, text=True, check=True)
+  assert 'SEED=10' in fill.stdout
 
 
 if __name__ == '__main__':
   test_five_from_scratch_cells()
   test_status_requires_all_ten_task_pickles()
   test_launcher_points_at_grid()
+  test_fill_launcher_points_at_paper_seeds()
   test_config_emission_forwards_gate_flags()
   print('test_full_critic_gate_5seed: ok')

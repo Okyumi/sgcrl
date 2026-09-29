@@ -37,6 +37,8 @@ python tests/test_full_critic_gate_5seed.py
 
 ## Limitations
 
-Five seeds, not ten. Mid-task death restarts the current task; only
-completed `task_k.pkl` files resume. H200 is avoided by requesting
-A100.
+Originally five seeds (5–9). Paper 10-seed fill (10–14) is
+`DRAFT_jubail_full_critic_gate_10seed_fill.sh`; see
+`docs/2026-09-29_full_critic_gate_10seed.md`. Mid-task death restarts
+the current task; only completed `task_k.pkl` files resume. H200 is
+avoided by requesting A100.
