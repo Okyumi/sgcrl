@@ -311,10 +311,10 @@ def _draw_compass(ax, cos_val, color):
 def fig_state_vs_action(rows, out_pdf: Path, out_png: Path, csv_rows: list):
   """Match the appendix table: Task 5 at 100k vs Push at 250k."""
   shown = [r for r in rows if r['label'] in ('Handle 100k', 'Push 250k')]
-  fig = plt.figure(figsize=(7.16, 2.42))
+  fig = plt.figure(figsize=(7.16, 2.55))
   gs = fig.add_gridspec(
       1, 3, width_ratios=[1.05, 1.15, 1.15],
-      left=0.07, right=0.99, top=0.80, bottom=0.18, wspace=0.38)
+      left=0.07, right=0.99, top=0.80, bottom=0.24, wspace=0.38)
   ax_r, ax_c, ax_v = (fig.add_subplot(gs[0, i]) for i in range(3))
 
   # A — press rank among 34 candidate actions
@@ -389,14 +389,14 @@ def fig_state_vs_action(rows, out_pdf: Path, out_png: Path, csv_rows: list):
         ratio_x, y,
         rf"{row['ratio']:.3f}",
         fontsize=7.8, fontweight='semibold', color=row['color'], va='center')
-  ax_v.set_xlabel('Critic-score scale at hover')
-  ax_v.text(
-      0.0, -0.28, r'$\blacksquare$  across states    $\bullet$  across actions',
-      transform=ax_v.transAxes, fontsize=6.6, color=INK_MUTED, ha='left')
+  ax_v.set_xscale('log')
   ax_v.set_xlim(0.7, 90)
   ax_v.set_ylim(-0.45, 1.55)
   ax_v.set_yticks([])
   ax_v.set_xlabel('Critic-score scale at hover')
+  ax_v.text(
+      0.0, -0.28, r'$\blacksquare$  across states    $\bullet$  across actions',
+      transform=ax_v.transAxes, fontsize=6.6, color=INK_MUTED, ha='left')
   _style_ax(ax_v)
   ax_v.spines['left'].set_visible(False)
   ax_v.tick_params(axis='y', length=0)

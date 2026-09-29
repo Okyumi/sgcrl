@@ -1,0 +1,22 @@
+[
+  {
+    "env_name": "sawyer_handle_press_side",
+    "env_steps": 150300,
+    "success": 1.0,
+    "episode_return": 97.0,
+    "attempts": 6,
+    "n_frames": 151,
+    "npz": "/scratch/yd2247/sgcrl/results/data/task56_episode_strips/handle_strip.npz",
+    "checkpoint": "/scratch/yd2247/sgcrl/logs/jubail_task5_action_advice/checkpoints/actor_reset_critic_decomposed_tid_False_heads_False_success_corrected_dyn1.000_pt256x4_env_sawyer_handle_press_side/seed_6/task_0_step_150300.pkl"
+  },
+  {
+    "env_name": "sawyer_push",
+    "env_steps": 200400,
+    "success": 1.0,
+    "episode_return": 91.0,
+    "attempts": 1,
+    "n_frames": 151,
+    "npz": "/scratch/yd2247/sgcrl/results/data/task56_episode_strips/push_strip.npz",
+    "checkpoint": "/scratch/yd2247/sgcrl/logs/jubail_task5_action_advice/checkpoints/actor_reset_critic_decomposed_tid_False_heads_False_success_corrected_dyn1.000_pt256x4_env_sawyer_push/seed_6/task_0_step_200400.pkl"
+  }
+]
