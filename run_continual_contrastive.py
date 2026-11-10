@@ -26,6 +26,7 @@ import json
 import os
 import pickle
 import subprocess
+import tempfile
 import time
 from typing import Optional
 
@@ -121,6 +122,8 @@ flags.DEFINE_integer('num_tasks', 10, 'Number of tasks.')
 flags.DEFINE_integer('steps_per_task', 8_000_000, 'Env steps per continual task.')
 flags.DEFINE_integer('base_steps', 8_000_000, 'Env steps for base task.')
 flags.DEFINE_integer('k_max', 10, 'Max pool size before merging.')
+flags.DEFINE_integer('max_tasks_per_invocation', 0,
+                     'Stop after this many completed tasks; 0 runs the curriculum.')
 flags.DEFINE_string('checkpoint_dir', 'logs/continual_checkpoints',
                     'Directory for cross-task checkpoints.')
 flags.DEFINE_string(
@@ -1093,8 +1096,17 @@ def save_ckpt(ckpt_dir, task_id, seed, data, critic_mode='persistent',
   data_np = jax.tree_util.tree_map(
       lambda x: np.array(x) if isinstance(x, jnp.ndarray) else x,
       data)
-  with open(path, 'wb') as f:
-    pickle.dump(data_np, f)
+  # A killed write must never look like a completed task to auto-resume.
+  fd, temporary = tempfile.mkstemp(prefix='.checkpoint-', dir=os.path.dirname(path))
+  try:
+    with os.fdopen(fd, 'wb') as f:
+      pickle.dump(data_np, f)
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(temporary, path)
+  finally:
+    if os.path.exists(temporary):
+      os.unlink(temporary)
   print(f'  [ckpt] Saved → {path}', flush=True)
 
 
@@ -2216,6 +2228,7 @@ def train_single_task(
         neg_bank_mode=FLAGS.neg_bank_mode,
         neg_bank_n_per_step=FLAGS.neg_bank_n_per_step,
         neg_bank_weight=FLAGS.neg_bank_weight,
+        action_dim=int(np.prod(env_spec.actions.shape)),
         neg_bank_hard_ratio=(FLAGS.neg_bank_candidate_pool // max(FLAGS.neg_bank_n_per_step, 1)),
     )
 
@@ -4824,22 +4837,6 @@ def main(_):
             prev_dcc_policy_opt_state)
         ckpt_data['decomposed_alpha_params'] = prev_dcc_alpha_params
         ckpt_data['decomposed_alpha_opt_state'] = prev_dcc_alpha_opt_state
-    save_ckpt(FLAGS.checkpoint_dir, task_id, seed, ckpt_data,
-              critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
-              adapt_heads_only=FLAGS.adapt_heads_only,
-              actor_mode=FLAGS.actor_mode,
-              dyn_aux_weight=FLAGS.dyn_aux_weight,
-              phi_task_width=FLAGS.phi_task_width,
-              phi_task_depth=FLAGS.phi_task_depth,
-              rbc_config=(
-                  _rbc_identity_config()
-                  if FLAGS.critic_mode == 'rbc_decomposed' else None),
-              in_trajectory_negative_repeats=
-                  FLAGS.in_trajectory_negative_repeats,
-              single_task=FLAGS.single_task,
-              goal_conditioning_mode=FLAGS.goal_conditioning_mode,
-              sawyer_success_mode=FLAGS.sawyer_success_mode)
-
     # ---- configurable task-boundary evaluation ---------------------------
     if (
         FLAGS.eval_episodes > 0
@@ -4873,9 +4870,35 @@ def main(_):
             FLAGS.post_task_eval_scope == 'all_seen')
         wandb.log(wandb_eval)
 
+    if FLAGS.use_wandb and wandb is not None:
+      wandb.summary['task_complete'] = True
+
     # Close the W&B run for this task before starting the next one
     if FLAGS.use_wandb and wandb is not None:
       wandb.finish()
+
+    save_ckpt(FLAGS.checkpoint_dir, task_id, seed, ckpt_data,
+              critic_mode=FLAGS.critic_mode, use_task_id=FLAGS.use_task_id,
+              adapt_heads_only=FLAGS.adapt_heads_only,
+              actor_mode=FLAGS.actor_mode,
+              dyn_aux_weight=FLAGS.dyn_aux_weight,
+              phi_task_width=FLAGS.phi_task_width,
+              phi_task_depth=FLAGS.phi_task_depth,
+              rbc_config=(
+                  _rbc_identity_config()
+                  if FLAGS.critic_mode == 'rbc_decomposed' else None),
+              in_trajectory_negative_repeats=
+                  FLAGS.in_trajectory_negative_repeats,
+              single_task=FLAGS.single_task,
+              goal_conditioning_mode=FLAGS.goal_conditioning_mode,
+              sawyer_success_mode=FLAGS.sawyer_success_mode)
+
+    completed_here = task_id - start_task + 1
+    if (FLAGS.max_tasks_per_invocation > 0
+        and completed_here >= FLAGS.max_tasks_per_invocation
+        and task_id + 1 < num_tasks):
+      print(f'Completed {completed_here} task(s); resume at task {task_id + 1}.', flush=True)
+      return
 
   print(f'\nAll {num_tasks} tasks complete.', flush=True)
 

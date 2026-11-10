@@ -17,6 +17,7 @@ from acme.jax import networks as networks_lib
 from acme.jax import utils
 from acme.utils import counting
 from acme.utils import loggers
+from contrastive import vanilla_success_bc
 from contrastive import config as contrastive_config
 from contrastive import networks as contrastive_networks
 from contrastive.networks import is_actor_head_path
@@ -100,6 +101,7 @@ class ContinualTrainingState(NamedTuple):
   actor_cka_opt_state: Optional[optax.OptState] = None
   critic_cka_state: Optional[CKAState] = None
   critic_cka_opt_state: Optional[optax.OptState] = None
+  success_buffer: Optional[vanilla_success_bc.SuccessBuffer] = None
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +146,24 @@ class ContinualContrastiveLearner(acme.Learner):
       neg_bank_n_per_step: int = 0,     # M bank negatives per anchor
       neg_bank_weight: float = 1.0,     # logit down-weighting (0-1]
       neg_bank_hard_ratio: int = 4,     # candidate pool multiplier for hard mining
+      action_dim: Optional[int] = None,
   ):
+    bc_weight = float(getattr(continual_config, 'success_bc_weight', 0.0))
+    bc_capacity = int(getattr(continual_config, 'success_buffer_capacity', 4096))
+    bc_batch = int(getattr(continual_config, 'success_bc_batch_size', 64))
+    bc_noise = float(getattr(continual_config, 'success_bc_critic_state_noise', 0.1))
+    if bc_weight > 0:
+      if actor_mode != 'reset' or critic_mode != 'reset':
+        raise ValueError('Vanilla gated BC currently requires actor/critic reset.')
+      if (not getattr(continual_config, 'success_bc_critic_gate', False)
+          or getattr(continual_config, 'success_bc_critic_gate_mode', '') != 'local'):
+        raise ValueError('Vanilla gated BC requires the local critic gate.')
+      if (getattr(continual_config, 'success_bc_warmup_episodes', 0) != 0
+          or getattr(continual_config, 'success_bc_recency_half_life', 0) != 0
+          or getattr(continual_config, 'actor_success_score_weight', 0) != 0):
+        raise ValueError('Vanilla gated BC supports uniform replay without warmup or success-score loss.')
+      if action_dim is None or bc_capacity < config.batch_size or bc_batch <= 0 or bc_noise <= 0:
+        raise ValueError('Invalid vanilla BC action dimension, buffer, batch or noise.')
     self._task_id = task_id
     self._actor_mode = actor_mode
     self._critic_mode = critic_mode
@@ -411,7 +430,10 @@ class ContinualContrastiveLearner(acme.Learner):
 
       # --- actor loss -------------------------------------------------------
       def actor_loss_fn(combined_policy_params, q_params, alpha,
-                        transitions, key):
+                        transitions, key, success_buffer=None):
+        bc_key = key
+        if bc_weight > 0:
+          key, bc_key = jax.random.split(key)
         obs = transitions.observation
         state = obs[:, :config.obs_dim]
         goal = obs[:, config.obs_dim:]
@@ -440,7 +462,16 @@ class ContinualContrastiveLearner(acme.Learner):
           actor_loss -= alpha * (-log_prob)  # maximize entropy
 
         metrics = {'entropy_mean': jnp.mean(-log_prob)}
-        return jnp.mean(actor_loss), metrics
+        total_loss = jnp.mean(actor_loss)
+        if bc_weight > 0:
+          bc_loss, bc_metrics = vanilla_success_bc.loss(
+              networks, combined_policy_params, q_params, success_buffer,
+              bc_key, config.obs_dim, bc_batch, bc_weight, bc_noise)
+          bc_metrics['retention/source_success_fraction'] = jnp.mean(
+              transitions.extras['outcome_task_success'] > 0.5)
+          metrics.update(bc_metrics)
+          total_loss = total_loss + bc_loss
+        return total_loss, metrics
 
       # --- combined update step ---------------------------------------------
       alpha_grad = jax.value_and_grad(alpha_loss_fn)
@@ -461,6 +492,9 @@ class ContinualContrastiveLearner(acme.Learner):
         else:
           transitions = data
           bank_goals = None
+        success_buffer = state.success_buffer
+        if bc_weight > 0:
+          success_buffer = vanilla_success_bc.insert(success_buffer, transitions)
         key, key_alpha, key_critic, key_actor = jax.random.split(state.key, 4)
 
         # -- compose effective policy params --------------------------------
@@ -598,7 +632,7 @@ class ContinualContrastiveLearner(acme.Learner):
                                                    has_aux=True)
           (a_loss, a_metrics), a_grads_combined = actor_loss_and_grad(
               combined_policy, state.q_params, alpha,
-              transitions, key_actor)
+              transitions, key_actor, success_buffer)
           if mask_body_grads:
             def _mask_leaf(path, g):
               path_str = '/'.join(str(p) for p in path)
@@ -694,6 +728,7 @@ class ContinualContrastiveLearner(acme.Learner):
             actor_cka_opt_state=a_cka_opt,
             critic_cka_state=new_critic_cka_state,
             critic_cka_opt_state=c_cka_opt,
+            success_buffer=success_buffer,
         )
 
         if adaptive_entropy:
@@ -921,6 +956,8 @@ class ContinualContrastiveLearner(acme.Learner):
         actor_cka_opt_state=actor_cka_opt_state,
         critic_cka_state=critic_cka_state,
         critic_cka_opt_state=critic_cka_opt_state,
+        success_buffer=(vanilla_success_bc.empty_buffer(
+            bc_capacity, 2 * config.obs_dim, action_dim) if bc_weight > 0 else None),
     )
 
     self._networks = networks
